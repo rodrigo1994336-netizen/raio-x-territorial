@@ -17,9 +17,10 @@ from territorial_constraints import query_territorial_constraints
 from water_mg import query_outorgas_mg
 from pivots_ana import query_pivots_ana
 from climate_nasa import query_climate_nasa
+from ide_catalog import benchmark_targets, search_catalog
 from live_report_adapter_v8 import generate_live_report
 
-app = FastAPI(title='Raio-X Territorial Report API', version='0.16.2-resilient-cached-live-pdf')
+app = FastAPI(title='Raio-X Territorial Report API', version='0.16.3-ide-discovery')
 CACHE_TTL_SECONDS=300
 _CACHE:dict[str,tuple[float,dict]]={}
 _LOCKS:dict[str,asyncio.Lock]={}
@@ -85,19 +86,13 @@ async def _analyze_uncached(car_code:str):
 
 
 async def _analyze_with_live_addons(car_code:str,force_refresh:bool=False):
-    code=car_code.upper()
-    now=time.monotonic()
-    cached=_CACHE.get(code)
-    if not force_refresh and cached and now-cached[0] < CACHE_TTL_SECONDS:
-        return copy.deepcopy(cached[1])
+    code=car_code.upper(); now=time.monotonic(); cached=_CACHE.get(code)
+    if not force_refresh and cached and now-cached[0] < CACHE_TTL_SECONDS: return copy.deepcopy(cached[1])
     lock=_LOCKS.setdefault(code,asyncio.Lock())
     async with lock:
         now=time.monotonic(); cached=_CACHE.get(code)
-        if not force_refresh and cached and now-cached[0] < CACHE_TTL_SECONDS:
-            return copy.deepcopy(cached[1])
-        result=await _analyze_uncached(code)
-        _CACHE[code]=(time.monotonic(),copy.deepcopy(result))
-        return result
+        if not force_refresh and cached and now-cached[0] < CACHE_TTL_SECONDS: return copy.deepcopy(cached[1])
+        result=await _analyze_uncached(code); _CACHE[code]=(time.monotonic(),copy.deepcopy(result)); return result
 
 
 async def _build(car_code:str):
@@ -114,14 +109,24 @@ async def _background_smoke():
     except Exception as e: print(f'RX_REAL_PDF_FAIL={type(e).__name__}:{str(e)[:500]}',flush=True)
 
 
+async def _background_ide_probe():
+    try:
+        await asyncio.sleep(1)
+        data=await asyncio.to_thread(benchmark_targets)
+        compact={k:{'ok':v.get('ok'),'hit_count':v.get('hit_count'),'hits':[{'name':x.get('name'),'title':x.get('title'),'score':x.get('score')} for x in (v.get('hits') or [])[:12]]} for k,v in data.items()}
+        print('RX_IDE_CATALOG='+json.dumps(compact,ensure_ascii=False,default=str),flush=True)
+    except Exception as e: print(f'RX_IDE_CATALOG_FAIL={type(e).__name__}:{str(e)[:500]}',flush=True)
+
+
 @app.on_event('startup')
-async def startup_pdf_smoke():
+async def startup_tasks():
     asyncio.create_task(_background_smoke())
+    asyncio.create_task(_background_ide_probe())
 
 @app.get('/')
-def root(): return {'app':'Raio-X Territorial','service':'report-api','status':'online','version':'0.16.2-resilient-cached-live-pdf','benchmark_car':TEST_CAR,'cache_ttl_seconds':CACHE_TTL_SECONDS}
+def root(): return {'app':'Raio-X Territorial','service':'report-api','status':'online','version':'0.16.3-ide-discovery','benchmark_car':TEST_CAR,'cache_ttl_seconds':CACHE_TTL_SECONDS}
 @app.get('/health')
-def health(): return {'ok':True,'service':'report-api','version':'0.16.2-resilient-cached-live-pdf'}
+def health(): return {'ok':True,'service':'report-api','version':'0.16.3-ide-discovery'}
 @app.get('/v1/live/fire/{car_code}')
 async def live_fire(car_code:str):
     result=await _analyze_with_live_addons(car_code); return {'car':_safe_summary(result).get('car'),'fire':result.get('fire_live')}
@@ -131,6 +136,9 @@ async def live_constraints(car_code:str):
 @app.get('/v1/live/water/{car_code}')
 async def live_water(car_code:str):
     result=await _analyze_with_live_addons(car_code); return {'car':_safe_summary(result).get('car'),'water':result.get('water_mg'),'pivots':result.get('pivots_ana'),'climate':result.get('climate_nasa')}
+@app.get('/v1/internal/ide/catalog')
+async def ide_catalog(q:str='solo,aptidão,Mapbiomas,declividade,rodovias,APPs'):
+    terms=[x.strip() for x in q.split(',') if x.strip()]; return await asyncio.to_thread(search_catalog,terms,100)
 @app.get('/v1/reports/property/{car_code}/meta')
 async def report_meta(car_code:str):
     result,meta=await _build(car_code); return {'report':_public_meta(meta),'analysis':_report_summary(result)}
