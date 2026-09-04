@@ -17,8 +17,11 @@ LAYERS={
 }
 
 
-def _curl_json(url:str,max_time=60):
-    p=subprocess.run(['curl','-sS','--retry','2','--retry-delay','1','--connect-timeout','15','--max-time',str(max_time),'-A','Raio-X-Territorial/0.17-layer-probe',url],capture_output=True,timeout=max_time+10)
+def _curl_json(url:str,max_time=30):
+    try:
+        p=subprocess.run(['curl','-sS','--retry','1','--retry-delay','1','--connect-timeout','8','--max-time',str(max_time),'-A','Raio-X-Territorial/0.17-layer-probe',url],capture_output=True,timeout=max_time+6)
+    except subprocess.TimeoutExpired as e:
+        return {'ok':False,'detail':f'TimeoutExpired:{e}'}
     if p.returncode: return {'ok':False,'detail':p.stderr.decode('utf-8','ignore')[:300]}
     raw=p.stdout
     try: return {'ok':True,'json':json.loads(raw.decode('utf-8')),'bytes':len(raw)}
@@ -38,10 +41,10 @@ def _safe_props(p:dict):
     return out
 
 
-def query_layer(layer:str,bbox:list[float],car_geometry:dict,max_features=1000):
+def query_layer(layer:str,bbox:list[float],car_geometry:dict,max_features=500):
     xmin,ymin,xmax,ymax=bbox
     params={'service':'WFS','version':'2.0.0','request':'GetFeature','typeNames':layer,'srsName':'EPSG:4674','bbox':f'{xmin},{ymin},{xmax},{ymax},EPSG:4674','count':str(max_features),'outputFormat':'application/json'}
-    r=_curl_json(WFS+'?'+urlencode(params),65)
+    r=_curl_json(WFS+'?'+urlencode(params),30)
     if not r.get('ok'): return {'ok':False,'layer':layer,'detail':r.get('detail'),'preview':r.get('preview')}
     data=r.get('json') or {}
     if data.get('exceptions') or data.get('ExceptionReport'): return {'ok':False,'layer':layer,'detail':str(data)[:500]}
@@ -61,10 +64,12 @@ def query_layer(layer:str,bbox:list[float],car_geometry:dict,max_features=1000):
 
 def probe_benchmark(car_geometry:dict,bbox:list[float]):
     out={}
-    with ThreadPoolExecutor(max_workers=len(LAYERS)) as ex:
+    # Limit concurrent requests to the same government GeoServer. This is faster in practice
+    # than flooding it with six simultaneous heavy WFS geometry requests.
+    with ThreadPoolExecutor(max_workers=2) as ex:
         futs={ex.submit(query_layer,layer,bbox,car_geometry):key for key,layer in LAYERS.items()}
         for fut in as_completed(futs):
             key=futs[fut]
             try: out[key]=fut.result()
             except Exception as e: out[key]={'ok':False,'layer':LAYERS[key],'detail':f'{type(e).__name__}:{e}'}
-    return {k:out.get(k,{'ok':False,'detail':'no_result'}) for k in LAYERS}
+    return {k:out.get(k,{'ok':False,'layer':LAYERS[k],'detail':'no_result'}) for k in LAYERS}
