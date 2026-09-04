@@ -25,6 +25,8 @@ def _load_v8_after_portal():
         mod=sys.modules.get('portal_api')
         if mod is not None and hasattr(mod,'PORTAL_HTML') and hasattr(mod,'app'):
             try:
+                import postgres_runtime_bootstrap
+                postgres_runtime_bootstrap.ensure_postgres_driver()
                 import car_resilient  # noqa: F401
                 import parity_public_layers  # noqa: F401
                 import portal_v8  # noqa: F401
