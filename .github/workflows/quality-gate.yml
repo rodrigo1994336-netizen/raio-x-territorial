@@ -21,15 +21,19 @@ jobs:
       - name: Compile Python modules
         run: |
           python -m py_compile \
-            climate_nasa.py groundwater_siagas.py safras_ibge.py satellite_real.py \
-            property_search.py map_context.py portal_property_tabs.py portal_smart_search.py \
-            portal_map_context_symbols.py portal_rare_earth_symbols.py report_book_style.py \
-            report_engine_v6.py live_report_adapter_v12.py report_v12_patch.py sitecustomize.py
+            climate_nasa.py groundwater_siagas.py safras_ibge.py satellite_real.py soilgrids_wcs.py \
+            sicar_detail_sources.py aerodromes_anac.py property_search.py map_context.py \
+            portal_property_tabs.py portal_smart_search.py portal_map_context_symbols.py \
+            portal_rare_earth_symbols.py portal_property_identity_v13.py report_book_style.py \
+            report_engine_v6.py live_report_adapter_v12.py live_report_adapter_v13.py \
+            report_v13_patch.py sitecustomize.py
       - name: Import standalone engines
         env:
           RX_RELEASE: OFF
         run: |
           python - <<'PY'
-          import climate_nasa, groundwater_siagas, safras_ibge, satellite_real, report_book_style, report_engine_v6
+          import climate_nasa, groundwater_siagas, safras_ibge, satellite_real
+          import soilgrids_wcs, sicar_detail_sources, aerodromes_anac
+          import report_book_style, report_engine_v6
           print('RX_CI_IMPORT_OK')
           PY
