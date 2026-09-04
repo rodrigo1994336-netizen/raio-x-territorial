@@ -15,7 +15,7 @@ GEOD=Geod(ellps='GRS80')
 
 
 def _curl(url: str, expect_json=True):
-    p=subprocess.run(['curl','-k','-sS','--connect-timeout','12','--max-time','35','-A','Raio-X-Territorial/0.14.9',url],capture_output=True,timeout=40)
+    p=subprocess.run(['curl','-k','-sS','--connect-timeout','12','--max-time','35','-A','Raio-X-Territorial/0.14.10',url],capture_output=True,timeout=40)
     if p.returncode:
         return {'ok':False,'detail':p.stderr.decode('utf-8','ignore')[:240]}
     raw=p.stdout
@@ -27,8 +27,7 @@ def _curl(url: str, expect_json=True):
         return {'ok':False,'detail':f'JSONDecodeError:{e}','preview':raw[:180].decode('utf-8','ignore')}
 
 
-def _local(tag):
-    return tag.rsplit('}',1)[-1]
+def _local(tag): return tag.rsplit('}',1)[-1]
 
 
 def _score(name: str):
@@ -58,8 +57,7 @@ def _area_ha(geom):
     try:
         if geom is None or geom.is_empty: return 0.0
         return abs(GEOD.geometry_area_perimeter(geom)[0])/10000.0
-    except Exception:
-        return 0.0
+    except Exception: return 0.0
 
 
 def discover_layers(limit=14):
@@ -67,17 +65,18 @@ def discover_layers(limit=14):
     if not cap.get('ok'): return {'ok':False,'detail':cap.get('detail')}
     try: root=ET.fromstring(cap['text'])
     except Exception as e: return {'ok':False,'detail':f'XML:{e}'}
-    names=[]
+    candidates=[]; raw_names=[]
     for ft in root.iter():
         if _local(ft.tag)!='FeatureType': continue
         name=None
         for ch in ft:
             if _local(ch.tag)=='Name' and ch.text: name=ch.text.strip(); break
         if name:
+            raw_names.append(name)
             sc=_score(name)
-            if sc>0: names.append((sc,name,_classify(name)))
-    names=sorted(names,reverse=True)
-    return {'ok':True,'layers':[{'score':sc,'name':name,'category':cat} for sc,name,cat in names[:limit]],'total_candidates':len(names)}
+            if sc>0: candidates.append((sc,name,_classify(name)))
+    candidates=sorted(candidates,reverse=True)
+    return {'ok':True,'layers':[{'score':sc,'name':name,'category':cat} for sc,name,cat in candidates[:limit]],'total_candidates':len(candidates),'feature_type_count':len(raw_names),'raw_names':raw_names[:120]}
 
 
 def query_sicar_details(car_geometry: dict[str,Any], bbox: list[float], max_layers=10):
@@ -97,16 +96,14 @@ def query_sicar_details(car_geometry: dict[str,Any], bbox: list[float], max_laye
         item={'name':layer['name'],'category':layer['category'],'score':layer['score'],'ok':res.get('ok')}
         if not res.get('ok'):
             item['detail']=res.get('detail') or res.get('preview'); results.append(item); continue
-        fs=(res.get('json') or {}).get('features') or []
-        intersections=[]
+        fs=(res.get('json') or {}).get('features') or []; intersections=[]
         for f in fs:
             try:
                 src=shape(f.get('geometry'))
                 if not car.intersects(src): continue
                 inter=car.intersection(src)
                 if inter.is_empty: continue
-                intersections.append(inter)
-                category_geoms.setdefault(layer['category'],[]).append(inter)
+                intersections.append(inter); category_geoms.setdefault(layer['category'],[]).append(inter)
             except Exception: continue
         union=unary_union(intersections) if intersections else None
         item.update({'feature_count_bbox':len(fs),'exact_count':len(intersections),'area_unique_ha':round(_area_ha(union) if union is not None else 0.0,6)})
@@ -117,6 +114,5 @@ def query_sicar_details(car_geometry: dict[str,Any], bbox: list[float], max_laye
         summary[cat]={'occurrence_count':len(geoms),'area_unique_ha':round(_area_ha(union) if union is not None else 0.0,6),'layer_count':len([r for r in results if r.get('category')==cat and r.get('ok')])}
     for r in results:
         summary.setdefault(r['category'],{'occurrence_count':0,'area_unique_ha':0.0,'layer_count':0})
-        if r.get('ok') and summary[r['category']]['layer_count']==0:
-            summary[r['category']]['layer_count']=1
-    return {'ok':True,'source':'SICAR WFS - camadas ambientais detalhadas','discovery_total':disc.get('total_candidates'),'selected_layers':[x['name'] for x in selected],'layers':results,'summary':summary}
+        if r.get('ok') and summary[r['category']]['layer_count']==0: summary[r['category']]['layer_count']=1
+    return {'ok':True,'source':'SICAR WFS - camadas ambientais detalhadas','discovery_total':disc.get('total_candidates'),'feature_type_count':disc.get('feature_type_count'),'raw_names':disc.get('raw_names'),'selected_layers':[x['name'] for x in selected],'layers':results,'summary':summary}
