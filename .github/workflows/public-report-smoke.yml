@@ -1,0 +1,98 @@
+name: Raio-X Public Report Audit
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/public-report-smoke.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      CAR_CODE: MG-3120904-DFB380BECD7A4323AD8AA68FA14D011F
+      REPORT_BASE: https://raio-x-territorial-report.onrender.com
+    steps:
+      - name: Generate public report
+        run: |
+          set -euo pipefail
+          mkdir -p audit/pages
+          curl --fail --show-error --silent --retry 3 --retry-delay 8 --max-time 720 \
+            "${REPORT_BASE}/v1/reports/property/${CAR_CODE}/meta" \
+            -o audit/meta.json
+          curl --fail --show-error --silent --retry 2 --retry-delay 8 --max-time 720 \
+            "${REPORT_BASE}/v1/reports/property/${CAR_CODE}" \
+            -o audit/report.pdf
+          test -s audit/report.pdf
+          file audit/report.pdf
+
+      - name: Extract text and render pages
+        run: |
+          set -euo pipefail
+          if ! command -v pdftotext >/dev/null || ! command -v pdftoppm >/dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq poppler-utils
+          fi
+          pdftotext -layout audit/report.pdf audit/report.txt
+          pdfinfo audit/report.pdf > audit/pdfinfo.txt
+          pdftoppm -png -r 110 -f 1 -l 20 audit/report.pdf audit/pages/page >/dev/null 2>&1
+
+      - name: Build audit summary
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import json,re
+          text=Path('audit/report.txt').read_text(encoding='utf-8',errors='ignore')
+          low=text.lower()
+          meta=json.loads(Path('audit/meta.json').read_text(encoding='utf-8'))
+          checks={
+            'clima_visible': any(x in low for x in ['clima','precipitação','precipitacao','nasa power']),
+            'soil_visible': any(x in low for x in ['soilgrids','argila','ctc a ph','carbono orgânico','carbono organico']),
+            'mapbiomas_visible': 'mapbiomas' in low,
+            'pasture_visible': 'pastagem' in low,
+            'sentinel_visible': 'sentinel-2' in low or 'sentinel 2' in low,
+            'ndvi_visible': 'ndvi' in low,
+            'car_internal_visible': all(any(term in low for term in group) for group in [
+              ['reserva legal'],['app','preservação permanente','preservacao permanente'],['área consolidada','area consolidada']
+            ]),
+            'water_visible': 'outorga' in low,
+            'aptitude_visible': 'aptidão' in low or 'aptidao' in low,
+            'aerodrome_visible': 'aeródromo' in low or 'aerodromo' in low,
+            'iphan_visible': 'iphan' in low or 'arqueol' in low,
+            'public_forest_visible': 'floresta pública' in low or 'floresta publica' in low,
+          }
+          obsolete=[]
+          stale_patterns=[
+            r'outorgas, solo, aptid[aã]o, clima, ndvi e infraestrutura ainda',
+            r'solo, aptid[aã]o, clima, ndvi e infraestrutura ainda',
+            r'outorgas e restri[cç][oõ]es h[ií]dricas ainda n[aã]o consultadas',
+            r'solo, aptid[aã]o e relevo ainda n[aã]o consultados',
+          ]
+          for p in stale_patterns:
+            if re.search(p,low): obsolete.append(p)
+          summary={
+            'meta':meta,
+            'pdf_bytes':Path('audit/report.pdf').stat().st_size,
+            'page_png_count':len(list(Path('audit/pages').glob('*.png'))),
+            'not_consulted_count':len(re.findall(r'NÃO CONSULTAD[OA]',text,re.I)),
+            'not_executed_count':len(re.findall(r'NÃO EXECUTAD[OA]',text,re.I)),
+            'integration_off_count':len(re.findall(r'INTEGRAÇÃO[^\n]{0,80}OFF',text,re.I)),
+            'checks':checks,
+            'obsolete_phrases':obsolete,
+            'pass_core_visibility':all(checks[k] for k in ['clima_visible','soil_visible','mapbiomas_visible','pasture_visible','sentinel_visible','ndvi_visible','car_internal_visible','water_visible','aptitude_visible']),
+            'pass_no_stale_claims':not obsolete,
+          }
+          Path('audit/summary.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2),encoding='utf-8')
+          print(json.dumps(summary,ensure_ascii=False,indent=2))
+          PY
+
+      - name: Upload audit artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: raio-x-public-report-audit
+          path: audit/
+          retention-days: 7
