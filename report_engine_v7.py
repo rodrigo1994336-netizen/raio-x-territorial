@@ -1,0 +1,36 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import report_engine_v6 as v6
+
+
+def build_premium_property_report_v7(path:str|Path,payload:dict)->str:
+    """V6 renderer with truthful cover caption when the visual reference is not Sentinel-2.
+
+    The underlying book renderer remains unchanged; this wrapper only prevents a
+    high-resolution Esri mosaic from being labelled as a dated Sentinel scene.
+    """
+    original=v6._image
+    highres=payload.get('visual_reference_image_path')
+    sentinel=payload.get('sentinel_image_path')
+    sat=payload.get('satellite_imagery') or {}
+    prop=payload.get('property') or {}
+
+    def _image(path_value,caption,*args,**kwargs):
+        p=str(path_value or '')
+        c=str(caption or '')
+        if highres and p==str(highres) and 'Imagem orbital real Sentinel-2' in c:
+            c=(
+                f"Imagem de referência em alta resolução de {prop.get('name') or 'imóvel rural'}, com o limite do CAR contornado. "
+                "Fonte visual: Esri World Imagery (mosaico que pode combinar satélite e aerofotogrametria de diferentes provedores/datas). "
+                f"A evidência científica datada permanece separada: Sentinel-2 {sat.get('date') or 'data não informada'}, usada no NDVI."
+            )
+        return original(path_value,c,*args,**kwargs)
+
+    v6._image=_image
+    try:return v6.build_premium_property_report_v6(path,payload)
+    finally:v6._image=original
+
+
+print('RX_REPORT_ENGINE=V7_TRUTHFUL_HIGHRES_COVER',flush=True)
