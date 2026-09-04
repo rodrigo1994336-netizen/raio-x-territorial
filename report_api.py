@@ -9,9 +9,10 @@ from fastapi.responses import FileResponse
 
 from deploy_app import analyze_car, _safe_summary, TEST_CAR
 from live_extra_sources import query_ibama_autos
-from live_report_adapter_v2 import generate_live_report
+from sicar_detail_sources import query_sicar_details
+from live_report_adapter_v3 import generate_live_report
 
-app = FastAPI(title='Raio-X Territorial Report API', version='0.14.8-live-pdf')
+app = FastAPI(title='Raio-X Territorial Report API', version='0.14.9-live-pdf')
 
 
 def _public_meta(meta: dict):
@@ -21,6 +22,7 @@ def _public_meta(meta: dict):
 def _report_summary(result: dict):
     base = _safe_summary(result)
     autos = result.get('autos_ibama') or {}
+    details = result.get('sicar_details') or {}
     base['autos_ibama'] = {
         'ok': autos.get('ok'),
         'feature_count_bbox': autos.get('feature_count_bbox'),
@@ -28,6 +30,13 @@ def _report_summary(result: dict):
         'fine_total': autos.get('fine_total'),
         'source': autos.get('source'),
         'deduplicated': autos.get('deduplicated'),
+    }
+    base['sicar_details'] = {
+        'ok': details.get('ok'),
+        'discovery_total': details.get('discovery_total'),
+        'selected_layers': details.get('selected_layers'),
+        'summary': details.get('summary'),
+        'source': details.get('source'),
     }
     return base
 
@@ -37,7 +46,9 @@ async def _build(car_code: str):
     car = result.get('car') or {}
     if not car.get('ok'):
         raise HTTPException(status_code=404 if car.get('not_found') else 502, detail=_safe_summary(result))
-    result['autos_ibama'] = await query_ibama_autos(car.get('geometry'), car.get('bbox'))
+    autos_task = query_ibama_autos(car.get('geometry'), car.get('bbox'))
+    sicar_task = asyncio.to_thread(query_sicar_details, car.get('geometry'), car.get('bbox'), 10)
+    result['autos_ibama'], result['sicar_details'] = await asyncio.gather(autos_task, sicar_task)
     meta = await asyncio.to_thread(generate_live_report, result, car_code.upper())
     return result, meta
 
@@ -61,7 +72,7 @@ def root():
         'app':'Raio-X Territorial',
         'service':'report-api',
         'status':'online',
-        'version':'0.14.8-live-pdf',
+        'version':'0.14.9-live-pdf',
         'benchmark_car':TEST_CAR,
     }
 
