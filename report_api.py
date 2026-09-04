@@ -20,9 +20,10 @@ from pivots_ana import query_pivots_ana
 from climate_nasa import query_climate_nasa
 from ide_catalog import benchmark_targets, search_catalog
 from ide_layer_probe import probe_benchmark
+from critical_minerals import query_critical_minerals
 from live_report_adapter_v8 import generate_live_report
 
-APP_VERSION='0.16.7-diagnostic-gates'
+APP_VERSION='0.18.1-operational-critical-minerals'
 app = FastAPI(title='Raio-X Territorial Report API', version=APP_VERSION)
 CACHE_TTL_SECONDS=300
 _CACHE:dict[str,tuple[float,dict]]={}
@@ -35,7 +36,7 @@ def _public_meta(meta: dict):
 
 def _report_summary(result: dict):
     base=_safe_summary(result)
-    autos=result.get('autos_ibama') or {}; fire=result.get('fire_live') or {}; cons=result.get('territorial_constraints') or {}; water=result.get('water_mg') or {}; piv=result.get('pivots_ana') or {}; cl=result.get('climate_nasa') or {}; ide=result.get('ide_layers') or {}
+    autos=result.get('autos_ibama') or {}; fire=result.get('fire_live') or {}; cons=result.get('territorial_constraints') or {}; water=result.get('water_mg') or {}; piv=result.get('pivots_ana') or {}; cl=result.get('climate_nasa') or {}; ide=result.get('ide_layers') or {}; minerals=result.get('critical_minerals') or {}
     base['autos_ibama']={'ok':autos.get('ok'),'feature_count_bbox':autos.get('feature_count_bbox'),'occurrence_count':autos.get('occurrence_count'),'fine_total':autos.get('fine_total'),'source':autos.get('source'),'deduplicated':autos.get('deduplicated'),'detail':autos.get('detail')}
     base['fire_live']={'ok':fire.get('ok'),'latest_file':fire.get('latest_file'),'feed_focus_count':fire.get('feed_focus_count'),'radius_km':fire.get('radius_km'),'inside_count':fire.get('inside_count'),'near_count':fire.get('near_count'),'nearest':fire.get('nearest'),'window_note':fire.get('window_note'),'source':fire.get('source'),'detail':fire.get('detail')}
     base['territorial_constraints']={'ok':cons.get('ok'),'area_unique_all_constraints_ha':cons.get('area_unique_all_constraints_ha'),'services':{k:{'ok':v.get('ok'),'label':v.get('label'),'occurrence_count':v.get('occurrence_count'),'area_unique_ha':v.get('area_unique_ha'),'feature_count_bbox':v.get('feature_count_bbox'),'source':v.get('source'),'detail':v.get('detail')} for k,v in (cons.get('services') or {}).items()},'detail':cons.get('detail')}
@@ -43,6 +44,15 @@ def _report_summary(result: dict):
     base['pivots_ana']={'ok':piv.get('ok'),'detail':piv.get('detail'),'reference_year':piv.get('reference_year'),'feature_count_bbox':piv.get('feature_count_bbox'),'parsed_feature_count':piv.get('parsed_feature_count'),'intersection_count':piv.get('intersection_count'),'intersection_area_unique_ha':piv.get('intersection_area_unique_ha'),'near_count':piv.get('near_count'),'radius_km':piv.get('radius_km'),'nearest':piv.get('nearest'),'source':piv.get('source')}
     base['climate_nasa']={'ok':cl.get('ok'),'detail':cl.get('detail'),'available_days':cl.get('available_days'),'period_start':cl.get('period_start'),'period_end':cl.get('period_end'),'rain_sum_mm':cl.get('rain_sum_mm'),'temp_avg_c':cl.get('temp_avg_c'),'temp_max_avg_c':cl.get('temp_max_avg_c'),'temp_min_avg_c':cl.get('temp_min_avg_c'),'rh_avg_pct':cl.get('rh_avg_pct'),'solar_avg_kwh_m2_day':cl.get('solar_avg_kwh_m2_day'),'latest_data_date':cl.get('latest_data_date'),'source':cl.get('source')}
     base['ide_layers']={k:{'ok':v.get('ok'),'layer':v.get('layer'),'feature_count_bbox':v.get('feature_count_bbox'),'exact_count':v.get('exact_count'),'samples':v.get('samples'),'detail':v.get('detail')} for k,v in ide.items()}
+    manm=minerals.get('anm') or {}; msgb=minerals.get('sgb') or {}
+    base['critical_minerals']={
+        'ok':minerals.get('ok'),'source':minerals.get('source'),'mineral_codes':minerals.get('mineral_codes') or [],
+        'rare_earth_signal':bool(minerals.get('rare_earth_signal')),'interpretation':minerals.get('interpretation'),
+        'anm_process_count':manm.get('process_count'),'anm_critical_process_count':manm.get('critical_process_count'),'anm_counts':manm.get('counts') or {},
+        'sgb_capabilities_ok':msgb.get('capabilities_ok'),'sgb_candidate_layer_count':msgb.get('candidate_layer_count'),'sgb_queried_layer_count':msgb.get('queried_layer_count'),
+        'sgb_hit_layers':[{'layer':x.get('layer'),'title':x.get('title'),'minerals':x.get('minerals'),'hit_count':x.get('hit_count')} for x in (msgb.get('hit_layers') or [])[:20]],
+        'detail':msgb.get('detail')
+    }
     base['cache']={'ttl_seconds':CACHE_TTL_SECONDS}
     return base
 
@@ -91,8 +101,6 @@ async def _analyze_uncached(car_code:str):
     if not car.get('ok'): raise HTTPException(status_code=404 if car.get('not_found') else 502,detail=_safe_summary(result))
     result=await _retry_failed_core(result); car=result.get('car') or {}
     geometry=car.get('geometry'); bbox=car.get('bbox')
-    # First run the general sources. IDE-Sisema heavy polygon layers are queried afterwards,
-    # avoiding a burst of concurrent WFS calls to the same government GeoServer.
     jobs=[
         _query_autos_resilient(geometry,bbox),
         _safe_async('fire_live',analyze_fire_near_property(geometry,5.0,6),'INPE Programa Queimadas'),
@@ -100,9 +108,10 @@ async def _analyze_uncached(car_code:str):
         _safe_thread('water_mg',query_outorgas_mg,geometry,bbox,5.0,source='IDE-Sisema / IGAM + ANA'),
         _safe_thread('pivots_ana',query_pivots_ana,geometry,bbox,5.0,source='ANA / SNIRH - Pivôs Centrais'),
         _safe_thread('climate_nasa',query_climate_nasa,geometry,30,source='NASA POWER - Daily API'),
+        _safe_async('critical_minerals',query_critical_minerals(geometry,result.get('anm')),'ANM/SIGMINE + SGB/GeoSGB'),
     ]
     vals=await asyncio.gather(*jobs)
-    result['autos_ibama'],result['fire_live'],result['territorial_constraints'],result['water_mg'],result['pivots_ana'],result['climate_nasa']=vals
+    result['autos_ibama'],result['fire_live'],result['territorial_constraints'],result['water_mg'],result['pivots_ana'],result['climate_nasa'],result['critical_minerals']=vals
     result['ide_layers']=await _safe_thread('ide_layers',probe_benchmark,geometry,bbox,source='IDE-Sisema - Solo/Aptidão/Relevo/Uso')
     return result
 
@@ -178,6 +187,9 @@ async def live_water(car_code:str):
 @app.get('/v1/live/ide/{car_code}')
 async def live_ide(car_code:str):
     result=await _analyze_with_live_addons(car_code); return {'car':_safe_summary(result).get('car'),'ide_layers':result.get('ide_layers')}
+@app.get('/v1/live/minerals/{car_code}')
+async def live_minerals(car_code:str):
+    result=await _analyze_with_live_addons(car_code); return {'car':_safe_summary(result).get('car'),'critical_minerals':result.get('critical_minerals')}
 @app.get('/v1/internal/ide/catalog')
 async def ide_catalog(q:str='solo,aptidão,Mapbiomas,declividade,rodovias,APPs'):
     terms=[x.strip() for x in q.split(',') if x.strip()]; return await asyncio.to_thread(search_catalog,terms,100)
