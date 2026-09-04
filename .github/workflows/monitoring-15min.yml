@@ -7,23 +7,35 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 jobs:
   monitor:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Wake portal and run monitoring
+      - name: Check readiness and run monitoring
         env:
+          STATUS_URL: https://raio-x-territorial-app.onrender.com/v1/monitoring/status
           MONITOR_URL: https://raio-x-territorial-app.onrender.com/v1/monitoring/run?limit=25
-          MONITOR_TOKEN: ${{ secrets.RX_MONITOR_TOKEN }}
         run: |
           set -euo pipefail
-          if [ -n "${MONITOR_TOKEN:-}" ]; then
-            curl --fail --silent --show-error --max-time 540 \
-              -X POST -H "X-RaioX-Monitor-Token: ${MONITOR_TOKEN}" \
-              "${MONITOR_URL}"
-          else
-            curl --fail --silent --show-error --max-time 540 \
-              -X POST "${MONITOR_URL}"
+
+          STATUS="$(curl --fail --silent --show-error --retry 3 --retry-delay 5 --max-time 90 "${STATUS_URL}")"
+          echo "Monitoring status: ${STATUS}"
+
+          READY="$(python -c 'import json,sys; d=json.load(sys.stdin); print("yes" if d.get("persistence")=="durable" else "no")' <<< "${STATUS}")"
+          if [ "${READY}" != "yes" ]; then
+            echo "::notice title=Raio-X monitoramento aguardando banco::Persistência ainda não está vinculada. Execução encerrada sem falha para evitar alertas falsos."
+            exit 0
           fi
+
+          OIDC_JSON="$(curl --fail --silent --show-error \
+            -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=raio-x-territorial-monitor")"
+          OIDC_TOKEN="$(python -c 'import json,sys; print(json.load(sys.stdin)["value"])' <<< "${OIDC_JSON}")"
+
+          curl --fail --silent --show-error --retry 2 --retry-delay 5 --max-time 540 \
+            -X POST \
+            -H "Authorization: Bearer ${OIDC_TOKEN}" \
+            "${MONITOR_URL}"
