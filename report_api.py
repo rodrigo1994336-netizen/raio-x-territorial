@@ -7,13 +7,13 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 
-from deploy_app import analyze_car, _safe_summary, TEST_CAR
+from deploy_app import analyze_car, _safe_summary, TEST_CAR, query_anm, query_embargos, query_prodes, query_sigef
 from fire_live import analyze_fire_near_property
 from live_extra_sources import query_ibama_autos
 from territorial_constraints import query_territorial_constraints
 from live_report_adapter_v5 import generate_live_report
 
-app = FastAPI(title='Raio-X Territorial Report API', version='0.15.1-constraints-fire-pdf')
+app = FastAPI(title='Raio-X Territorial Report API', version='0.15.2-resilient-live-pdf')
 
 
 def _public_meta(meta: dict):
@@ -29,9 +29,25 @@ def _report_summary(result: dict):
     return base
 
 
+async def _retry_failed_core(result:dict):
+    car=result.get('car') or {}; bbox=car.get('bbox')
+    if not bbox: return result
+    jobs=[]; keys=[]
+    if not (result.get('sigef') or {}).get('ok'): keys.append('sigef'); jobs.append(query_sigef(bbox))
+    if not (result.get('embargos_ibama') or {}).get('ok'): keys.append('embargos_ibama'); jobs.append(query_embargos(bbox))
+    if not (result.get('anm') or {}).get('ok'): keys.append('anm'); jobs.append(query_anm(bbox))
+    if not (result.get('prodes') or {}).get('ok'): keys.append('prodes'); jobs.append(query_prodes(bbox))
+    if jobs:
+        values=await asyncio.gather(*jobs,return_exceptions=True)
+        for k,v in zip(keys,values):
+            if not isinstance(v,Exception): result[k]=v
+    return result
+
+
 async def _analyze_with_live_addons(car_code:str):
     result=await analyze_car(car_code.upper()); car=result.get('car') or {}
     if not car.get('ok'): raise HTTPException(status_code=404 if car.get('not_found') else 502,detail=_safe_summary(result))
+    result=await _retry_failed_core(result); car=result.get('car') or {}
     autos_task=query_ibama_autos(car.get('geometry'),car.get('bbox'))
     fire_task=analyze_fire_near_property(car.get('geometry'),5.0,6)
     constraints_task=query_territorial_constraints(car.get('geometry'),car.get('bbox'))
@@ -52,7 +68,7 @@ async def startup_pdf_smoke():
     except Exception as e: print(f'RX_REAL_PDF_FAIL={type(e).__name__}:{str(e)[:500]}',flush=True)
 
 @app.get('/')
-def root(): return {'app':'Raio-X Territorial','service':'report-api','status':'online','version':'0.15.1-constraints-fire-pdf','benchmark_car':TEST_CAR}
+def root(): return {'app':'Raio-X Territorial','service':'report-api','status':'online','version':'0.15.2-resilient-live-pdf','benchmark_car':TEST_CAR}
 @app.get('/health')
 def health(): return {'ok':True,'service':'report-api'}
 @app.get('/v1/live/fire/{car_code}')
