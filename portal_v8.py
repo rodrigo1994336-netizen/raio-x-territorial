@@ -13,7 +13,7 @@ from monitoring_routes import register_monitoring_routes
 import monitoring_store
 
 app = base.app
-APP_PORTAL_VERSION = '0.18.6-v8-operational'
+APP_PORTAL_VERSION = '0.18.7-v8-operational'
 
 # Replace portal root only; keep every production report/live/export route already registered.
 app.router.routes = [r for r in app.router.routes if getattr(r, 'path', None) != '/']
@@ -65,7 +65,18 @@ EXTRA_JS = r'''
     try{
       const r=await fetch('/v1/monitoring/status');const d=await r.json();
       const active=d.persistence==='durable';
-      box.innerHTML=`<h4>Monitoramento contínuo</h4><div class="row"><b class="${active?'ok':'warn'}">${active?'PERSISTENTE — PRONTO':'AGUARDANDO VÍNCULO DO BANCO'}</b><br><span>Varredura periódica, snapshots, detecção de mudanças, alertas e histórico. Agendamento preparado para 15 minutos.</span></div>`;
+      const code=(window.current&&current.car_code)||'';
+      const action=active&&code?`<div class="row"><button id="rxMonitorBtn" type="button" style="width:100%;padding:12px 14px;border:0;border-radius:10px;background:#0E603B;color:#fff;font-weight:800;cursor:pointer">MONITORAR ESTA PROPRIEDADE</button><small id="rxMonitorMsg" style="display:block;margin-top:8px"></small></div>`:'';
+      box.innerHTML=`<h4>Monitoramento contínuo</h4><div class="row"><b class="${active?'ok':'warn'}">${active?'PERSISTENTE — PRONTO':'AGUARDANDO VÍNCULO DO BANCO'}</b><br><span>Varredura periódica, snapshots, detecção de mudanças, alertas e histórico. Agendamento preparado para 15 minutos.</span></div>${action}`;
+      const btn=document.querySelector('#rxMonitorBtn');
+      if(btn){btn.onclick=async()=>{
+        const msg=document.querySelector('#rxMonitorMsg'); btn.disabled=true; btn.textContent='ATIVANDO MONITORAMENTO…';
+        try{
+          const rr=await fetch(`/v1/monitoring/properties/${encodeURIComponent(code)}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({channel:'in_app'})});
+          const dd=await rr.json(); if(!rr.ok) throw new Error(dd.detail||'falha ao ativar');
+          btn.textContent='MONITORAMENTO ATIVO'; if(msg) msg.textContent='Baseline salvo. As próximas varreduras detectarão mudanças reais.';
+        }catch(e){btn.disabled=false;btn.textContent='TENTAR NOVAMENTE';if(msg) msg.textContent=e.message;}
+      }}
     }catch(e){}
   }
   window.renderAnalysis = renderAnalysis = function(d){originalRender(d);criticalSection();premiumSection();whatsappSection();monitoringSection()};
