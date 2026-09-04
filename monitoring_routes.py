@@ -44,7 +44,7 @@ def register_monitoring_routes(app, analyze_fn):
             'persistence': 'durable' if r['ready'] else 'not_bound',
             'database_bound': r['database_bound'],
             'driver': r['driver'],
-            'scheduler': 'github-actions-15min',
+            'scheduler': 'github-actions-10min',
             'fire_target_minutes': 10,
             'whatsapp_alert_delivery': 'official-meta-cloud-api-prepared',
             'note': 'Persistência exige DATABASE_URL e driver PostgreSQL. Sem isso o sistema não finge monitoramento contínuo.'
@@ -62,8 +62,6 @@ def register_monitoring_routes(app, analyze_fn):
         channel=(body.get('channel') or 'in_app').strip()
         destination=body.get('destination')
         monitor=await asyncio.to_thread(store.add_monitor,car_code,channel,destination)
-        # First snapshot immediately so future runs detect actual changes instead of treating
-        # the first scheduled execution as baseline only.
         initial=None
         try:
             result=await analyze_fn(car_code.upper())
