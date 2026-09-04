@@ -8,7 +8,7 @@ from live_report_adapter import REPORT_DIR, build_technical_map, build_live_payl
 from live_report_adapter_v2 import _patch_autos
 from live_report_adapter_v4 import _patch_fire, _patch_car_limit
 from live_report_adapter_v5 import _patch_constraints
-from report_engine_v2 import build_premium_property_report_v2
+from report_engine_v3 import build_premium_property_report_v3
 
 
 def _safe(v, default='-'):
@@ -22,7 +22,7 @@ def _fmt_grant(item: dict):
     status=p.get('statuspa_4') or '-'
     use=p.get('usoinsig_4') or p.get('tipouso_4') or '-'
     dist=item.get('distance_m')
-    loc='DENTRO DO IMÓVEL' if item.get('inside') else (f'{round(float(dist)/1000,2)} km' if dist is not None else '-')
+    loc='DENTRO' if item.get('inside') else (f'{round(float(dist)/1000,2)} km' if dist is not None else '-')
     return [str(proc), str(port), str(status), str(use), loc]
 
 
@@ -73,5 +73,5 @@ def generate_live_report(result:dict,car_code:str):
     payload=_patch_constraints(payload,result)
     payload=_patch_water(payload,result)
     payload_path=out_dir/'payload.json'; payload_path.write_text(json.dumps(payload,ensure_ascii=False,indent=2,default=str),encoding='utf-8')
-    pdf_path=out_dir/'raio_x_territorial.pdf'; digest=build_premium_property_report_v2(pdf_path,payload)
+    pdf_path=out_dir/'raio_x_territorial.pdf'; digest=build_premium_property_report_v3(pdf_path,payload)
     return {'report_id':report_id,'pdf_path':str(pdf_path),'payload_path':str(payload_path),'map_path':str(map_path),'sha256':digest,'bytes':pdf_path.stat().st_size,'payload_sha256':sha256(payload_path.read_bytes()).hexdigest()}
