@@ -15,14 +15,23 @@ LAYERS={
  'rl_recomposition':'IDE:ide_210602_mg_imoveis_recomp_res_legal_declarado_car_pol',
 }
 
+# These layers can contain very detailed polygons. Downloading hundreds of full
+# geometries in one request can exceed a 512 MB instance during JSON decoding.
+DEFAULT_FEATURE_LIMIT=80
+HEAVY_FEATURE_LIMIT=30
+
 
 def _curl_json(url:str,max_time=25):
     try:
-        p=subprocess.run(['curl','-sS','--retry','1','--retry-delay','1','--connect-timeout','7','--max-time',str(max_time),'-A','Raio-X-Territorial/0.17-layer-probe',url],capture_output=True,timeout=max_time+5)
+        p=subprocess.run(['curl','-sS','--retry','1','--retry-delay','1','--connect-timeout','7','--max-time',str(max_time),'-A','Raio-X-Territorial/0.18-layer-probe',url],capture_output=True,timeout=max_time+5)
     except subprocess.TimeoutExpired as e:
         return {'ok':False,'detail':f'TimeoutExpired:{e}'}
     if p.returncode: return {'ok':False,'detail':p.stderr.decode('utf-8','ignore')[:300]}
     raw=p.stdout
+    # Hard response guard: never JSON-decode arbitrarily large governmental WFS
+    # payloads inside the small report instance.
+    if len(raw)>12_000_000:
+        return {'ok':False,'detail':f'payload_guard:{len(raw)} bytes','bytes':len(raw),'capped':True}
     try: return {'ok':True,'json':json.loads(raw.decode('utf-8')),'bytes':len(raw)}
     except Exception as e: return {'ok':False,'detail':f'JSONDecodeError:{e}','preview':raw[:250].decode('utf-8','ignore')}
 
@@ -40,11 +49,13 @@ def _safe_props(p:dict):
     return out
 
 
-def query_layer(layer:str,bbox:list[float],car_geometry:dict,max_features=500):
+def query_layer(layer:str,bbox:list[float],car_geometry:dict,max_features=None):
+    if max_features is None:
+        max_features=HEAVY_FEATURE_LIMIT if any(x in layer for x in ('uso_cobertura','recomp_res_legal')) else DEFAULT_FEATURE_LIMIT
     xmin,ymin,xmax,ymax=bbox
     params={'service':'WFS','version':'2.0.0','request':'GetFeature','typeNames':layer,'srsName':'EPSG:4674','bbox':f'{xmin},{ymin},{xmax},{ymax},EPSG:4674','count':str(max_features),'outputFormat':'application/json'}
     r=_curl_json(WFS+'?'+urlencode(params),25)
-    if not r.get('ok'): return {'ok':False,'layer':layer,'detail':r.get('detail'),'preview':r.get('preview')}
+    if not r.get('ok'): return {'ok':False,'layer':layer,'detail':r.get('detail'),'preview':r.get('preview'),'bytes':r.get('bytes'),'capped':r.get('capped',False)}
     data=r.get('json') or {}
     if data.get('exceptions') or data.get('ExceptionReport'): return {'ok':False,'layer':layer,'detail':str(data)[:500]}
     fs=data.get('features') or []
@@ -58,12 +69,15 @@ def query_layer(layer:str,bbox:list[float],car_geometry:dict,max_features=500):
             if inter.is_empty: continue
             hits.append({'properties':_safe_props(f.get('properties') or {}),'geometry_type':g.geom_type})
         except Exception: continue
-    return {'ok':True,'layer':layer,'feature_count_bbox':len(fs),'exact_count':len(hits),'samples':hits[:4]}
+    return {
+        'ok':True,'layer':layer,'feature_count_bbox':len(fs),'exact_count':len(hits),'samples':hits[:4],
+        'request_limit':max_features,'truncated_possible':len(fs)>=max_features,'bytes':r.get('bytes')
+    }
 
 
 def probe_benchmark(car_geometry:dict,bbox:list[float]):
     out={}
-    # Sequential probing avoids flooding the government WFS and also isolates any malformed layer.
+    # Sequential probing avoids flooding the government WFS and bounds memory.
     for key,layer in LAYERS.items():
         try: result=query_layer(layer,bbox,car_geometry)
         except Exception as e: result={'ok':False,'layer':layer,'detail':f'{type(e).__name__}:{e}'}
