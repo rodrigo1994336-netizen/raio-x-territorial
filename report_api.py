@@ -18,9 +18,10 @@ from water_mg import query_outorgas_mg
 from pivots_ana import query_pivots_ana
 from climate_nasa import query_climate_nasa
 from ide_catalog import benchmark_targets, search_catalog
+from ide_layer_probe import probe_benchmark
 from live_report_adapter_v8 import generate_live_report
 
-app = FastAPI(title='Raio-X Territorial Report API', version='0.16.3-ide-discovery')
+app = FastAPI(title='Raio-X Territorial Report API', version='0.16.4-ide-layer-probe')
 CACHE_TTL_SECONDS=300
 _CACHE:dict[str,tuple[float,dict]]={}
 _LOCKS:dict[str,asyncio.Lock]={}
@@ -115,6 +116,18 @@ async def _background_ide_probe():
         data=await asyncio.to_thread(benchmark_targets)
         compact={k:{'ok':v.get('ok'),'hit_count':v.get('hit_count'),'hits':[{'name':x.get('name'),'title':x.get('title'),'score':x.get('score')} for x in (v.get('hits') or [])[:12]]} for k,v in data.items()}
         print('RX_IDE_CATALOG='+json.dumps(compact,ensure_ascii=False,default=str),flush=True)
+        # Reuse the real CAR result cached by the smoke test; wait briefly if external sources are still running.
+        for _ in range(18):
+            cached=_CACHE.get(TEST_CAR)
+            if cached: break
+            await asyncio.sleep(2)
+        cached=_CACHE.get(TEST_CAR)
+        if cached:
+            car=cached[1].get('car') or {}
+            probe=await asyncio.to_thread(probe_benchmark,car.get('geometry'),car.get('bbox'))
+            print('RX_IDE_LAYER_PROBE='+json.dumps(probe,ensure_ascii=False,default=str),flush=True)
+        else:
+            print('RX_IDE_LAYER_PROBE_FAIL=benchmark_cache_unavailable',flush=True)
     except Exception as e: print(f'RX_IDE_CATALOG_FAIL={type(e).__name__}:{str(e)[:500]}',flush=True)
 
 
@@ -124,9 +137,9 @@ async def startup_tasks():
     asyncio.create_task(_background_ide_probe())
 
 @app.get('/')
-def root(): return {'app':'Raio-X Territorial','service':'report-api','status':'online','version':'0.16.3-ide-discovery','benchmark_car':TEST_CAR,'cache_ttl_seconds':CACHE_TTL_SECONDS}
+def root(): return {'app':'Raio-X Territorial','service':'report-api','status':'online','version':'0.16.4-ide-layer-probe','benchmark_car':TEST_CAR,'cache_ttl_seconds':CACHE_TTL_SECONDS}
 @app.get('/health')
-def health(): return {'ok':True,'service':'report-api','version':'0.16.3-ide-discovery'}
+def health(): return {'ok':True,'service':'report-api','version':'0.16.4-ide-layer-probe'}
 @app.get('/v1/live/fire/{car_code}')
 async def live_fire(car_code:str):
     result=await _analyze_with_live_addons(car_code); return {'car':_safe_summary(result).get('car'),'fire':result.get('fire_live')}
