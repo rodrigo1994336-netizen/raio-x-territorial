@@ -11,7 +11,7 @@ from report_api import _analyze_with_live_addons
 from whatsapp_gateway import register_routes as register_whatsapp_routes
 
 app = base.app
-APP_PORTAL_VERSION = '0.18.4-v8-operational'
+APP_PORTAL_VERSION = '0.18.5-v8-operational'
 
 # Replace portal root only; keep every production report/live/export route already registered.
 app.router.routes = [r for r in app.router.routes if getattr(r, 'path', None) != '/']
@@ -64,6 +64,27 @@ EXTRA_JS = r'''
 PORTAL_HTML = base.PORTAL_HTML.replace('</body>', EXTRA_JS + '</body>')
 
 
+def _postgres_driver_available():
+    try:
+        import psycopg  # noqa: F401
+        return 'psycopg'
+    except Exception:
+        try:
+            import psycopg2  # noqa: F401
+            return 'psycopg2'
+        except Exception:
+            return None
+
+
+def _db_binding_names():
+    keys=('DATABASE_URL','POSTGRES_URL','RENDER_POSTGRES_URL')
+    return [k for k in keys if bool(os.getenv(k))]
+
+
+print('RX_PERSISTENCE_BINDING=' + ('yes' if _db_binding_names() else 'no'), flush=True)
+print('RX_POSTGRES_DRIVER=' + str(_postgres_driver_available() or 'none'), flush=True)
+
+
 @app.get('/', response_class=HTMLResponse)
 def portal_root_v8():
     return HTMLResponse(PORTAL_HTML, headers={'Cache-Control':'no-store','X-RaioX-Portal-Version':APP_PORTAL_VERSION})
@@ -90,10 +111,7 @@ def premium_integrations_status():
 
 @app.get('/v1/internal/persistence/status')
 def persistence_status():
-    # Never expose secrets/connection strings. This endpoint only reports whether
-    # a durable database binding is present in the runtime environment.
-    keys=('DATABASE_URL','POSTGRES_URL','RENDER_POSTGRES_URL')
-    present=[k for k in keys if bool(os.getenv(k))]
+    present=_db_binding_names()
     return {
         'durable_database_binding': bool(present),
         'detected_variable_names': present,
@@ -102,21 +120,9 @@ def persistence_status():
     }
 
 
-def _postgres_driver_available():
-    try:
-        import psycopg  # noqa: F401
-        return 'psycopg'
-    except Exception:
-        try:
-            import psycopg2  # noqa: F401
-            return 'psycopg2'
-        except Exception:
-            return None
-
-
 @app.get('/v1/portal/v8/status')
 def v8_status():
-    db_binding=any(bool(os.getenv(k)) for k in ('DATABASE_URL','POSTGRES_URL','RENDER_POSTGRES_URL'))
+    db_binding=bool(_db_binding_names())
     return {
         'ok':True,
         'portal_version':APP_PORTAL_VERSION,
