@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 
 from deploy_app import analyze_car, _safe_summary, TEST_CAR, query_embargos, query_prodes, query_sigef
 from anm_resilient import query_anm_curl_exact
@@ -21,7 +21,7 @@ from ide_catalog import benchmark_targets, search_catalog
 from ide_layer_probe import probe_benchmark
 from live_report_adapter_v8 import generate_live_report
 
-app = FastAPI(title='Raio-X Territorial Report API', version='0.16.5-resilient-ide-probe')
+app = FastAPI(title='Raio-X Territorial Report API', version='0.16.6-render-health')
 CACHE_TTL_SECONDS=300
 _CACHE:dict[str,tuple[float,dict]]={}
 _LOCKS:dict[str,asyncio.Lock]={}
@@ -55,8 +55,7 @@ async def _retry_failed_core(result:dict):
     if jobs:
         values=await asyncio.gather(*jobs,return_exceptions=True)
         for k,v in zip(keys,values):
-            if isinstance(v,Exception):
-                result[k]={'ok':False,'detail':f'{type(v).__name__}:{v}'}
+            if isinstance(v,Exception): result[k]={'ok':False,'detail':f'{type(v).__name__}:{v}'}
             else: result[k]=v
     if not (result.get('anm') or {}).get('ok'):
         try: result['anm']=await asyncio.to_thread(query_anm_curl_exact,car.get('geometry'),bbox)
@@ -70,8 +69,7 @@ async def _query_autos_resilient(geometry,bbox,attempts=3):
         try:
             last=await query_ibama_autos(geometry,bbox)
             if last.get('ok'): return last
-        except Exception as e:
-            last={'ok':False,'source':'IBAMA/PAMGIA - autos de infração ambiental','detail':f'{type(e).__name__}:{e}'}
+        except Exception as e: last={'ok':False,'source':'IBAMA/PAMGIA - autos de infração ambiental','detail':f'{type(e).__name__}:{e}'}
         if i<attempts-1: await asyncio.sleep(.7*(i+1))
     return last
 
@@ -144,9 +142,13 @@ async def startup_tasks():
     asyncio.create_task(_background_ide_catalog())
 
 @app.get('/')
-def root(): return {'app':'Raio-X Territorial','service':'report-api','status':'online','version':'0.16.5-resilient-ide-probe','benchmark_car':TEST_CAR,'cache_ttl_seconds':CACHE_TTL_SECONDS}
+def root(): return {'app':'Raio-X Territorial','service':'report-api','status':'online','version':'0.16.6-render-health','benchmark_car':TEST_CAR,'cache_ttl_seconds':CACHE_TTL_SECONDS}
+@app.head('/')
+def root_head(): return Response(status_code=200)
 @app.get('/health')
-def health(): return {'ok':True,'service':'report-api','version':'0.16.5-resilient-ide-probe'}
+def health(): return {'ok':True,'service':'report-api','version':'0.16.6-render-health'}
+@app.head('/health')
+def health_head(): return Response(status_code=200)
 @app.get('/v1/live/fire/{car_code}')
 async def live_fire(car_code:str):
     result=await _analyze_with_live_addons(car_code); return {'car':_safe_summary(result).get('car'),'fire':result.get('fire_live')}
