@@ -12,9 +12,10 @@ from anm_resilient import query_anm_curl_exact
 from fire_live import analyze_fire_near_property
 from live_extra_sources import query_ibama_autos
 from territorial_constraints import query_territorial_constraints
-from live_report_adapter_v5 import generate_live_report
+from water_mg import query_outorgas_mg
+from live_report_adapter_v6 import generate_live_report
 
-app = FastAPI(title='Raio-X Territorial Report API', version='0.15.3-resilient-anm-live-pdf')
+app = FastAPI(title='Raio-X Territorial Report API', version='0.15.4-water-live-pdf')
 
 
 def _public_meta(meta: dict):
@@ -23,10 +24,11 @@ def _public_meta(meta: dict):
 
 def _report_summary(result: dict):
     base=_safe_summary(result)
-    autos=result.get('autos_ibama') or {}; fire=result.get('fire_live') or {}; cons=result.get('territorial_constraints') or {}
+    autos=result.get('autos_ibama') or {}; fire=result.get('fire_live') or {}; cons=result.get('territorial_constraints') or {}; water=result.get('water_mg') or {}
     base['autos_ibama']={'ok':autos.get('ok'),'feature_count_bbox':autos.get('feature_count_bbox'),'occurrence_count':autos.get('occurrence_count'),'fine_total':autos.get('fine_total'),'source':autos.get('source'),'deduplicated':autos.get('deduplicated')}
     base['fire_live']={'ok':fire.get('ok'),'latest_file':fire.get('latest_file'),'feed_focus_count':fire.get('feed_focus_count'),'radius_km':fire.get('radius_km'),'inside_count':fire.get('inside_count'),'near_count':fire.get('near_count'),'nearest':fire.get('nearest'),'window_note':fire.get('window_note'),'source':fire.get('source')}
     base['territorial_constraints']={'ok':cons.get('ok'),'area_unique_all_constraints_ha':cons.get('area_unique_all_constraints_ha'),'services':{k:{'ok':v.get('ok'),'label':v.get('label'),'occurrence_count':v.get('occurrence_count'),'area_unique_ha':v.get('area_unique_ha'),'feature_count_bbox':v.get('feature_count_bbox'),'source':v.get('source')} for k,v in (cons.get('services') or {}).items()}}
+    base['water_mg']={'ok':water.get('ok'),'layer':water.get('layer'),'feature_count_bbox':water.get('feature_count_bbox'),'inside_count':water.get('inside_count'),'near_count':water.get('near_count'),'radius_km':water.get('radius_km'),'nearest':water.get('nearest'),'source':water.get('source'),'discovery':water.get('discovery')}
     return base
 
 
@@ -41,7 +43,6 @@ async def _retry_failed_core(result:dict):
         values=await asyncio.gather(*jobs,return_exceptions=True)
         for k,v in zip(keys,values):
             if not isinstance(v,Exception): result[k]=v
-    # ANM gets a separate system-curl fallback because this official ArcGIS endpoint has shown transient httpx failures on Render.
     if not (result.get('anm') or {}).get('ok'):
         result['anm']=await asyncio.to_thread(query_anm_curl_exact,car.get('geometry'),bbox)
     return result
@@ -54,7 +55,8 @@ async def _analyze_with_live_addons(car_code:str):
     autos_task=query_ibama_autos(car.get('geometry'),car.get('bbox'))
     fire_task=analyze_fire_near_property(car.get('geometry'),5.0,6)
     constraints_task=query_territorial_constraints(car.get('geometry'),car.get('bbox'))
-    result['autos_ibama'],result['fire_live'],result['territorial_constraints']=await asyncio.gather(autos_task,fire_task,constraints_task)
+    water_task=asyncio.to_thread(query_outorgas_mg,car.get('geometry'),car.get('bbox'),5.0)
+    result['autos_ibama'],result['fire_live'],result['territorial_constraints'],result['water_mg']=await asyncio.gather(autos_task,fire_task,constraints_task,water_task)
     return result
 
 
@@ -71,7 +73,7 @@ async def startup_pdf_smoke():
     except Exception as e: print(f'RX_REAL_PDF_FAIL={type(e).__name__}:{str(e)[:500]}',flush=True)
 
 @app.get('/')
-def root(): return {'app':'Raio-X Territorial','service':'report-api','status':'online','version':'0.15.3-resilient-anm-live-pdf','benchmark_car':TEST_CAR}
+def root(): return {'app':'Raio-X Territorial','service':'report-api','status':'online','version':'0.15.4-water-live-pdf','benchmark_car':TEST_CAR}
 @app.get('/health')
 def health(): return {'ok':True,'service':'report-api'}
 @app.get('/v1/live/fire/{car_code}')
@@ -80,6 +82,9 @@ async def live_fire(car_code:str):
 @app.get('/v1/live/constraints/{car_code}')
 async def live_constraints(car_code:str):
     result=await _analyze_with_live_addons(car_code); return {'car':_safe_summary(result).get('car'),'constraints':result.get('territorial_constraints')}
+@app.get('/v1/live/water/{car_code}')
+async def live_water(car_code:str):
+    result=await _analyze_with_live_addons(car_code); return {'car':_safe_summary(result).get('car'),'water':result.get('water_mg')}
 @app.get('/v1/reports/property/{car_code}/meta')
 async def report_meta(car_code:str):
     result,meta=await _build(car_code); return {'report':_public_meta(meta),'analysis':_report_summary(result)}
