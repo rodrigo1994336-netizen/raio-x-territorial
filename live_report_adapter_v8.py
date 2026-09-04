@@ -48,6 +48,43 @@ def _patch_climate(payload:dict,result:dict):
     return payload
 
 
+def _patch_minerals(payload:dict,result:dict):
+    cm=result.get('critical_minerals') or {}
+    mining=payload.setdefault('mining',{})
+    anm=cm.get('anm') or {}; sgb=cm.get('sgb') or {}
+    counts=anm.get('counts') or {}
+    mineral_codes=cm.get('mineral_codes') or []
+    rare_count=int(counts.get('terras_raras') or 0)
+    rare_signal=bool(cm.get('rare_earth_signal'))
+    mining['critical_process_count']=int(anm.get('critical_process_count') or 0)
+    mining['critical_minerals']=mineral_codes
+    mining['rare_earth_count']=rare_count
+    mining['rare_earth_signal']='SIM' if rare_signal else 'NÃO IDENTIFICADO'
+    mining['rare_earth_source']='ANM/SIGMINE + Serviço Geológico do Brasil (GeoSGB/WMS)'
+    mining['critical_rows']=[
+        ['Processos ANM classificados como minerais críticos',mining['critical_process_count']],
+        ['Terras raras - processos ANM',rare_count],
+        ['Sinal geológico / camada SGB para terras raras','SIM' if rare_signal else 'NÃO IDENTIFICADO'],
+        ['Minerais críticos identificados',', '.join(mineral_codes) if mineral_codes else 'Nenhum sinal classificado na consulta'],
+        ['Camadas SGB candidatas',sgb.get('candidate_layer_count') if sgb.get('candidate_layer_count') is not None else 'NÃO DISPONÍVEL'],
+        ['Camadas SGB consultadas',sgb.get('queried_layer_count') if sgb.get('queried_layer_count') is not None else 'NÃO DISPONÍVEL'],
+    ]
+    if rare_signal:
+        mining['summary']=(mining.get('summary') or '')+' Há sinal de interesse para terras raras em processo ANM e/ou camada geológica pública do SGB. Isso exige investigação geológica; não comprova jazida, recurso ou reserva economicamente explotável.'
+    elif cm.get('ok'):
+        mining['summary']=(mining.get('summary') or '')+' A triagem ANM/SGB não identificou sinal classificado de terras raras nesta consulta.'
+    else:
+        mining['summary']=(mining.get('summary') or '')+' A consulta ao Serviço Geológico do Brasil ficou indisponível ou incompleta nesta emissão.'
+    payload['sources'].append({
+        'name':'ANM/SIGMINE + SGB/GeoSGB - Minerais críticos e terras raras',
+        'description':'Triagem de processos minerários e camadas públicas de interesse geológico/mineral. Não equivale a pesquisa mineral de campo, recurso ou reserva.',
+        'status':'CONSULTADA' if cm.get('ok') else 'PARCIAL',
+        'level':'attention' if rare_signal or not cm.get('ok') else 'ok'
+    })
+    payload['interpretation_rules'].append('Sinal de terras raras ou favorabilidade geológica é somente triagem de interesse mineral; não comprova ocorrência economicamente explotável, teor, recurso, reserva ou titularidade de direito minerário.')
+    return payload
+
+
 def generate_live_report(result:dict,car_code:str):
     now=datetime.now(timezone.utc); stamp=now.strftime('%Y%m%dT%H%M%SZ')
     safe=''.join(ch for ch in car_code.upper() if ch.isalnum() or ch in '-_'); report_id=f'RX-{stamp}-{safe[-8:]}'
@@ -61,6 +98,7 @@ def generate_live_report(result:dict,car_code:str):
     payload=_patch_water(payload,result)
     payload=_patch_pivots(payload,result)
     payload=_patch_climate(payload,result)
+    payload=_patch_minerals(payload,result)
     payload_path=out_dir/'payload.json'; payload_path.write_text(json.dumps(payload,ensure_ascii=False,indent=2,default=str),encoding='utf-8')
     pdf_path=out_dir/'raio_x_territorial.pdf'; digest=build_premium_property_report_v3(pdf_path,payload)
     return {'report_id':report_id,'pdf_path':str(pdf_path),'payload_path':str(payload_path),'map_path':str(map_path),'sha256':digest,'bytes':pdf_path.stat().st_size,'payload_sha256':sha256(payload_path.read_bytes()).hexdigest()}
