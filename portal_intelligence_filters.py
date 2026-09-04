@@ -1,0 +1,50 @@
+from __future__ import annotations
+
+from fastapi import HTTPException
+
+import portal_v8
+from map_mineral_routes import register_map_mineral_routes
+from agropecuaria import build_agro_profile
+from report_api import _analyze_with_live_addons
+
+app=portal_v8.app
+register_map_mineral_routes(app)
+
+
+@app.get('/v1/live/agropecuaria/{car_code}')
+async def live_agropecuaria(car_code:str):
+    result=await _analyze_with_live_addons(car_code.upper())
+    car=result.get('car') or {}
+    if not car.get('ok'):
+        raise HTTPException(status_code=404 if car.get('not_found') else 502,detail='CAR não localizado ou fonte indisponível')
+    return await build_agro_profile(result,car_code.upper())
+
+
+UI=r'''
+<style>
+.rx-filter-btn{position:absolute;z-index:860;right:14px;top:60px;border:1px solid #244136;background:rgba(7,20,14,.97);color:#eef8f2;border-radius:11px;padding:10px 12px;font-weight:850;cursor:pointer;box-shadow:0 10px 30px #0007}
+.rx-filter-panel{position:absolute;z-index:1800;right:14px;top:106px;width:310px;background:#081812;border:1px solid #244136;border-radius:15px;padding:12px;box-shadow:0 18px 55px #000a}.rx-filter-panel.hidden{display:none}.rx-filter-panel h4{margin:0 0 3px;font-size:12px}.rx-filter-panel p{margin:0 0 10px;color:#9bb1a6;font-size:9px;line-height:1.4}.rx-filter-row{border:1px solid #244136;background:#0d2118;border-radius:11px;padding:10px;margin-top:7px}.rx-filter-row label{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:10px;font-weight:800}.rx-filter-row select{width:100%;margin-top:8px;background:#07150f;color:#eef8f2;border:1px solid #244136;border-radius:9px;padding:8px;font-size:10px}.rx-switch{appearance:none;width:35px;height:20px;border-radius:999px;background:#33443d;position:relative;cursor:pointer}.rx-switch:checked{background:#63e6a5}.rx-switch:after{content:'';width:14px;height:14px;border-radius:50%;background:#fff;position:absolute;top:3px;left:3px;transition:.18s}.rx-switch:checked:after{left:18px}.rx-filter-status{font-size:8px;color:#9bb1a6;margin-top:8px;line-height:1.4}.rx-agro-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:7px;margin-top:8px}.rx-agro-kpi{border:1px solid #244136;background:#10251b;border-radius:11px;padding:9px}.rx-agro-kpi small{display:block;color:#9bb1a6;font-size:8px}.rx-agro-kpi b{display:block;font-size:11px;margin-top:3px}.rx-agro-note{border:1px solid #244136;border-radius:11px;padding:10px;background:#0b1b14;margin-top:7px;color:#c9ddd2;font-size:9px;line-height:1.5}.rx-agro-open{width:100%;border:0;border-radius:10px;background:#63e6a5;color:#052116;padding:11px;font-weight:900;cursor:pointer;margin-top:8px}
+@media(max-width:720px){.rx-filter-btn{top:98px}.rx-filter-panel{top:144px;left:10px;right:10px;width:auto}}
+</style>
+<script>
+(function(){
+let mineralOn=false,mineralCode='terras_raras',anmLayer=null,wmsLayers=[],timer=null,loading=false;
+const q=s=>document.querySelector(s);
+function m(){try{return (typeof map!=='undefined'&&map&&map.getBounds)?map:null}catch(e){return null}}
+function install(){const main=q('.main');if(!main||q('#rxFilterBtn'))return;const b=document.createElement('button');b.id='rxFilterBtn';b.className='rx-filter-btn';b.type='button';b.textContent='☷ FILTROS';main.appendChild(b);const p=document.createElement('div');p.id='rxFilterPanel';p.className='rx-filter-panel hidden';p.innerHTML=`<h4>Filtros inteligentes</h4><p>Localize oportunidades e restrições antes de escolher uma fazenda.</p><div class="rx-filter-row"><label>⛏️ Minerais / Terras raras <input id="rxMineralToggle" class="rx-switch" type="checkbox"></label><select id="rxMineralSelect"><option value="terras_raras">Terras raras</option><option value="litio">Lítio</option><option value="grafita">Grafita</option><option value="niquel">Níquel</option><option value="cobalto">Cobalto</option><option value="cobre">Cobre</option><option value="fosfato">Fosfato</option><option value="potassio">Potássio</option><option value="ouro">Ouro</option></select><div id="rxMineralStatus" class="rx-filter-status">Ative para mostrar processos ANM e camadas públicas do SGB.</div></div><div class="rx-filter-row"><label>🐂 Agropecuária</label><div class="rx-filter-status">O módulo aparece ao analisar uma propriedade: rebanho regional, pastagem, cadeia SIF, água, clima, solo e relevo.</div></div>`;main.appendChild(p);b.onclick=()=>p.classList.toggle('hidden');q('#rxMineralToggle').onchange=e=>{mineralOn=e.target.checked;mineralCode=q('#rxMineralSelect').value;if(mineralOn)loadMinerals();else clearMinerals()};q('#rxMineralSelect').onchange=e=>{mineralCode=e.target.value;if(mineralOn){clearMinerals(false);loadMinerals()}};const mm=m();if(mm){mm.on('moveend',schedule);mm.on('zoomend',schedule)}wrapAnalysis()}
+function clearMinerals(update=true){const mm=m();if(anmLayer&&mm)mm.removeLayer(anmLayer);anmLayer=null;wmsLayers.forEach(x=>{try{mm.removeLayer(x)}catch(e){}});wmsLayers=[];if(update&&q('#rxMineralStatus'))q('#rxMineralStatus').textContent='Filtro desativado.'}
+function schedule(){if(!mineralOn)return;clearTimeout(timer);timer=setTimeout(loadMinerals,650)}
+async function loadMinerals(){const mm=m(),s=q('#rxMineralStatus');if(!mm||loading)return;const b=mm.getBounds();if(Math.max(b.getEast()-b.getWest(),b.getNorth()-b.getSouth())>8){s.textContent='Aproxime o mapa para localizar processos minerais.';return}loading=true;s.textContent='Consultando ANM + SGB…';try{const u=new URL('/v1/map/minerals/anm',location.origin);u.searchParams.set('west',b.getWest());u.searchParams.set('south',b.getSouth());u.searchParams.set('east',b.getEast());u.searchParams.set('north',b.getNorth());u.searchParams.set('mineral',mineralCode);const [ar,lr]=await Promise.all([fetch(u),fetch(`/v1/map/minerals/layers?mineral=${encodeURIComponent(mineralCode)}`)]);const a=await ar.json(),l=await lr.json();if(!ar.ok)throw new Error(a.detail||'ANM indisponível');if(anmLayer)mm.removeLayer(anmLayer);anmLayer=L.geoJSON(a,{style:{color:'#d69cff',weight:2,fillColor:'#b75cff',fillOpacity:.18},onEachFeature:(f,layer)=>{const p=f.properties||{};const txt=Object.entries(p).filter(([k,v])=>v!=null&&k!=='rx_minerals').slice(0,7).map(([k,v])=>`<b>${k}</b>: ${v}`).join('<br>');layer.bindPopup(`<b>${mineralCode.replaceAll('_',' ')}</b><br>${txt}<br><small>Processo minerário não comprova jazida.</small>`)}}).addTo(mm);wmsLayers.forEach(x=>{try{mm.removeLayer(x)}catch(e){}});wmsLayers=[];if(l.ok&&l.layers?.length){l.layers.slice(0,3).forEach(x=>{const layer=L.tileLayer.wms(l.wms_url,{layers:x.name,format:'image/png',transparent:true,opacity:.42,version:'1.1.1'}).addTo(mm);wmsLayers.push(layer)})}s.textContent=`${a.match_count||0} processo(s) ANM relacionado(s) · ${l.layers?.length||0} camada(s) SGB encontrada(s). Sinal geológico ≠ jazida comprovada.`}catch(e){s.textContent='Filtro parcial: '+e.message+'. Indisponibilidade não é tratada como ausência.'}finally{loading=false}}
+function wrapAnalysis(){let tries=0;const wait=()=>{tries++;if(typeof window.renderAnalysis!=='function'&&typeof renderAnalysis!=='function'){if(tries<40)setTimeout(wait,200);return}const old=window.renderAnalysis||renderAnalysis;if(old.__rxAgroWrapped)return;const fn=function(d){old(d);setTimeout(installAgro,100)};fn.__rxAgroWrapped=true;window.renderAnalysis=renderAnalysis=fn};wait()}
+function cur(){try{return (typeof current!=='undefined'&&current)?current:window.current}catch(e){return window.current}}
+function installAgro(){const host=q('#pbody'),c=cur();if(!host||!c?.car_code)return;let box=q('#rxAgroSection');if(!box){box=document.createElement('div');box.id='rxAgroSection';box.className='section';host.appendChild(box)}box.innerHTML=`<h4>🐂 Agropecuária e Pecuária</h4><div class="row"><b>Raio-X Pecuário</b><br><span>Rebanho regional, cadeia SIF, água, clima, solo, relevo e pastagem. Dados regionais nunca são tratados como se fossem do imóvel.</span></div><button id="rxAgroOpen" class="rx-agro-open">ABRIR RAIO-X PECUÁRIO</button>`;q('#rxAgroOpen').onclick=loadAgro}
+async function loadAgro(){const c=cur(),box=q('#rxAgroSection'),btn=q('#rxAgroOpen');if(!c?.car_code||!box)return;btn.disabled=true;btn.textContent='CONSULTANDO IBGE + MAPA + FONTES DO IMÓVEL…';try{const r=await fetch(`/v1/live/agropecuaria/${encodeURIComponent(c.car_code)}`),d=await r.json();if(!r.ok)throw new Error(d.detail||'consulta indisponível');const ppm=d.livestock_municipal||{},herds=(ppm.series||[]).filter(x=>/bovino|su[ií]no|caprino|ovino|equino/i.test(x.herd||'')).slice(0,8);const sif=d.sif_chain||{};const checks=(d.property_screening?.checks||[]).map(x=>`<div class="rx-agro-note"><b>${x.factor}</b><br>${x.status} · ${JSON.stringify(x.value??'—').slice(0,220)}</div>`).join('');box.innerHTML=`<h4>🐂 Raio-X Pecuário</h4><div class="rx-agro-grid">${herds.map(x=>`<div class="rx-agro-kpi"><small>${x.herd}</small><b>${Number(x.value||0).toLocaleString('pt-BR')} cabeças</b><small>${x.period||''}${x.delta_pct!=null?' · '+(x.delta_pct>0?'+':'')+x.delta_pct+'%':''}</small></div>`).join('')||'<div class="rx-agro-kpi"><small>IBGE PPM</small><b>fonte parcial</b></div>'}<div class="rx-agro-kpi"><small>Estabelecimentos SIF no município/UF</small><b>${sif.count??'—'}</b><small>MAPA / SIGSIF</small></div></div><div class="rx-agro-note"><b>Pastagem</b><br>MapBiomas Coleção 11 preparado para área, participação e vigor baixo/médio/alto. O worker raster será usado para métricas reais do polígono.</div>${checks}<div class="rx-agro-note"><b>Capacidade de suporte</b><br>${d.property_screening?.carrying_capacity_note||'Não calculada sem dados suficientes.'}</div>`}catch(e){btn.disabled=false;btn.textContent='TENTAR NOVAMENTE';const n=document.createElement('div');n.className='rx-agro-note';n.textContent='Fonte parcial: '+e.message;box.appendChild(n)}}
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',install);else install();
+})();
+</script>
+'''
+
+if 'id="rxFilterBtn"' not in portal_v8.PORTAL_HTML:
+    portal_v8.PORTAL_HTML=portal_v8.PORTAL_HTML.replace('</body>',UI+'</body>')
+
+print('RX_INTELLIGENCE_FILTERS=rare_earths_plus_agro_v1',flush=True)
