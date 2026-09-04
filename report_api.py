@@ -3,13 +3,14 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import os
 import time
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, Response
 
-from deploy_app import analyze_car, _safe_summary, TEST_CAR, query_embargos, query_prodes, query_sigef
+from deploy_app import analyze_car, fetch_car_live, _safe_summary, TEST_CAR, query_embargos, query_prodes, query_sigef
 from anm_resilient import query_anm_curl_exact
 from fire_live import analyze_fire_near_property
 from live_extra_sources import query_ibama_autos
@@ -21,7 +22,8 @@ from ide_catalog import benchmark_targets, search_catalog
 from ide_layer_probe import probe_benchmark
 from live_report_adapter_v8 import generate_live_report
 
-app = FastAPI(title='Raio-X Territorial Report API', version='0.16.6-render-health')
+APP_VERSION='0.16.7-diagnostic-gates'
+app = FastAPI(title='Raio-X Territorial Report API', version=APP_VERSION)
 CACHE_TTL_SECONDS=300
 _CACHE:dict[str,tuple[float,dict]]={}
 _LOCKS:dict[str,asyncio.Lock]={}
@@ -89,6 +91,8 @@ async def _analyze_uncached(car_code:str):
     if not car.get('ok'): raise HTTPException(status_code=404 if car.get('not_found') else 502,detail=_safe_summary(result))
     result=await _retry_failed_core(result); car=result.get('car') or {}
     geometry=car.get('geometry'); bbox=car.get('bbox')
+    # First run the general sources. IDE-Sisema heavy polygon layers are queried afterwards,
+    # avoiding a burst of concurrent WFS calls to the same government GeoServer.
     jobs=[
         _query_autos_resilient(geometry,bbox),
         _safe_async('fire_live',analyze_fire_near_property(geometry,5.0,6),'INPE Programa Queimadas'),
@@ -96,10 +100,10 @@ async def _analyze_uncached(car_code:str):
         _safe_thread('water_mg',query_outorgas_mg,geometry,bbox,5.0,source='IDE-Sisema / IGAM + ANA'),
         _safe_thread('pivots_ana',query_pivots_ana,geometry,bbox,5.0,source='ANA / SNIRH - Pivôs Centrais'),
         _safe_thread('climate_nasa',query_climate_nasa,geometry,30,source='NASA POWER - Daily API'),
-        _safe_thread('ide_layers',probe_benchmark,geometry,bbox,source='IDE-Sisema - Solo/Aptidão/Relevo/Uso'),
     ]
     vals=await asyncio.gather(*jobs)
-    result['autos_ibama'],result['fire_live'],result['territorial_constraints'],result['water_mg'],result['pivots_ana'],result['climate_nasa'],result['ide_layers']=vals
+    result['autos_ibama'],result['fire_live'],result['territorial_constraints'],result['water_mg'],result['pivots_ana'],result['climate_nasa']=vals
+    result['ide_layers']=await _safe_thread('ide_layers',probe_benchmark,geometry,bbox,source='IDE-Sisema - Solo/Aptidão/Relevo/Uso')
     return result
 
 
@@ -117,7 +121,7 @@ async def _build(car_code:str):
     result=await _analyze_with_live_addons(car_code); meta=await asyncio.to_thread(generate_live_report,result,car_code.upper()); return result,meta
 
 
-async def _background_smoke():
+async def _background_full_smoke():
     print('RX_REAL_PDF_START',flush=True)
     try:
         result=await _analyze_with_live_addons(TEST_CAR,force_refresh=True)
@@ -127,9 +131,19 @@ async def _background_smoke():
     except Exception as e: print(f'RX_REAL_PDF_FAIL={type(e).__name__}:{str(e)[:500]}',flush=True)
 
 
-async def _background_ide_catalog():
+async def _background_ide_probe():
+    print('RX_IDE_LAYER_PROBE_START',flush=True)
     try:
-        await asyncio.sleep(1)
+        car=await asyncio.to_thread(fetch_car_live,TEST_CAR)
+        if not car.get('ok'):
+            print('RX_IDE_LAYER_PROBE_FAIL=car_unavailable:'+json.dumps({k:car.get(k) for k in ('source','detail','not_found','bytes')},ensure_ascii=False,default=str),flush=True); return
+        probe=await asyncio.to_thread(probe_benchmark,car.get('geometry'),car.get('bbox'))
+        print('RX_IDE_LAYER_PROBE='+json.dumps(probe,ensure_ascii=False,default=str),flush=True)
+    except Exception as e: print(f'RX_IDE_LAYER_PROBE_FAIL={type(e).__name__}:{str(e)[:500]}',flush=True)
+
+
+async def _background_catalog_probe():
+    try:
         data=await asyncio.to_thread(benchmark_targets)
         compact={k:{'ok':v.get('ok'),'hit_count':v.get('hit_count'),'hits':[{'name':x.get('name'),'title':x.get('title'),'score':x.get('score')} for x in (v.get('hits') or [])[:12]]} for k,v in data.items()}
         print('RX_IDE_CATALOG='+json.dumps(compact,ensure_ascii=False,default=str),flush=True)
@@ -138,15 +152,18 @@ async def _background_ide_catalog():
 
 @app.on_event('startup')
 async def startup_tasks():
-    asyncio.create_task(_background_smoke())
-    asyncio.create_task(_background_ide_catalog())
+    mode=os.getenv('RX_STARTUP_DIAGNOSTIC','off').strip().lower()
+    print(f'RX_STARTUP_DIAGNOSTIC={mode}',flush=True)
+    if mode=='full': asyncio.create_task(_background_full_smoke())
+    elif mode=='ide': asyncio.create_task(_background_ide_probe())
+    elif mode=='catalog': asyncio.create_task(_background_catalog_probe())
 
 @app.get('/')
-def root(): return {'app':'Raio-X Territorial','service':'report-api','status':'online','version':'0.16.6-render-health','benchmark_car':TEST_CAR,'cache_ttl_seconds':CACHE_TTL_SECONDS}
+def root(): return {'app':'Raio-X Territorial','service':'report-api','status':'online','version':APP_VERSION,'benchmark_car':TEST_CAR,'cache_ttl_seconds':CACHE_TTL_SECONDS,'startup_diagnostic':os.getenv('RX_STARTUP_DIAGNOSTIC','off')}
 @app.head('/')
 def root_head(): return Response(status_code=200)
 @app.get('/health')
-def health(): return {'ok':True,'service':'report-api','version':'0.16.6-render-health'}
+def health(): return {'ok':True,'service':'report-api','version':APP_VERSION}
 @app.head('/health')
 def health_head(): return Response(status_code=200)
 @app.get('/v1/live/fire/{car_code}')
@@ -166,8 +183,8 @@ async def ide_catalog(q:str='solo,aptidão,Mapbiomas,declividade,rodovias,APPs')
     terms=[x.strip() for x in q.split(',') if x.strip()]; return await asyncio.to_thread(search_catalog,terms,100)
 @app.get('/v1/internal/ide/probe/{car_code}')
 async def ide_probe(car_code:str):
-    base=await analyze_car(car_code.upper()); car=base.get('car') or {}
-    if not car.get('ok'): raise HTTPException(status_code=404 if car.get('not_found') else 502,detail=_safe_summary(base))
+    car=await asyncio.to_thread(fetch_car_live,car_code.upper())
+    if not car.get('ok'): raise HTTPException(status_code=404 if car.get('not_found') else 502,detail=car)
     return await asyncio.to_thread(probe_benchmark,car.get('geometry'),car.get('bbox'))
 @app.get('/v1/reports/property/{car_code}/meta')
 async def report_meta(car_code:str):
