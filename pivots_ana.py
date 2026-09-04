@@ -7,7 +7,7 @@ from typing import Any
 from urllib.parse import urlencode
 
 from pyproj import CRS, Transformer
-from shapely.geometry import shape
+from shapely.geometry import Polygon, shape
 from shapely.ops import transform, unary_union
 
 LAYER='https://portal1.snirh.gov.br/server/rest/services/SFI/PIVOS_2022_SNIRH/MapServer/0'
@@ -33,12 +33,27 @@ def _metric(car):
 
 def _query_bbox(bbox):
     xmin,ymin,xmax,ymax=bbox
+    envelope=json.dumps({'xmin':xmin,'ymin':ymin,'xmax':xmax,'ymax':ymax,'spatialReference':{'wkid':4674}},separators=(',',':'))
     params={
-        'f':'geojson','where':'1=1','outFields':'FID,Hectares,PIVO_2019,Polo_Nome,Polo_Tipo,UGRH_Nome,UGRH_ID,MUNIC_CD,MUNIC_NOME,UF,class_pre3',
+        'f':'json','where':'1=1','outFields':'FID,Hectares,PIVO_2019,Polo_Nome,Polo_Tipo,UGRH_Nome,UGRH_ID,MUNIC_CD,MUNIC_NOME,UF,class_pre3',
         'returnGeometry':'true','outSR':'4674','geometryType':'esriGeometryEnvelope','spatialRel':'esriSpatialRelIntersects',
-        'geometry':f'{xmin},{ymin},{xmax},{ymax}','inSR':'4674','resultRecordCount':'2000'
+        'geometry':envelope,'inSR':'4674'
     }
     return _curl_json(QUERY+'?'+urlencode(params),65)
+
+
+def _esri_polygon(geometry:dict):
+    rings=(geometry or {}).get('rings') or []
+    polys=[]
+    for ring in rings:
+        try:
+            if len(ring)>=4:
+                p=Polygon(ring)
+                if not p.is_empty and p.is_valid and p.area>0: polys.append(p)
+                elif not p.is_empty and p.area>0: polys.append(p.buffer(0))
+        except Exception:
+            continue
+    return unary_union(polys) if polys else None
 
 
 def query_pivots_ana(car_geometry:dict[str,Any], bbox:list[float], radius_km:float=5.0):
@@ -52,13 +67,15 @@ def query_pivots_ana(car_geometry:dict[str,Any], bbox:list[float], radius_km:flo
     if data.get('error'):
         return {'ok':False,'source':'ANA / SNIRH - Pivôs Centrais 2022','detail':str(data.get('error'))[:500]}
     fs=data.get('features') or []
-    exact=[]; near=[]; intersections=[]
+    exact=[]; near=[]; intersections=[]; parsed=0
     for f in fs:
         try:
-            g=shape(f.get('geometry'))
+            g=_esri_polygon(f.get('geometry') or {})
+            if g is None or g.is_empty: continue
+            parsed+=1
             gm=transform(tr.transform,g)
             dist=float(car_m.distance(gm))
-            props=f.get('properties') or {}
+            props=f.get('attributes') or {}
             item={
                 'fid':props.get('FID'),'mapped_area_ha':props.get('Hectares'),'distance_m':round(dist,1),
                 'municipality':props.get('MUNIC_NOME'),'uf':props.get('UF'),'irrigation_pole':props.get('Polo_Nome'),
@@ -79,7 +96,7 @@ def query_pivots_ana(car_geometry:dict[str,Any], bbox:list[float], radius_km:flo
     unique_ha=round(float(union_m.area)/10000.0,6) if union_m is not None else 0.0
     return {
         'ok':True,'source':'ANA / SNIRH - Mapeamento Atualizado da Agricultura Irrigada por Pivôs Centrais no Brasil (2022)',
-        'layer':LAYER,'reference_year':2022,'feature_count_bbox':len(fs),'intersection_count':len(exact),
+        'layer':LAYER,'reference_year':2022,'feature_count_bbox':len(fs),'parsed_feature_count':parsed,'intersection_count':len(exact),
         'intersection_area_unique_ha':unique_ha,'near_count':len(near),'radius_km':radius_km,
         'intersections':exact[:100],'near':near[:200],'nearest':near[0] if near else None,
     }
