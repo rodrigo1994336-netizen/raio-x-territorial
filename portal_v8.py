@@ -9,9 +9,11 @@ from critical_minerals import query_critical_minerals
 from premium_integrations import status as premium_status
 from report_api import _analyze_with_live_addons
 from whatsapp_gateway import register_routes as register_whatsapp_routes
+from monitoring_routes import register_monitoring_routes
+import monitoring_store
 
 app = base.app
-APP_PORTAL_VERSION = '0.18.5-v8-operational'
+APP_PORTAL_VERSION = '0.18.6-v8-operational'
 
 # Replace portal root only; keep every production report/live/export route already registered.
 app.router.routes = [r for r in app.router.routes if getattr(r, 'path', None) != '/']
@@ -56,7 +58,17 @@ EXTRA_JS = r'''
       box.innerHTML=`<h4>WhatsApp</h4><div class="row"><b class="${d.enabled&&d.configured?'ok':'warn'}">${d.enabled&&d.configured?'ATIVO':'PREPARADO — OFF'}</b><br><span>Gateway oficial Meta Cloud API para consulta por CAR e entrega de relatório. Enquanto OFF, nenhuma mensagem é enviada e nenhum custo é disparado.</span></div>`;
     }catch(e){}
   }
-  window.renderAnalysis = renderAnalysis = function(d){originalRender(d);criticalSection();premiumSection();whatsappSection()};
+  async function monitoringSection(){
+    const host=document.querySelector('#pbody'); if(!host) return;
+    let box=document.querySelector('#monitoringSection');
+    if(!box){box=document.createElement('div');box.id='monitoringSection';box.className='section';host.appendChild(box)}
+    try{
+      const r=await fetch('/v1/monitoring/status');const d=await r.json();
+      const active=d.persistence==='durable';
+      box.innerHTML=`<h4>Monitoramento contínuo</h4><div class="row"><b class="${active?'ok':'warn'}">${active?'PERSISTENTE — PRONTO':'AGUARDANDO VÍNCULO DO BANCO'}</b><br><span>Varredura periódica, snapshots, detecção de mudanças, alertas e histórico. Agendamento preparado para 15 minutos.</span></div>`;
+    }catch(e){}
+  }
+  window.renderAnalysis = renderAnalysis = function(d){originalRender(d);criticalSection();premiumSection();whatsappSection();monitoringSection()};
 })();
 </script>
 '''
@@ -65,15 +77,7 @@ PORTAL_HTML = base.PORTAL_HTML.replace('</body>', EXTRA_JS + '</body>')
 
 
 def _postgres_driver_available():
-    try:
-        import psycopg  # noqa: F401
-        return 'psycopg'
-    except Exception:
-        try:
-            import psycopg2  # noqa: F401
-            return 'psycopg2'
-        except Exception:
-            return None
+    return monitoring_store.readiness().get('driver')
 
 
 def _db_binding_names():
@@ -122,7 +126,7 @@ def persistence_status():
 
 @app.get('/v1/portal/v8/status')
 def v8_status():
-    db_binding=bool(_db_binding_names())
+    ready=monitoring_store.readiness()['ready']
     return {
         'ok':True,
         'portal_version':APP_PORTAL_VERSION,
@@ -133,8 +137,10 @@ def v8_status():
         'critical_minerals':True,
         'premium_integrations_prepared':True,
         'whatsapp_gateway_prepared':True,
-        'monitoring_persistence':'database-bound' if db_binding else 'database-link-required',
+        'monitoring_persistence':'durable' if ready else 'database-link-required',
+        'monitoring_scheduler':'github-actions-15min',
     }
 
 
 register_whatsapp_routes(app, _analyze_with_live_addons)
+register_monitoring_routes(app, _analyze_with_live_addons)
