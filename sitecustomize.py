@@ -35,6 +35,7 @@ def _load_v8_after_portal():
                 import portal_progressive  # noqa: F401
                 import portal_alerts  # noqa: F401
                 import portal_intelligence_filters  # noqa: F401
+                import portal_rare_earth_locator_upgrade  # noqa: F401
                 import portal_feature_smoke  # noqa: F401
                 import portal_map_smoke  # noqa: F401
                 import car_resolver_smoke  # noqa: F401
