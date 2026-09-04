@@ -17,7 +17,7 @@ jobs:
       - name: Install gate dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install fastapi httpx shapely pyproj pillow reportlab uvicorn "psycopg[binary]"
+          pip install fastapi httpx shapely pyproj pillow reportlab uvicorn "psycopg[binary]" "numpy>=2,<3" "rasterio>=1.4,<2"
       - name: Compile Python modules
         run: |
           python -m py_compile \
@@ -25,15 +25,16 @@ jobs:
             sicar_detail_sources.py aerodromes_anac.py property_search.py map_context.py \
             portal_property_tabs.py portal_smart_search.py portal_map_context_symbols.py \
             portal_rare_earth_symbols.py portal_property_identity_v13.py report_book_style.py \
-            report_engine_v6.py live_report_adapter_v12.py live_report_adapter_v13.py \
-            report_v13_patch.py sitecustomize.py
+            report_engine_v6.py rasterio_runtime_bootstrap.py sentinel_cog.py \
+            live_report_adapter_v12.py live_report_adapter_v13.py live_report_adapter_v14.py \
+            report_v13_patch.py report_v14_patch.py sitecustomize.py
       - name: Import standalone engines
         env:
           RX_RELEASE: OFF
         run: |
           python - <<'PY'
           import climate_nasa, groundwater_siagas, safras_ibge, satellite_real
-          import soilgrids_wcs, sicar_detail_sources, aerodromes_anac
+          import soilgrids_wcs, sicar_detail_sources, aerodromes_anac, sentinel_cog
           import report_book_style, report_engine_v6
           print('RX_CI_IMPORT_OK')
           PY
