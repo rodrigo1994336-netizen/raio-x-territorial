@@ -1,0 +1,59 @@
+{
+  "competitor":"Dados Fazenda",
+  "checked_at":"2026-09-04",
+  "source":"Official public pricing/product pages + user-supplied plan screenshots",
+  "release_rule":"BLOCK_RELEASE_IF_ANY_ADVERTISED_PLAN_CAPABILITY_HAS_NO_RAIO_X_IMPLEMENTATION_PATH",
+  "basic_plan":[
+    {"capability":"car_full_data","rx_state":"PARTIAL","note":"CAR core operational; internal APP/RL/native/consolidated composition still being closed."},
+    {"capability":"incra_sigef","rx_state":"OPERATIONAL"},
+    {"capability":"matricula_and_ccir","rx_state":"PREPARED_OFF","note":"Restricted/paid connectors."},
+    {"capability":"area_and_boundaries","rx_state":"OPERATIONAL"},
+    {"capability":"ibama_embargoes","rx_state":"OPERATIONAL"},
+    {"capability":"indigenous_lands","rx_state":"OPERATIONAL"},
+    {"capability":"settlements","rx_state":"OPERATIONAL"},
+    {"capability":"icmbio","rx_state":"OPERATIONAL"},
+    {"capability":"state_municipal_conservation_units","rx_state":"OPERATIONAL_WITH_COVERAGE_GUARD"},
+    {"capability":"prodes","rx_state":"OPERATIONAL"}
+  ],
+  "full_plan":[
+    {"capability":"continuous_monitoring","rx_state":"IMPLEMENTED_NEEDS_PERSISTENCE_BINDING"},
+    {"capability":"whatsapp_alerts","rx_state":"PREPARED_OFF"},
+    {"capability":"monthly_pdf_report","rx_state":"IMPLEMENTED_NEEDS_SCHEDULE_PERSISTENCE"},
+    {"capability":"monthly_kml","rx_state":"IMPLEMENTED_NEEDS_SCHEDULE_PERSISTENCE"},
+    {"capability":"burned_area","rx_state":"PARTIAL","note":"Near-real-time fire is operational; burned-area historical polygon product must be fully surfaced in report."},
+    {"capability":"soil_composition","rx_state":"IN_PROGRESS","note":"Pedology operational; clay/sand/silt/pH/SOC/CEC/N are being added through SoilGrids stable-access path."},
+    {"capability":"precipitation_history","rx_state":"OPERATIONAL"},
+    {"capability":"temperature_history","rx_state":"OPERATIONAL"},
+    {"capability":"agricultural_aptitude","rx_state":"OPERATIONAL"},
+    {"capability":"surface_groundwater_rights","rx_state":"OPERATIONAL_MG_EXPAND_NATIONAL"},
+    {"capability":"irrigation_pivots","rx_state":"OPERATIONAL"},
+    {"capability":"aerodromes","rx_state":"IN_PROGRESS_ANAC_PUBLIC"},
+    {"capability":"conab_crops","rx_state":"IN_PROGRESS"},
+    {"capability":"conab_warehouses","rx_state":"IN_PROGRESS"},
+    {"capability":"mining","rx_state":"OPERATIONAL"},
+    {"capability":"public_forests","rx_state":"OPERATIONAL_NEEDS_BENCHMARK_VALIDATION"},
+    {"capability":"archaeological_sites","rx_state":"OPERATIONAL_NEEDS_10KM_PROXIMITY_OUTPUT"}
+  ],
+  "advertised_extra_capabilities":[
+    {"capability":"satellite_imagery","rx_state":"PARTIAL"},
+    {"capability":"ndvi","rx_state":"ARCHITECTURE_READY_WORKER_DEPLOY_PENDING"},
+    {"capability":"cib_nirf_validation","rx_state":"PREPARED_OFF"},
+    {"capability":"cattle_theft_risk","rx_state":"PROVIDER_PATH_REQUIRED"},
+    {"capability":"fire_15min_or_better","rx_state":"OPERATIONAL_TARGET_10MIN"},
+    {"capability":"whatsapp_query_and_results","rx_state":"PREPARED_OFF"},
+    {"capability":"consultation_history","rx_state":"IMPLEMENTED_NEEDS_PERSISTENCE_BINDING"},
+    {"capability":"management_plan_links","rx_state":"PARTIAL"}
+  ],
+  "document_center":[
+    {"capability":"car_receipt","rx_state":"PREPARED_OFF"},
+    {"capability":"ccir","rx_state":"PREPARED_OFF"},
+    {"capability":"farmscan_equivalent","rx_state":"OPERATIONAL"},
+    {"capability":"cndir","rx_state":"PREPARED_OFF"},
+    {"capability":"rural_credit_by_car_sicor","rx_state":"PREPARED_OFF"},
+    {"capability":"properties_by_holder","rx_state":"PREPARED_OFF"},
+    {"capability":"document_center_30_plus","rx_state":"ARCHITECTURE_GATE_PRESENT_CONNECTORS_EXPANDING"}
+  ],
+  "superiority_required":[
+    "source_coverage_matrix","explicit_blind_spots","decision_narrative","purchase_dossier","critical_minerals","rare_earth_screening","financial_analysis","comparison_5_properties","terrain_mechanization","temporal_satellite","land_value_reference","negotiation_levers"
+  ]
+}
