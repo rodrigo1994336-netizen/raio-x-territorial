@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from fastapi import HTTPException
 from fastapi.responses import HTMLResponse, Response
 
@@ -8,9 +7,10 @@ import portal_api as base
 from critical_minerals import query_critical_minerals
 from premium_integrations import status as premium_status
 from report_api import _analyze_with_live_addons
+from whatsapp_gateway import register_routes as register_whatsapp_routes
 
 app = base.app
-APP_PORTAL_VERSION = '0.18.2-v8-operational'
+APP_PORTAL_VERSION = '0.18.3-v8-operational'
 
 # Replace portal root only; keep every production report/live/export route already registered.
 app.router.routes = [r for r in app.router.routes if getattr(r, 'path', None) != '/']
@@ -46,7 +46,16 @@ EXTRA_JS = r'''
       box.innerHTML=`<h4>Integrações premium</h4><div class="row"><span>Arquitetura pronta, custo zero enquanto estiver OFF. Ative somente quando houver credenciais/clientes.</span></div><div class="sources">${rows}</div>`;
     }catch(e){}
   }
-  window.renderAnalysis = renderAnalysis = function(d){originalRender(d);criticalSection();premiumSection()};
+  async function whatsappSection(){
+    const host=document.querySelector('#pbody'); if(!host) return;
+    let box=document.querySelector('#whatsappSection');
+    if(!box){box=document.createElement('div');box.id='whatsappSection';box.className='section';host.appendChild(box)}
+    try{
+      const r=await fetch('/v1/whatsapp/status');const d=await r.json();
+      box.innerHTML=`<h4>WhatsApp</h4><div class="row"><b class="${d.enabled&&d.configured?'ok':'warn'}">${d.enabled&&d.configured?'ATIVO':'PREPARADO — OFF'}</b><br><span>Gateway oficial Meta Cloud API para consulta por CAR e entrega de relatório. Enquanto OFF, nenhuma mensagem é enviada e nenhum custo é disparado.</span></div>`;
+    }catch(e){}
+  }
+  window.renderAnalysis = renderAnalysis = function(d){originalRender(d);criticalSection();premiumSection();whatsappSection()};
 })();
 </script>
 '''
@@ -89,5 +98,9 @@ def v8_status():
         'geojson':True,
         'critical_minerals':True,
         'premium_integrations_prepared':True,
+        'whatsapp_gateway_prepared':True,
         'monitoring_persistence':'database-link-required',
     }
+
+
+register_whatsapp_routes(app, _analyze_with_live_addons)
