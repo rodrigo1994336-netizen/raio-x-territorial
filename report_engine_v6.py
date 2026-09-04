@@ -51,16 +51,25 @@ def _agro_property_rows(agro: dict[str, Any]) -> list[list[str]]:
     return rows
 
 
+def _groundwater_rows(gw:dict[str,Any]) -> list[list[str]]:
+    rows=[]
+    for x in (gw.get('dominant_aquifers') or [])[:8]:
+        rows.append([_s(x.get('name'),'Aquífero'),f"{_s(x.get('count'),0)} registro(s)",'SGB/SIAGAS'])
+    return rows
+
+
 def build_premium_property_report_v6(path:str|Path,payload:dict[str,Any])->str:
     path=Path(path); path.parent.mkdir(parents=True,exist_ok=True)
     doc=SimpleDocTemplate(str(path),pagesize=A4,leftMargin=16*mm,rightMargin=16*mm,topMargin=22*mm,bottomMargin=18*mm,title='Raio-X Territorial',author='Raio-X Territorial')
     doc.rx_property=payload.get('property') or {}
-    p=payload.get('property') or {}; car=payload.get('car') or {}; land=payload.get('land') or {}; env=payload.get('environment') or {}; enf=payload.get('enforcement') or {}; mining=payload.get('mining') or {}; prod=payload.get('productive') or {}; water=payload.get('water') or {}; mon=payload.get('monitoring') or {}; con=payload.get('conclusion') or {}; nar=payload.get('narrative') or {}; sources=payload.get('sources') or []; agro=payload.get('agropecuaria') or {}
+    p=payload.get('property') or {}; car=payload.get('car') or {}; land=payload.get('land') or {}; env=payload.get('environment') or {}; enf=payload.get('enforcement') or {}; mining=payload.get('mining') or {}; prod=payload.get('productive') or {}; water=payload.get('water') or {}; mon=payload.get('monitoring') or {}; con=payload.get('conclusion') or {}; nar=payload.get('narrative') or {}; sources=payload.get('sources') or []; agro=payload.get('agropecuaria') or {}; sat=payload.get('satellite_imagery') or {}; gw=water.get('groundwater') or {}
     story=[]
 
     # 1 — capa e leitura rápida
     story += [Spacer(1,2*mm),Paragraph('RAIO-X TERRITORIAL',S['cover']),P('Dossiê territorial, ambiental, produtivo, pecuário e mineral — feito para ser entendido, não apenas arquivado.','small'),Spacer(1,4*mm)]
-    story += _image(payload.get('map_image_path') or payload.get('car_map_image_path'),'Mapa técnico do limite analisado. Camadas adicionais aparecem no detalhamento.')
+    cover_image=payload.get('satellite_image_path') or payload.get('map_image_path') or payload.get('car_map_image_path')
+    cover_caption=(f"Imagem orbital real Sentinel-2 da propriedade · cena {_s(sat.get('date'),'data não informada')} · nuvens {_s(sat.get('cloud_cover_pct'),'—')}%. O limite amarelo corresponde ao CAR analisado." if sat.get('ok') else 'Mapa técnico do limite analisado. A imagem orbital não respondeu nesta emissão.')
+    story += _image(cover_image,cover_caption)
     story += [Spacer(1,4*mm),_kpis([
         ('Área',f"{_s(p.get('area_ha'))} ha",f"{_s(p.get('municipality'))}/{_s(p.get('uf'))}",'CONSULTADA'),
         ('CAR',_s(car.get('status'),'N/D'),_s(car.get('analysis_status'),''),_s(car.get('status'),'CONSULTADA')),
@@ -94,6 +103,8 @@ def build_premium_property_report_v6(path:str|Path,payload:dict[str,Any])->str:
     pd=env.get('prodes') or {}
     story += _section('Ambiental e fiscalização','Desmatamento, embargos, autos e restrições são apresentados com área, período e fonte sempre que o dado permitir.')
     story.append(_kpis([('PRODES',_s(pd.get('count'),0),f"{_s(pd.get('area_ha'),0)} ha",_s(pd.get('status'),'CONSULTADA')),('Embargos',_s(enf.get('embargo_count'),0),'IBAMA + ICMBio',_s(enf.get('embargo_status'),'CONSULTADA')),('Autos IBAMA',_s(enf.get('auto_count'),'N/D'),_s(enf.get('fine_total_text'),''),'ATENÇÃO' if _s(enf.get('auto_count')) not in ('0','N/D','NÃO CONSULTADO') else 'CONSULTADA'),('Restrições',f"{_s(env.get('unique_problem_area_ha'),0)} ha",f"{_s(env.get('unique_problem_area_pct'),0)}% do CAR",'ATENÇÃO' if env.get('unique_problem_area_ha') else 'CONSULTADA')]))
+    if payload.get('technical_map_image_path'):
+        story += [Spacer(1,5*mm)]+_image(payload.get('technical_map_image_path'),'Mapa técnico do mesmo imóvel: limite CAR e interseções cartográficas usadas na análise. Não é ilustração genérica.')
     story += [Spacer(1,5*mm),Paragraph('Camadas ambientais e territoriais',S['h2']),_info(env.get('layer_rows') or [],[48*mm,70*mm,47*mm],['Camada','Resultado','Fonte'])]
     if pd.get('rows'): story += [Spacer(1,5*mm),Paragraph('PRODES — histórico e lente regulatória',S['h2']),_info(pd.get('rows'),[62*mm,103*mm],['Indicador','Resultado'])]
     story += [Spacer(1,4*mm),P(pd.get('meaning') or ''),PageBreak()]
@@ -134,10 +145,22 @@ def build_premium_property_report_v6(path:str|Path,payload:dict[str,Any])->str:
     story += [Spacer(1,4*mm),_callout('LOTAÇÃO / CAPACIDADE DE SUPORTE',capacity or 'Não calculada sem dados de forragem, manejo e validação zootécnica.','attention'),PageBreak()]
 
     # 9 — água/clima
-    story += _section('Água, irrigação e clima','Água disponível, direito de uso e proximidade de captações são conceitos separados.')
-    story.append(_kpis([('Outorgas',_s(water.get('grant_count'),'N/D'),'interseção no imóvel','CONSULTADA' if water.get('grant_count')!='NÃO CONSULTADO' else 'INDISPONÍVEL'),('Pivôs',_s(water.get('pivot_count'),'N/D'),'ANA / SNIRH','CONSULTADA' if water.get('pivot_count')!='NÃO CONSULTADO' else 'INDISPONÍVEL'),('Chuva recente',_s(water.get('rain_30d'),'N/D'),_s(water.get('rain_period'),''),'CONSULTADA' if water.get('rain_30d') not in (None,'NÃO CONSULTADO') else 'INDISPONÍVEL'),('Leitura hídrica','TRIAGEM',_s(water.get('meaning'),''),'INFO')]))
+    story += _section('Água, aquíferos, irrigação e clima','Água subterrânea, outorga, chuva e irrigação são evidências diferentes e aparecem separadas.')
+    story.append(_kpis([('Outorgas',_s(water.get('grant_count'),'N/D'),'interseção no imóvel','CONSULTADA' if water.get('grant_count')!='NÃO CONSULTADO' else 'INDISPONÍVEL'),('Pivôs',_s(water.get('pivot_count'),'N/D'),'ANA / SNIRH','CONSULTADA' if water.get('pivot_count')!='NÃO CONSULTADO' else 'INDISPONÍVEL'),('Chuva recente',_s(water.get('rain_30d'),'N/D'),_s(water.get('rain_period'),''),'CONSULTADA' if water.get('rain_30d') not in (None,'NÃO CONSULTADO') else 'INDISPONÍVEL'),('Poços SIAGAS',_s(gw.get('well_count'),'N/D'),f"raio {_s(gw.get('search_radius_km'),'—')} km",'CONSULTADA' if gw.get('ok') else 'INDISPONÍVEL')]))
+    if gw.get('ok'):
+        story += [Spacer(1,5*mm),Paragraph('Água subterrânea — evidência hidrogeológica regional',S['h2']),_kpis([
+            ('Profundidade mediana',f"{_s(gw.get('well_depth_median_m'),'—')} m",f"n={_s(gw.get('well_depth_sample_n'),0)} poços",'CONSULTADA'),
+            ('Nível estático mediano',f"{_s(gw.get('static_water_level_median_m'),'—')} m",f"n={_s(gw.get('static_water_level_sample_n'),0)} registros",'CONSULTADA'),
+            ('Nível dinâmico mediano',f"{_s(gw.get('dynamic_water_level_median_m'),'—')} m",f"n={_s(gw.get('dynamic_water_level_sample_n'),0)} registros",'CONSULTADA'),
+            ('Evidência',_s(gw.get('groundwater_evidence'),'—'),f"confiança {_s(gw.get('confidence'),'—')}",'INFO')
+        ])]
+        aquifers=_groundwater_rows(gw)
+        if aquifers: story += [Spacer(1,4*mm),_info(aquifers,[65*mm,55*mm,45*mm],['Aquífero','Registros','Fonte'])]
+        story += [Spacer(1,4*mm),_callout('COMO LER ESTE DADO',_s(gw.get('interpretation'),'Poços vizinhos são evidência regional, não garantia de água na mesma profundidade.'),'info'),Spacer(1,3*mm),_callout('ANTES DE PERFURAR',_s(gw.get('drilling_note'),'Recomenda-se avaliação hidrogeológica local e observância das regras estaduais.'),'attention')]
+    else:
+        story += [Spacer(1,5*mm),_callout('ÁGUA SUBTERRÂNEA','O SIAGAS não respondeu nesta emissão. Isso não significa ausência de água subterrânea.','attention')]
     if water.get('grants'): story += [Spacer(1,5*mm),Paragraph('Outorgas intersectantes',S['h2']),_info(water.get('grants'),[31*mm,27*mm,29*mm,54*mm,24*mm],['Processo','Portaria','Situação','Uso / autoridade','Localização'])]
-    if water.get('rain_rows'): story += [Spacer(1,5*mm),Paragraph('Agroclimatologia',S['h2']),_info(water.get('rain_rows'),[86*mm,79*mm],['Indicador','Resultado'])]
+    if water.get('rain_rows'): story += [Spacer(1,5*mm),Paragraph('Clima e precipitação',S['h2']),_info(water.get('rain_rows'),[86*mm,79*mm],['Indicador','Resultado'])]
     story.append(PageBreak())
 
     # 10 — conclusão e alertas
@@ -156,4 +179,4 @@ def build_premium_property_report_v6(path:str|Path,payload:dict[str,Any])->str:
     return sha256(path.read_bytes()).hexdigest()
 
 
-print('RX_REPORT_ENGINE=V6_FLUENT_AGRO',flush=True)
+print('RX_REPORT_ENGINE=V6_BOOK_SATELLITE_GROUNDWATER_AGRO',flush=True)
