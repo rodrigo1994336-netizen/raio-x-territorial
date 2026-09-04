@@ -7,13 +7,14 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 
-from deploy_app import analyze_car, _safe_summary, TEST_CAR, query_anm, query_embargos, query_prodes, query_sigef
+from deploy_app import analyze_car, _safe_summary, TEST_CAR, query_embargos, query_prodes, query_sigef
+from anm_resilient import query_anm_curl_exact
 from fire_live import analyze_fire_near_property
 from live_extra_sources import query_ibama_autos
 from territorial_constraints import query_territorial_constraints
 from live_report_adapter_v5 import generate_live_report
 
-app = FastAPI(title='Raio-X Territorial Report API', version='0.15.2-resilient-live-pdf')
+app = FastAPI(title='Raio-X Territorial Report API', version='0.15.3-resilient-anm-live-pdf')
 
 
 def _public_meta(meta: dict):
@@ -35,12 +36,14 @@ async def _retry_failed_core(result:dict):
     jobs=[]; keys=[]
     if not (result.get('sigef') or {}).get('ok'): keys.append('sigef'); jobs.append(query_sigef(bbox))
     if not (result.get('embargos_ibama') or {}).get('ok'): keys.append('embargos_ibama'); jobs.append(query_embargos(bbox))
-    if not (result.get('anm') or {}).get('ok'): keys.append('anm'); jobs.append(query_anm(bbox))
     if not (result.get('prodes') or {}).get('ok'): keys.append('prodes'); jobs.append(query_prodes(bbox))
     if jobs:
         values=await asyncio.gather(*jobs,return_exceptions=True)
         for k,v in zip(keys,values):
             if not isinstance(v,Exception): result[k]=v
+    # ANM gets a separate system-curl fallback because this official ArcGIS endpoint has shown transient httpx failures on Render.
+    if not (result.get('anm') or {}).get('ok'):
+        result['anm']=await asyncio.to_thread(query_anm_curl_exact,car.get('geometry'),bbox)
     return result
 
 
@@ -68,7 +71,7 @@ async def startup_pdf_smoke():
     except Exception as e: print(f'RX_REAL_PDF_FAIL={type(e).__name__}:{str(e)[:500]}',flush=True)
 
 @app.get('/')
-def root(): return {'app':'Raio-X Territorial','service':'report-api','status':'online','version':'0.15.2-resilient-live-pdf','benchmark_car':TEST_CAR}
+def root(): return {'app':'Raio-X Territorial','service':'report-api','status':'online','version':'0.15.3-resilient-anm-live-pdf','benchmark_car':TEST_CAR}
 @app.get('/health')
 def health(): return {'ok':True,'service':'report-api'}
 @app.get('/v1/live/fire/{car_code}')
