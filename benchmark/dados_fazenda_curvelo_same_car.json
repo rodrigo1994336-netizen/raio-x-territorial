@@ -1,0 +1,96 @@
+{
+  "benchmark_id": "dados_fazenda_curvelo_same_car_2026-06-10",
+  "purpose": "Golden-case parity benchmark. Raio-X Territorial must cover every public-data category present in the reference report and add its own exclusive intelligence. Values that are time-sensitive may drift; stable cadastral/spatial values are regression anchors.",
+  "reference": {
+    "competitor": "Dados Fazenda",
+    "report_date": "2026-06-10T16:24:00-03:00",
+    "car": "MG-3120904-DFB380BECD7A4323AD8AA68FA14D011F",
+    "municipality": "Curvelo",
+    "uf": "MG"
+  },
+  "stable_anchors": {
+    "area_ha": 14.795,
+    "fiscal_modules": 0.3699,
+    "car_analysis": "Aguardando análise",
+    "car_registration_date": "2018-11-28",
+    "car_rectification_date": "2018-11-28",
+    "consolidated_use_ha": 12.5701,
+    "rl_minimum_ha": 2.9590,
+    "rl_balance_ha": -2.9590,
+    "native_vegetation_ha": 0.0,
+    "regeneration_ha": 1.8123,
+    "open_area_ha": 0.0,
+    "app_total_ha": 1.4547,
+    "app_regeneration_ha": 1.3956,
+    "app_consolidated_ha": 0.0586,
+    "app_recompose_ha": 1.3961,
+    "sigef_certifications": 0,
+    "snci_certifications": 0,
+    "aptitude": [
+      {"class": "4(p)", "area_ha": 8.45, "pct": 57.1},
+      {"class": "6", "area_ha": 6.36, "pct": 42.9}
+    ],
+    "water_grants_inside": 1,
+    "water_flow_m3h": 10.0,
+    "iphan_within_10km": 2,
+    "public_forest_overlap": 0,
+    "aerodromes_within_50km": 1,
+    "conab_warehouses_within_50km": 2,
+    "pivots_inside": 0,
+    "soil_0_5cm": {
+      "clay_pct": 32.9,
+      "sand_pct": 35.8,
+      "silt_pct": 31.4,
+      "ph_h2o": 5.4,
+      "organic_carbon_gkg": 17.7,
+      "cec_cmolckg": 9.1,
+      "nitrogen_gkg": 1.68
+    }
+  },
+  "time_sensitive_reference": {
+    "prodes_credit_relevant": {
+      "cutoff": "2019-07-31",
+      "reference_occurrences": 1,
+      "reference_years": [2021],
+      "reference_area_ha_approx": 0.05,
+      "note": "Do not discard older PRODES history. Raio-X must expose full history separately from the post-cutoff MCR screening lens."
+    },
+    "precipitation": {
+      "reference_period": "2026-05-06/2026-06-04",
+      "reference_total_mm": 2.0,
+      "volatile": true
+    }
+  },
+  "mandatory_public_capabilities": [
+    "car_core",
+    "car_internal_app_rl_native_consolidated",
+    "sigef",
+    "snci",
+    "embargoes",
+    "desmatamento_alerts",
+    "prodes_history",
+    "prodes_post_2019_credit_screening",
+    "territorial_overlaps",
+    "agricultural_aptitude",
+    "water_grants",
+    "iphan_archaeology",
+    "public_forests_sfb",
+    "aerodromes",
+    "conab_crops",
+    "conab_warehouses",
+    "ana_pivots",
+    "soil_composition",
+    "precipitation"
+  ],
+  "raio_x_exclusive_minimum": [
+    "critical_minerals",
+    "rare_earth_screening",
+    "near_realtime_fire",
+    "source_coverage_matrix",
+    "blind_spots",
+    "decision_narrative",
+    "due_diligence_actions",
+    "monitoring_alerts"
+  ],
+  "release_rule": "BLOCK if any mandatory public capability has no implementation path or if a failed/unavailable source is rendered as a negative finding. Paid/restricted capabilities may be OFF but must have an explicit prepared connector state."
+}
