@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse
 
 from deploy_app import analyze_car, _safe_summary, TEST_CAR
 from live_extra_sources import query_ibama_autos
-from live_report_adapter import generate_live_report
+from live_report_adapter_v2 import generate_live_report
 
 app = FastAPI(title='Raio-X Territorial Report API', version='0.14.8-live-pdf')
 
