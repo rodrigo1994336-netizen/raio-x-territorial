@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
+import time
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
@@ -17,7 +19,10 @@ from pivots_ana import query_pivots_ana
 from climate_nasa import query_climate_nasa
 from live_report_adapter_v8 import generate_live_report
 
-app = FastAPI(title='Raio-X Territorial Report API', version='0.16.1-water-irrigation-climate-live-pdf')
+app = FastAPI(title='Raio-X Territorial Report API', version='0.16.2-resilient-cached-live-pdf')
+CACHE_TTL_SECONDS=300
+_CACHE:dict[str,tuple[float,dict]]={}
+_LOCKS:dict[str,asyncio.Lock]={}
 
 
 def _public_meta(meta: dict):
@@ -33,6 +38,7 @@ def _report_summary(result: dict):
     base['water_mg']={'ok':water.get('ok'),'layer':water.get('layer'),'feature_count_bbox':water.get('feature_count_bbox'),'inside_count':water.get('inside_count'),'near_count':water.get('near_count'),'radius_km':water.get('radius_km'),'nearest':water.get('nearest'),'layers':water.get('layers'),'source':water.get('source'),'discovery':water.get('discovery')}
     base['pivots_ana']={'ok':piv.get('ok'),'detail':piv.get('detail'),'reference_year':piv.get('reference_year'),'feature_count_bbox':piv.get('feature_count_bbox'),'parsed_feature_count':piv.get('parsed_feature_count'),'intersection_count':piv.get('intersection_count'),'intersection_area_unique_ha':piv.get('intersection_area_unique_ha'),'near_count':piv.get('near_count'),'radius_km':piv.get('radius_km'),'nearest':piv.get('nearest'),'source':piv.get('source')}
     base['climate_nasa']={'ok':cl.get('ok'),'detail':cl.get('detail'),'available_days':cl.get('available_days'),'period_start':cl.get('period_start'),'period_end':cl.get('period_end'),'rain_sum_mm':cl.get('rain_sum_mm'),'temp_avg_c':cl.get('temp_avg_c'),'temp_max_avg_c':cl.get('temp_max_avg_c'),'temp_min_avg_c':cl.get('temp_min_avg_c'),'rh_avg_pct':cl.get('rh_avg_pct'),'solar_avg_kwh_m2_day':cl.get('solar_avg_kwh_m2_day'),'latest_data_date':cl.get('latest_data_date'),'source':cl.get('source')}
+    base['cache']={'ttl_seconds':CACHE_TTL_SECONDS}
     return base
 
 
@@ -52,11 +58,23 @@ async def _retry_failed_core(result:dict):
     return result
 
 
-async def _analyze_with_live_addons(car_code:str):
-    result=await analyze_car(car_code.upper()); car=result.get('car') or {}
+async def _query_autos_resilient(geometry,bbox,attempts=3):
+    last={}
+    for i in range(attempts):
+        try:
+            last=await query_ibama_autos(geometry,bbox)
+            if last.get('ok'): return last
+        except Exception as e:
+            last={'ok':False,'source':'IBAMA/PAMGIA - autos de infração ambiental','detail':f'{type(e).__name__}:{e}'}
+        if i<attempts-1: await asyncio.sleep(.7*(i+1))
+    return last
+
+
+async def _analyze_uncached(car_code:str):
+    result=await analyze_car(car_code); car=result.get('car') or {}
     if not car.get('ok'): raise HTTPException(status_code=404 if car.get('not_found') else 502,detail=_safe_summary(result))
     result=await _retry_failed_core(result); car=result.get('car') or {}
-    autos_task=query_ibama_autos(car.get('geometry'),car.get('bbox'))
+    autos_task=_query_autos_resilient(car.get('geometry'),car.get('bbox'))
     fire_task=analyze_fire_near_property(car.get('geometry'),5.0,6)
     constraints_task=query_territorial_constraints(car.get('geometry'),car.get('bbox'))
     water_task=asyncio.to_thread(query_outorgas_mg,car.get('geometry'),car.get('bbox'),5.0)
@@ -66,22 +84,44 @@ async def _analyze_with_live_addons(car_code:str):
     return result
 
 
+async def _analyze_with_live_addons(car_code:str,force_refresh:bool=False):
+    code=car_code.upper()
+    now=time.monotonic()
+    cached=_CACHE.get(code)
+    if not force_refresh and cached and now-cached[0] < CACHE_TTL_SECONDS:
+        return copy.deepcopy(cached[1])
+    lock=_LOCKS.setdefault(code,asyncio.Lock())
+    async with lock:
+        now=time.monotonic(); cached=_CACHE.get(code)
+        if not force_refresh and cached and now-cached[0] < CACHE_TTL_SECONDS:
+            return copy.deepcopy(cached[1])
+        result=await _analyze_uncached(code)
+        _CACHE[code]=(time.monotonic(),copy.deepcopy(result))
+        return result
+
+
 async def _build(car_code:str):
     result=await _analyze_with_live_addons(car_code); meta=await asyncio.to_thread(generate_live_report,result,car_code.upper()); return result,meta
 
 
-@app.on_event('startup')
-async def startup_pdf_smoke():
+async def _background_smoke():
     print('RX_REAL_PDF_START',flush=True)
     try:
-        result,meta=await _build(TEST_CAR); log=_public_meta(meta); log['summary']=_report_summary(result)
+        result=await _analyze_with_live_addons(TEST_CAR,force_refresh=True)
+        meta=await asyncio.to_thread(generate_live_report,result,TEST_CAR)
+        log=_public_meta(meta); log['summary']=_report_summary(result)
         print('RX_REAL_PDF_RESULT='+json.dumps(log,ensure_ascii=False,default=str),flush=True); print('RX_REAL_PDF_OK',flush=True)
     except Exception as e: print(f'RX_REAL_PDF_FAIL={type(e).__name__}:{str(e)[:500]}',flush=True)
 
+
+@app.on_event('startup')
+async def startup_pdf_smoke():
+    asyncio.create_task(_background_smoke())
+
 @app.get('/')
-def root(): return {'app':'Raio-X Territorial','service':'report-api','status':'online','version':'0.16.1-water-irrigation-climate-live-pdf','benchmark_car':TEST_CAR}
+def root(): return {'app':'Raio-X Territorial','service':'report-api','status':'online','version':'0.16.2-resilient-cached-live-pdf','benchmark_car':TEST_CAR,'cache_ttl_seconds':CACHE_TTL_SECONDS}
 @app.get('/health')
-def health(): return {'ok':True,'service':'report-api'}
+def health(): return {'ok':True,'service':'report-api','version':'0.16.2-resilient-cached-live-pdf'}
 @app.get('/v1/live/fire/{car_code}')
 async def live_fire(car_code:str):
     result=await _analyze_with_live_addons(car_code); return {'car':_safe_summary(result).get('car'),'fire':result.get('fire_live')}
