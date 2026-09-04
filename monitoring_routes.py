@@ -7,6 +7,7 @@ from fastapi import HTTPException, Request
 
 import monitoring_store as store
 from whatsapp_gateway import _send_text
+from github_oidc_auth import authorization_from_headers
 
 _LAST_RUN_MONOTONIC = 0.0
 _RUN_LOCK = asyncio.Lock()
@@ -35,6 +36,20 @@ async def _deliver_if_configured(mon:dict, saved:dict) -> dict:
     return {'attempted':True,'channel':'whatsapp','result':result}
 
 
+def _authorize_scheduler(request:Request) -> dict:
+    configured=os.getenv('RX_MONITOR_TOKEN')
+    if configured:
+        supplied=request.headers.get('X-RaioX-Monitor-Token') or request.query_params.get('token')
+        if supplied != configured:
+            raise HTTPException(status_code=401,detail='invalid_monitor_token')
+        return {'mode':'shared_secret'}
+    try:
+        claims=authorization_from_headers(request.headers)
+        return {'mode':'github_oidc','repository':claims.get('repository'),'run_id':claims.get('run_id'),'workflow_ref':claims.get('workflow_ref')}
+    except Exception as exc:
+        raise HTTPException(status_code=401,detail=f'invalid_github_oidc:{type(exc).__name__}')
+
+
 def register_monitoring_routes(app, analyze_fn):
     @app.get('/v1/monitoring/status')
     def monitoring_status():
@@ -45,6 +60,7 @@ def register_monitoring_routes(app, analyze_fn):
             'database_bound': r['database_bound'],
             'driver': r['driver'],
             'scheduler': 'github-actions-10min',
+            'scheduler_auth': 'shared-secret' if os.getenv('RX_MONITOR_TOKEN') else 'github-actions-oidc',
             'fire_target_minutes': 10,
             'whatsapp_alert_delivery': 'official-meta-cloud-api-prepared',
             'note': 'Persistência exige DATABASE_URL e driver PostgreSQL. Sem isso o sistema não finge monitoramento contínuo.'
@@ -87,16 +103,12 @@ def register_monitoring_routes(app, analyze_fn):
         global _LAST_RUN_MONOTONIC
         if not store.readiness()['ready']:
             raise HTTPException(status_code=503,detail='monitoring_database_not_ready')
-        configured=os.getenv('RX_MONITOR_TOKEN')
-        if configured:
-            supplied=request.headers.get('X-RaioX-Monitor-Token') or request.query_params.get('token')
-            if supplied != configured:
-                raise HTTPException(status_code=401,detail='invalid_monitor_token')
+        auth=_authorize_scheduler(request)
         now=time.monotonic()
-        if not configured and now-_LAST_RUN_MONOTONIC < 600:
-            return {'ok':True,'skipped':True,'reason':'cooldown','retry_after_seconds':int(600-(now-_LAST_RUN_MONOTONIC))}
+        if now-_LAST_RUN_MONOTONIC < 120:
+            return {'ok':True,'skipped':True,'reason':'cooldown','retry_after_seconds':int(120-(now-_LAST_RUN_MONOTONIC)),'auth':auth.get('mode')}
         if _RUN_LOCK.locked():
-            return {'ok':True,'skipped':True,'reason':'run_already_in_progress'}
+            return {'ok':True,'skipped':True,'reason':'run_already_in_progress','auth':auth.get('mode')}
         async with _RUN_LOCK:
             _LAST_RUN_MONOTONIC=time.monotonic()
             run_id=await asyncio.to_thread(store.begin_run)
@@ -115,7 +127,7 @@ def register_monitoring_routes(app, analyze_fn):
                     except Exception as exc:
                         errors.append({'car_code':mon['car_code'],'error':f'{type(exc).__name__}:{str(exc)[:220]}'})
                 await asyncio.to_thread(store.finish_run,run_id,checked,changed,'ok' if not errors else 'partial',str(errors[:10]) if errors else None)
-                return {'ok':True,'run_id':run_id,'checked':checked,'changed':changed,'deliveries':deliveries,'errors':errors}
+                return {'ok':True,'run_id':run_id,'checked':checked,'changed':changed,'deliveries':deliveries,'errors':errors,'auth':auth.get('mode')}
             except Exception as exc:
                 await asyncio.to_thread(store.finish_run,run_id,checked,changed,'failed',f'{type(exc).__name__}:{str(exc)[:400]}')
                 raise
