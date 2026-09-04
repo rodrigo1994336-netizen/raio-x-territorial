@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlencode
 from shapely.geometry import shape
 
@@ -59,4 +60,11 @@ def query_layer(layer:str,bbox:list[float],car_geometry:dict,max_features=1000):
 
 
 def probe_benchmark(car_geometry:dict,bbox:list[float]):
-    return {k:query_layer(v,bbox,car_geometry) for k,v in LAYERS.items()}
+    out={}
+    with ThreadPoolExecutor(max_workers=len(LAYERS)) as ex:
+        futs={ex.submit(query_layer,layer,bbox,car_geometry):key for key,layer in LAYERS.items()}
+        for fut in as_completed(futs):
+            key=futs[fut]
+            try: out[key]=fut.result()
+            except Exception as e: out[key]={'ok':False,'layer':LAYERS[key],'detail':f'{type(e).__name__}:{e}'}
+    return {k:out.get(k,{'ok':False,'detail':'no_result'}) for k in LAYERS}
