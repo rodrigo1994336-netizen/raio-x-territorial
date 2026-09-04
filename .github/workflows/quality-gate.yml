@@ -1,0 +1,35 @@
+name: Raio-X Quality Gate
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  python-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install gate dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install fastapi httpx shapely pyproj pillow reportlab uvicorn "psycopg[binary]"
+      - name: Compile Python modules
+        run: |
+          python -m py_compile \
+            climate_nasa.py groundwater_siagas.py safras_ibge.py satellite_real.py \
+            property_search.py map_context.py portal_property_tabs.py portal_smart_search.py \
+            portal_map_context_symbols.py portal_rare_earth_symbols.py report_book_style.py \
+            live_report_adapter_v12.py report_v12_patch.py sitecustomize.py
+      - name: Import standalone engines
+        env:
+          RX_RELEASE: OFF
+        run: |
+          python - <<'PY'
+          import climate_nasa, groundwater_siagas, safras_ibge, satellite_real, report_book_style
+          print('RX_CI_IMPORT_OK')
+          PY
