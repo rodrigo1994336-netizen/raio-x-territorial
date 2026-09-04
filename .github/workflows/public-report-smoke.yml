@@ -12,20 +12,22 @@ permissions:
 jobs:
   audit:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 25
     env:
       CAR_CODE: MG-3120904-DFB380BECD7A4323AD8AA68FA14D011F
+      PROPERTY_NAME: Fazenda Benchmark Curvelo
       REPORT_BASE: https://raio-x-territorial-report.onrender.com
     steps:
       - name: Generate public report
         run: |
           set -euo pipefail
           mkdir -p audit/pages
-          curl --fail --show-error --silent --retry 3 --retry-delay 8 --max-time 720 \
-            "${REPORT_BASE}/v1/reports/property/${CAR_CODE}/meta" \
+          NAME_Q="$(python -c 'import os,urllib.parse; print(urllib.parse.quote(os.environ["PROPERTY_NAME"]))')"
+          curl --fail --show-error --silent --retry 3 --retry-delay 8 --max-time 900 \
+            "${REPORT_BASE}/v1/reports/property/${CAR_CODE}/meta?property_name=${NAME_Q}" \
             -o audit/meta.json
-          curl --fail --show-error --silent --retry 2 --retry-delay 8 --max-time 720 \
-            "${REPORT_BASE}/v1/reports/property/${CAR_CODE}" \
+          curl --fail --show-error --silent --retry 2 --retry-delay 8 --max-time 900 \
+            "${REPORT_BASE}/v1/reports/property/${CAR_CODE}?property_name=${NAME_Q}" \
             -o audit/report.pdf
           test -s audit/report.pdf
           file audit/report.pdf
@@ -39,26 +41,28 @@ jobs:
           fi
           pdftotext -layout audit/report.pdf audit/report.txt
           pdfinfo audit/report.pdf > audit/pdfinfo.txt
-          pdftoppm -png -r 110 -f 1 -l 20 audit/report.pdf audit/pages/page >/dev/null 2>&1
+          pdftoppm -png -r 120 -f 1 -l 24 audit/report.pdf audit/pages/page >/dev/null 2>&1
 
       - name: Build audit summary
         run: |
           python - <<'PY'
           from pathlib import Path
-          import json,re
+          import json,re,os
           text=Path('audit/report.txt').read_text(encoding='utf-8',errors='ignore')
           low=text.lower()
           meta=json.loads(Path('audit/meta.json').read_text(encoding='utf-8'))
           checks={
+            'property_name_visible': os.environ['PROPERTY_NAME'].lower() in low,
             'clima_visible': any(x in low for x in ['clima','precipitação','precipitacao','nasa power']),
             'soil_visible': any(x in low for x in ['soilgrids','argila','ctc a ph','carbono orgânico','carbono organico']),
             'mapbiomas_visible': 'mapbiomas' in low,
             'pasture_visible': 'pastagem' in low,
             'sentinel_visible': 'sentinel-2' in low or 'sentinel 2' in low,
             'ndvi_visible': 'ndvi' in low,
-            'car_internal_visible': all(any(term in low for term in group) for group in [
-              ['reserva legal'],['app','preservação permanente','preservacao permanente'],['área consolidada','area consolidada']
-            ]),
+            'highres_visible': 'esri world imagery' in low or 'referência em alta resolução' in low or 'referencia em alta resolucao' in low,
+            'terrain_srtm_visible': 'srtm' in low and ('altitude' in low or 'declividade' in low),
+            'car_app_visible': 'composição car — app' in low or 'composicao car - app' in low,
+            'car_rl_visible': 'composição car — reserva legal' in low or 'composicao car - reserva legal' in low,
             'water_visible': 'outorga' in low,
             'aptitude_visible': 'aptidão' in low or 'aptidao' in low,
             'aerodrome_visible': 'aeródromo' in low or 'aerodromo' in low,
@@ -73,7 +77,7 @@ jobs:
             r'solo, aptid[aã]o e relevo ainda n[aã]o consultados',
           ]
           for p in stale_patterns:
-            if re.search(p,low): obsolete.append(p)
+            if re.search(p,low):obsolete.append(p)
           summary={
             'meta':meta,
             'pdf_bytes':Path('audit/report.pdf').stat().st_size,
@@ -83,7 +87,8 @@ jobs:
             'integration_off_count':len(re.findall(r'INTEGRAÇÃO[^\n]{0,80}OFF',text,re.I)),
             'checks':checks,
             'obsolete_phrases':obsolete,
-            'pass_core_visibility':all(checks[k] for k in ['clima_visible','soil_visible','mapbiomas_visible','pasture_visible','sentinel_visible','ndvi_visible','car_internal_visible','water_visible','aptitude_visible']),
+            'pass_v17_core':all(checks[k] for k in ['property_name_visible','clima_visible','soil_visible','mapbiomas_visible','pasture_visible','sentinel_visible','ndvi_visible','highres_visible','terrain_srtm_visible','water_visible','aptitude_visible']),
+            'pass_sicar_explicit':checks['car_app_visible'] and checks['car_rl_visible'],
             'pass_no_stale_claims':not obsolete,
           }
           Path('audit/summary.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2),encoding='utf-8')
