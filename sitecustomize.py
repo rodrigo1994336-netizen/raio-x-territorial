@@ -3,25 +3,42 @@ import sys
 import threading
 import time
 
-# Render starts `uvicorn portal_api:app`. Importing portal_v8 synchronously from
-# sitecustomize creates a circular import and can leave the old/minimal root active.
-# Load the extension only after portal_api has finished defining PORTAL_HTML/app.
+
+def _load_report_v9_after_report_api():
+    # report_api is imported both by the dedicated report service and by portal_api.
+    # Patch only after the module has completed its own definitions, avoiding import
+    # cycles while keeping the Render start commands unchanged.
+    for _ in range(320):
+        mod=sys.modules.get('report_api')
+        if mod is not None and hasattr(mod,'app') and hasattr(mod,'_analyze_with_live_addons'):
+            try:
+                import report_v9_patch  # noqa: F401
+                print('RX_REPORT_V9_RUNTIME=loaded_deferred',flush=True)
+            except Exception as exc:
+                print(f'RX_REPORT_V9_RUNTIME=failed:{type(exc).__name__}:{str(exc)[:300]}',flush=True)
+            return
+        time.sleep(0.05)
+
+
 def _load_v8_after_portal():
     if os.getenv('RX_RELEASE') != 'V8_OPERATIONAL_ZERO_COST':
         return
-    for _ in range(240):
-        mod = sys.modules.get('portal_api')
-        if mod is not None and hasattr(mod, 'PORTAL_HTML') and hasattr(mod, 'app'):
+    for _ in range(320):
+        mod=sys.modules.get('portal_api')
+        if mod is not None and hasattr(mod,'PORTAL_HTML') and hasattr(mod,'app'):
             try:
                 import portal_v8  # noqa: F401
                 import portal_sicar_resilient  # noqa: F401
+                import portal_progressive  # noqa: F401
                 import portal_map_smoke  # noqa: F401
-                print('RX_PORTAL_V8_EXTENSION=loaded_deferred', flush=True)
+                print('RX_PORTAL_V8_EXTENSION=loaded_deferred',flush=True)
             except Exception as exc:
-                print(f'RX_PORTAL_V8_EXTENSION=failed:{type(exc).__name__}:{str(exc)[:300]}', flush=True)
+                print(f'RX_PORTAL_V8_EXTENSION=failed:{type(exc).__name__}:{str(exc)[:300]}',flush=True)
             return
         time.sleep(0.05)
-    print('RX_PORTAL_V8_EXTENSION=timeout_waiting_portal_api', flush=True)
+    print('RX_PORTAL_V8_EXTENSION=timeout_waiting_portal_api',flush=True)
 
+
+threading.Thread(target=_load_report_v9_after_report_api,daemon=True).start()
 if os.getenv('RX_RELEASE') == 'V8_OPERATIONAL_ZERO_COST':
-    threading.Thread(target=_load_v8_after_portal, daemon=True).start()
+    threading.Thread(target=_load_v8_after_portal,daemon=True).start()
