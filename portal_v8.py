@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from fastapi import HTTPException
 from fastapi.responses import HTMLResponse, Response
 
@@ -10,7 +11,7 @@ from report_api import _analyze_with_live_addons
 from whatsapp_gateway import register_routes as register_whatsapp_routes
 
 app = base.app
-APP_PORTAL_VERSION = '0.18.3-v8-operational'
+APP_PORTAL_VERSION = '0.18.4-v8-operational'
 
 # Replace portal root only; keep every production report/live/export route already registered.
 app.router.routes = [r for r in app.router.routes if getattr(r, 'path', None) != '/']
@@ -87,8 +88,35 @@ def premium_integrations_status():
     return premium_status()
 
 
+@app.get('/v1/internal/persistence/status')
+def persistence_status():
+    # Never expose secrets/connection strings. This endpoint only reports whether
+    # a durable database binding is present in the runtime environment.
+    keys=('DATABASE_URL','POSTGRES_URL','RENDER_POSTGRES_URL')
+    present=[k for k in keys if bool(os.getenv(k))]
+    return {
+        'durable_database_binding': bool(present),
+        'detected_variable_names': present,
+        'driver_available': _postgres_driver_available(),
+        'policy': 'No connection string or credential is returned by this endpoint.'
+    }
+
+
+def _postgres_driver_available():
+    try:
+        import psycopg  # noqa: F401
+        return 'psycopg'
+    except Exception:
+        try:
+            import psycopg2  # noqa: F401
+            return 'psycopg2'
+        except Exception:
+            return None
+
+
 @app.get('/v1/portal/v8/status')
 def v8_status():
+    db_binding=any(bool(os.getenv(k)) for k in ('DATABASE_URL','POSTGRES_URL','RENDER_POSTGRES_URL'))
     return {
         'ok':True,
         'portal_version':APP_PORTAL_VERSION,
@@ -99,7 +127,7 @@ def v8_status():
         'critical_minerals':True,
         'premium_integrations_prepared':True,
         'whatsapp_gateway_prepared':True,
-        'monitoring_persistence':'database-link-required',
+        'monitoring_persistence':'database-bound' if db_binding else 'database-link-required',
     }
 
 
