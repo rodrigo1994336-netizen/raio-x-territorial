@@ -17,7 +17,7 @@ jobs:
       - name: Install gate dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install fastapi httpx shapely pyproj pillow reportlab uvicorn "psycopg[binary]" "numpy>=2,<3" "rasterio>=1.4,<2"
+          pip install fastapi httpx shapely pyproj pillow reportlab uvicorn "psycopg[binary]" "numpy>=2,<3" "rasterio>=1.4,<2" "PyJWT[crypto]>=2.10,<3"
       - name: Compile Python modules
         run: |
           python -m py_compile \
@@ -28,6 +28,7 @@ jobs:
             report_engine_v6.py rasterio_runtime_bootstrap.py sentinel_cog.py mapbiomas_coverage.py \
             report_truth_guard_v16.py live_report_adapter_v12.py live_report_adapter_v13.py \
             live_report_adapter_v14.py live_report_adapter_v15.py live_report_adapter_v16.py \
+            github_oidc_auth.py jwt_runtime_bootstrap.py monitoring_store.py monitoring_routes.py \
             report_v13_patch.py report_v14_patch.py report_v15_patch.py report_v16_patch.py sitecustomize.py
       - name: Import standalone engines
         env:
@@ -37,5 +38,6 @@ jobs:
           import climate_nasa, groundwater_siagas, safras_ibge, satellite_real
           import soilgrids_wcs, sicar_detail_sources, aerodromes_anac, sentinel_cog, mapbiomas_coverage
           import report_truth_guard_v16, report_book_style, report_engine_v6
+          import github_oidc_auth, monitoring_store, monitoring_routes
           print('RX_CI_IMPORT_OK')
           PY
