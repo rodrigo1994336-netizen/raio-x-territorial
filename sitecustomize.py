@@ -14,6 +14,7 @@ def _load_v8_after_portal():
         if mod is not None and hasattr(mod, 'PORTAL_HTML') and hasattr(mod, 'app'):
             try:
                 import portal_v8  # noqa: F401
+                import portal_sicar_resilient  # noqa: F401
                 import portal_map_smoke  # noqa: F401
                 print('RX_PORTAL_V8_EXTENSION=loaded_deferred', flush=True)
             except Exception as exc:
