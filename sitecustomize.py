@@ -32,6 +32,7 @@ def _load_v8_after_portal():
                 import portal_car_resilient  # noqa: F401
                 import portal_progressive  # noqa: F401
                 import portal_alerts  # noqa: F401
+                import portal_intelligence_filters  # noqa: F401
                 import portal_map_smoke  # noqa: F401
                 import car_resolver_smoke  # noqa: F401
                 print('RX_PORTAL_V8_EXTENSION=loaded_deferred',flush=True)
