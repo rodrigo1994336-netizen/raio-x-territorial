@@ -1,0 +1,29 @@
+name: Raio-X Territorial Monitoring
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Wake portal and run monitoring
+        env:
+          MONITOR_URL: https://raio-x-territorial-app.onrender.com/v1/monitoring/run?limit=25
+          MONITOR_TOKEN: ${{ secrets.RX_MONITOR_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -n "${MONITOR_TOKEN:-}" ]; then
+            curl --fail --silent --show-error --max-time 540 \
+              -X POST -H "X-RaioX-Monitor-Token: ${MONITOR_TOKEN}" \
+              "${MONITOR_URL}"
+          else
+            curl --fail --silent --show-error --max-time 540 \
+              -X POST "${MONITOR_URL}"
+          fi
