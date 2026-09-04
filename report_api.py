@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import asyncio
-import copy
+import gc
 import json
 import os
 import time
+from collections import OrderedDict
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
@@ -23,11 +24,20 @@ from ide_layer_probe import probe_benchmark
 from critical_minerals import query_critical_minerals
 from live_report_adapter_v8 import generate_live_report
 
-APP_VERSION='0.18.1-operational-critical-minerals'
+APP_VERSION='0.18.6-memory-hardened'
 app = FastAPI(title='Raio-X Territorial Report API', version=APP_VERSION)
-CACHE_TTL_SECONDS=300
-_CACHE:dict[str,tuple[float,dict]]={}
+
+# Heavy live-analysis objects can contain many GeoJSON features/geometries. Keep the
+# cache deliberately tiny on Render's 512 MB instances and never deepcopy them.
+CACHE_TTL_SECONDS=int(os.getenv('RX_CACHE_TTL_SECONDS','180'))
+CACHE_MAX_ITEMS=max(1,int(os.getenv('RX_CACHE_MAX_ITEMS','2')))
+_CACHE:OrderedDict[str,tuple[float,dict]]=OrderedDict()
 _LOCKS:dict[str,asyncio.Lock]={}
+
+# A PDF render temporarily holds PIL + ReportLab structures in addition to the full
+# live analysis. Serialising report generation prevents two simultaneous requests
+# from multiplying that peak memory on a small instance.
+_REPORT_SEMAPHORE=asyncio.Semaphore(max(1,int(os.getenv('RX_REPORT_CONCURRENCY','1'))))
 
 
 def _public_meta(meta: dict):
@@ -53,8 +63,54 @@ def _report_summary(result: dict):
         'sgb_hit_layers':[{'layer':x.get('layer'),'title':x.get('title'),'minerals':x.get('minerals'),'hit_count':x.get('hit_count')} for x in (msgb.get('hit_layers') or [])[:20]],
         'detail':msgb.get('detail')
     }
-    base['cache']={'ttl_seconds':CACHE_TTL_SECONDS}
+    base['cache']={'ttl_seconds':CACHE_TTL_SECONDS,'max_items':CACHE_MAX_ITEMS,'deepcopy':False}
     return base
+
+
+def _release_memory():
+    # Make cyclic objects collectible immediately after heavy report work. On glibc,
+    # malloc_trim returns free arenas to the OS so Render sees the RSS drop sooner.
+    gc.collect()
+    try:
+        import ctypes
+        libc=ctypes.CDLL('libc.so.6')
+        libc.malloc_trim(0)
+    except Exception:
+        pass
+
+
+def _prune_cache(now:float|None=None):
+    now=time.monotonic() if now is None else now
+    expired=[k for k,(ts,_) in _CACHE.items() if now-ts >= CACHE_TTL_SECONDS]
+    for k in expired:
+        _CACHE.pop(k,None)
+    while len(_CACHE)>CACHE_MAX_ITEMS:
+        _CACHE.popitem(last=False)
+    # Locks are cheap but should not grow forever when many distinct CARs are used.
+    if len(_LOCKS)>max(32,CACHE_MAX_ITEMS*8):
+        keep=set(_CACHE.keys())
+        for k in list(_LOCKS.keys()):
+            if k not in keep and not _LOCKS[k].locked():
+                _LOCKS.pop(k,None)
+                if len(_LOCKS)<=max(16,CACHE_MAX_ITEMS*4): break
+
+
+def _cache_get(code:str,now:float):
+    item=_CACHE.get(code)
+    if not item: return None
+    ts,result=item
+    if now-ts >= CACHE_TTL_SECONDS:
+        _CACHE.pop(code,None); return None
+    _CACHE.move_to_end(code)
+    # Result is treated as immutable after construction. Returning the same object
+    # avoids transient 100+ MB deep copies of GeoJSON/geometries.
+    return result
+
+
+def _cache_put(code:str,result:dict):
+    _CACHE[code]=(time.monotonic(),result)
+    _CACHE.move_to_end(code)
+    _prune_cache()
 
 
 async def _retry_failed_core(result:dict):
@@ -117,24 +173,38 @@ async def _analyze_uncached(car_code:str):
 
 
 async def _analyze_with_live_addons(car_code:str,force_refresh:bool=False):
-    code=car_code.upper(); now=time.monotonic(); cached=_CACHE.get(code)
-    if not force_refresh and cached and now-cached[0] < CACHE_TTL_SECONDS: return copy.deepcopy(cached[1])
+    code=car_code.upper(); now=time.monotonic(); _prune_cache(now)
+    if not force_refresh:
+        cached=_cache_get(code,now)
+        if cached is not None: return cached
     lock=_LOCKS.setdefault(code,asyncio.Lock())
     async with lock:
-        now=time.monotonic(); cached=_CACHE.get(code)
-        if not force_refresh and cached and now-cached[0] < CACHE_TTL_SECONDS: return copy.deepcopy(cached[1])
-        result=await _analyze_uncached(code); _CACHE[code]=(time.monotonic(),copy.deepcopy(result)); return result
+        now=time.monotonic()
+        if not force_refresh:
+            cached=_cache_get(code,now)
+            if cached is not None: return cached
+        result=await _analyze_uncached(code)
+        _cache_put(code,result)
+        return result
 
 
 async def _build(car_code:str):
-    result=await _analyze_with_live_addons(car_code); meta=await asyncio.to_thread(generate_live_report,result,car_code.upper()); return result,meta
+    result=await _analyze_with_live_addons(car_code)
+    async with _REPORT_SEMAPHORE:
+        try:
+            meta=await asyncio.to_thread(generate_live_report,result,car_code.upper())
+        finally:
+            _release_memory()
+    return result,meta
 
 
 async def _background_full_smoke():
     print('RX_REAL_PDF_START',flush=True)
     try:
         result=await _analyze_with_live_addons(TEST_CAR,force_refresh=True)
-        meta=await asyncio.to_thread(generate_live_report,result,TEST_CAR)
+        async with _REPORT_SEMAPHORE:
+            try: meta=await asyncio.to_thread(generate_live_report,result,TEST_CAR)
+            finally: _release_memory()
         log=_public_meta(meta); log['summary']=_report_summary(result)
         print('RX_REAL_PDF_RESULT='+json.dumps(log,ensure_ascii=False,default=str),flush=True); print('RX_REAL_PDF_OK',flush=True)
     except Exception as e: print(f'RX_REAL_PDF_FAIL={type(e).__name__}:{str(e)[:500]}',flush=True)
@@ -163,12 +233,13 @@ async def _background_catalog_probe():
 async def startup_tasks():
     mode=os.getenv('RX_STARTUP_DIAGNOSTIC','off').strip().lower()
     print(f'RX_STARTUP_DIAGNOSTIC={mode}',flush=True)
+    print(f'RX_MEMORY_POLICY=cache_max:{CACHE_MAX_ITEMS},ttl:{CACHE_TTL_SECONDS},report_concurrency:{_REPORT_SEMAPHORE._value},deepcopy:false',flush=True)
     if mode=='full': asyncio.create_task(_background_full_smoke())
     elif mode=='ide': asyncio.create_task(_background_ide_probe())
     elif mode=='catalog': asyncio.create_task(_background_catalog_probe())
 
 @app.get('/')
-def root(): return {'app':'Raio-X Territorial','service':'report-api','status':'online','version':APP_VERSION,'benchmark_car':TEST_CAR,'cache_ttl_seconds':CACHE_TTL_SECONDS,'startup_diagnostic':os.getenv('RX_STARTUP_DIAGNOSTIC','off')}
+def root(): return {'app':'Raio-X Territorial','service':'report-api','status':'online','version':APP_VERSION,'benchmark_car':TEST_CAR,'cache_ttl_seconds':CACHE_TTL_SECONDS,'cache_max_items':CACHE_MAX_ITEMS,'report_concurrency':1,'startup_diagnostic':os.getenv('RX_STARTUP_DIAGNOSTIC','off')}
 @app.head('/')
 def root_head(): return Response(status_code=200)
 @app.get('/health')
