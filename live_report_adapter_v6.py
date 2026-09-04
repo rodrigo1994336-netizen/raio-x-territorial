@@ -15,12 +15,23 @@ def _safe(v, default='-'):
     return default if v is None or v == '' else str(v)
 
 
+def _find_prop(p:dict, terms:tuple[str,...], fallback='-'):
+    for k,v in p.items():
+        lk=str(k).lower()
+        if any(t in lk for t in terms) and v not in (None,''):
+            return v
+    return fallback
+
+
 def _fmt_grant(item: dict):
     p=item.get('properties') or {}
-    proc=p.get('numpa_4') or p.get('objectid') or '-'
-    port=p.get('numport_4') or '-'
-    status=p.get('statuspa_4') or '-'
-    use=p.get('usoinsig_4') or p.get('tipouso_4') or '-'
+    proc=p.get('numpa_4') or _find_prop(p,('process','proc','numpa')) or p.get('objectid') or '-'
+    port=p.get('numport_4') or _find_prop(p,('portaria','port'))
+    status=p.get('statuspa_4') or _find_prop(p,('status','situacao','situação'))
+    use=p.get('tipouso_4') or p.get('usoinsig_4') or _find_prop(p,('final','tipo','uso'))
+    authority=_safe(item.get('authority'),'')
+    if authority:
+        use=f'{use} • {authority.replace(" - Outorgas estaduais","").replace(" - Outorgas federais","")}'
     dist=item.get('distance_m')
     loc='DENTRO' if item.get('inside') else (f'{round(float(dist)/1000,2)} km' if dist is not None else '-')
     return [str(proc), str(port), str(status), str(use), loc]
@@ -36,27 +47,27 @@ def _patch_water(payload: dict, result: dict):
         section['grants']=[_fmt_grant(x) for x in (water.get('inside') or [])[:8]]
         nearest=water.get('nearest') or {}
         if inside:
-            section['meaning']=f'Foram localizados {inside} ponto(s) de outorga intersectando o polígono do imóvel. A vigência e os efeitos de cada ato devem ser conferidos no processo/portaria correspondente.'
+            section['meaning']=f'Foram localizados {inside} ponto(s) de outorga estadual/federal intersectando o polígono do imóvel. A vigência e os efeitos de cada ato devem ser conferidos no processo/portaria correspondente.'
         elif near:
             d=nearest.get('distance_m')
-            section['meaning']=f'Nenhuma outorga intersecta o imóvel. Foram localizadas {near} outorga(s) em até {water.get("radius_km",5)} km; a mais próxima está a {round(float(d)/1000,2) if d is not None else "-"} km.'
+            section['meaning']=f'Nenhuma outorga intersecta o imóvel. Foram localizadas {near} outorga(s) estadual/federal em até {water.get("radius_km",5)} km; a mais próxima está a {round(float(d)/1000,2) if d is not None else "-"} km.'
         else:
-            section['meaning']=f'Nenhuma outorga foi localizada dentro do imóvel ou no raio de {water.get("radius_km",5)} km na consulta atual.'
+            section['meaning']=f'Nenhuma outorga estadual/federal foi localizada dentro do imóvel ou no raio de {water.get("radius_km",5)} km na consulta atual.'
         section['rain_rows'] = section.get('rain_rows') or []
-        payload['sources'].append({'name':'IGAM / IDE-Sisema - Outorgas','description':f'Consulta WFS oficial por polígono e proximidade. Camada: {water.get("layer") or "-"}.','status':'CONSULTADA','level':'ok'})
+        payload['sources'].append({'name':'IGAM + ANA / IDE-Sisema - Outorgas','description':f'Consulta WFS oficial por polígono e proximidade. Camadas: {water.get("layer") or "-"}.','status':'CONSULTADA','level':'ok'})
         payload['compliance'].append({'label':'Outorgas de uso de água','text':f'{inside} dentro do imóvel; {near} em até {water.get("radius_km",5)} km.','badge':'ATENÇÃO' if inside else 'SEM INTERSEÇÃO','level':'attention' if inside else 'ok'})
         if inside:
-            payload['attention_points'].append(f'Outorgas: {inside} ponto(s) de direito de uso de recursos hídricos intersectam o imóvel.')
-            payload['conclusion'].setdefault('diligence',[]).append('Conferir processo, portaria, vigência, finalidade e condições das outorgas que intersectam o imóvel.')
-            payload['conclusion'].setdefault('risks',[]).append('Há outorga(s) de uso de recursos hídricos vinculada(s) espacialmente ao imóvel; verificar titularidade do ato e obrigações associadas.')
+            payload['attention_points'].append(f'Outorgas: {inside} ponto(s) de direito de uso de recursos hídricos estadual/federal intersectam o imóvel.')
+            payload['conclusion'].setdefault('diligence',[]).append('Conferir processo, portaria, vigência, finalidade, autoridade emissora e condições das outorgas que intersectam o imóvel.')
+            payload['conclusion'].setdefault('risks',[]).append('Há outorga(s) de uso de recursos hídricos vinculada(s) espacialmente ao imóvel; verificar autoridade emissora, vigência e obrigações associadas.')
             for row in payload['conclusion'].get('categories') or []:
                 if row.get('label')=='Hídrico':
-                    row['risk']='ATENÇÃO'; row['level']='attention'; row['text']=f'{inside} outorga(s) intersectante(s) localizada(s) na IDE-Sisema/IGAM.'
+                    row['risk']='ATENÇÃO'; row['level']='attention'; row['text']=f'{inside} outorga(s) intersectante(s) localizada(s) nas fontes IGAM/ANA disponíveis.'
     else:
         section['grant_count']='NÃO CONSULTADO'
         section['grants']=[]
-        section['meaning']='A fonte oficial de outorgas não respondeu nesta emissão; não interpretar ausência de dados como ausência de outorga.'
-        payload['sources'].append({'name':'IGAM / IDE-Sisema - Outorgas','description':'A fonte oficial não respondeu nesta emissão.','status':'INDISPONÍVEL','level':'attention'})
+        section['meaning']='As fontes oficiais de outorgas não responderam nesta emissão; não interpretar ausência de dados como ausência de outorga.'
+        payload['sources'].append({'name':'IGAM + ANA / IDE-Sisema - Outorgas','description':'As fontes oficiais não responderam nesta emissão.','status':'INDISPONÍVEL','level':'attention'})
         payload['compliance'].append({'label':'Outorgas de uso de água','text':'Fonte indisponível nesta emissão.','badge':'NÃO CONSULTADO','level':'neutral'})
     return payload
 
