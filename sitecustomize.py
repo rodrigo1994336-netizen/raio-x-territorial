@@ -29,6 +29,8 @@ def _load_v8_after_portal():
             try:
                 import postgres_runtime_bootstrap
                 postgres_runtime_bootstrap.ensure_postgres_driver()
+                import jwt_runtime_bootstrap
+                jwt_runtime_bootstrap.ensure_jwt()
                 import car_resilient  # noqa: F401
                 import parity_public_layers  # noqa: F401
                 import portal_v8  # noqa: F401
