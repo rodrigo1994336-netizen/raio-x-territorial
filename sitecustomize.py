@@ -32,10 +32,16 @@ def _load_v8_after_portal():
                 import portal_v8  # noqa: F401
                 import portal_sicar_resilient  # noqa: F401
                 import portal_car_resilient  # noqa: F401
+                import property_search  # noqa: F401
+                import map_context  # noqa: F401
                 import portal_progressive  # noqa: F401
                 import portal_alerts  # noqa: F401
                 import portal_intelligence_filters  # noqa: F401
                 import portal_rare_earth_locator_upgrade  # noqa: F401
+                import portal_rare_earth_symbols  # noqa: F401
+                import portal_property_tabs  # noqa: F401
+                import portal_smart_search  # noqa: F401
+                import portal_map_context_symbols  # noqa: F401
                 import portal_feature_smoke  # noqa: F401
                 import portal_map_smoke  # noqa: F401
                 import car_resolver_smoke  # noqa: F401
