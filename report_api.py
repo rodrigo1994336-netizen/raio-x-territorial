@@ -12,7 +12,7 @@ from live_extra_sources import query_ibama_autos
 from sicar_detail_sources import query_sicar_details
 from live_report_adapter_v3 import generate_live_report
 
-app = FastAPI(title='Raio-X Territorial Report API', version='0.14.9-live-pdf')
+app = FastAPI(title='Raio-X Territorial Report API', version='0.14.10-live-pdf')
 
 
 def _public_meta(meta: dict):
@@ -34,6 +34,8 @@ def _report_summary(result: dict):
     base['sicar_details'] = {
         'ok': details.get('ok'),
         'discovery_total': details.get('discovery_total'),
+        'feature_type_count': details.get('feature_type_count'),
+        'raw_names': details.get('raw_names'),
         'selected_layers': details.get('selected_layers'),
         'summary': details.get('summary'),
         'source': details.get('source'),
@@ -68,39 +70,20 @@ async def startup_pdf_smoke():
 
 @app.get('/')
 def root():
-    return {
-        'app':'Raio-X Territorial',
-        'service':'report-api',
-        'status':'online',
-        'version':'0.14.9-live-pdf',
-        'benchmark_car':TEST_CAR,
-    }
-
+    return {'app':'Raio-X Territorial','service':'report-api','status':'online','version':'0.14.10-live-pdf','benchmark_car':TEST_CAR}
 
 @app.get('/health')
-def health():
-    return {'ok':True,'service':'report-api'}
-
+def health(): return {'ok':True,'service':'report-api'}
 
 @app.get('/v1/reports/property/{car_code}/meta')
 async def report_meta(car_code: str):
     result, meta = await _build(car_code)
     return {'report': _public_meta(meta), 'analysis': _report_summary(result)}
 
-
 @app.get('/v1/reports/property/{car_code}')
 async def report_pdf(car_code: str):
     _, meta = await _build(car_code)
     pdf = Path(meta['pdf_path'])
-    if not pdf.exists():
-        raise HTTPException(status_code=500, detail='PDF generation completed without output file')
-    headers = {
-        'X-RaioX-Report-ID': meta['report_id'],
-        'X-RaioX-SHA256': meta['sha256'],
-    }
-    return FileResponse(
-        path=str(pdf),
-        media_type='application/pdf',
-        filename=f"raio_x_territorial_{car_code.upper()}.pdf",
-        headers=headers,
-    )
+    if not pdf.exists(): raise HTTPException(status_code=500, detail='PDF generation completed without output file')
+    headers = {'X-RaioX-Report-ID': meta['report_id'],'X-RaioX-SHA256': meta['sha256']}
+    return FileResponse(path=str(pdf),media_type='application/pdf',filename=f"raio_x_territorial_{car_code.upper()}.pdf",headers=headers)
