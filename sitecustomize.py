@@ -68,6 +68,7 @@ def _load_portal_deferred():
                 import portal_map_context_symbols  # noqa: F401
                 import portal_mobile_v19  # noqa: F401
                 import portal_nationwide_v21  # noqa: F401
+                import portal_release_v43  # noqa: F401
                 import portal_property_names_v30  # noqa: F401
                 import portal_map_visual_v32  # noqa: F401
                 import portal_field_mode_v31  # noqa: F401
@@ -109,11 +110,15 @@ def _load_portal_deferred():
                         raise RuntimeError('missing_portal_route:' + required)
                 if 'RX_EXPERIENCE_V43' not in portal_v8.PORTAL_HTML:
                     raise RuntimeError('v43_experience_not_loaded')
+                if not str(portal_v8.APP_PORTAL_VERSION).startswith('0.43.'):
+                    raise RuntimeError('v43_release_identity_not_loaded')
+                if 'window.rxVisibleCarCountV43' not in portal_v8.PORTAL_HTML:
+                    raise RuntimeError('v43_name_coverage_counter_not_loaded')
                 heavy = portal_resource_guard_v27._heavy_loaded()
                 if heavy:
                     raise RuntimeError('heavy_modules_loaded_on_portal:' + ','.join(heavy))
                 guard.mark_ready()
-                print(f'RX_PORTAL_V43_EXTENSION=loaded_deferred routes:{len(ready)} snapshot:on single_surface:on advanced_search:on names:on', flush=True)
+                print(f'RX_PORTAL_V43_EXTENSION=loaded_deferred routes:{len(ready)} snapshot:on single_surface:on advanced_search:on names:on coverage:on version:{portal_v8.APP_PORTAL_VERSION}', flush=True)
             except Exception as exc:
                 if guard is not None:
                     try: guard.mark_failed(exc)
