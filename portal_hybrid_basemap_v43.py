@@ -56,6 +56,8 @@ body.rx43-dossier-open .rx-basemap-switch{display:none!important}
 
 html = html.replace('</body>', POLISH + '</body>')
 portal_v8.PORTAL_HTML = html
-portal_v8.APP_PORTAL_VERSION = '0.43.9-v43-snapshot-first'
+# Keep the canonical V43 release identity until final V43 closure; the marker above
+# identifies the basemap sub-release without breaking existing release gates.
+portal_v8.APP_PORTAL_VERSION = '0.43.8-v43-snapshot-first'
 
 print('RX_HYBRID_BASEMAP_V43=V43_9_satellite_default_street_toggle_esri_labels_transport', flush=True)
