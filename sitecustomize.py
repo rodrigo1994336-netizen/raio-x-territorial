@@ -60,8 +60,6 @@ def _load_portal_deferred():
                 import portal_rare_earth_locator_upgrade  # noqa: F401
                 import portal_rare_earth_symbols  # noqa: F401
 
-                # Route-bearing legacy modules remain registered. Their historical
-                # presentation layers are superseded by the V43 canonical layers.
                 import portal_property_tabs  # noqa: F401
                 import portal_live_fix_v18  # noqa: F401
                 import portal_smart_search  # noqa: F401
@@ -81,11 +79,11 @@ def _load_portal_deferred():
                 import portal_advanced_name_v40  # noqa: F401
                 import portal_incra_certified_v42  # noqa: F401
 
-                # V43 canonical experience: stable map, quiet visual and resilient city search.
                 import portal_experience_v43  # noqa: F401
                 import portal_map_stability_v43  # noqa: F401
                 import portal_map_polish_v43  # noqa: F401
                 import portal_search_resilient_v43  # noqa: F401
+                import portal_hybrid_basemap_v43  # noqa: F401
 
                 import portal_resource_guard_v27  # noqa: F401
                 import portal_feature_smoke  # noqa: F401
@@ -124,6 +122,8 @@ def _load_portal_deferred():
                     raise RuntimeError('v43_7_search_auto_not_loaded')
                 if 'RX_REPORT_IDENTITY_V43_8' not in portal_v8.PORTAL_HTML:
                     raise RuntimeError('v43_8_named_report_action_not_loaded')
+                if 'RX_HYBRID_BASEMAP_V43_9' not in portal_v8.PORTAL_HTML:
+                    raise RuntimeError('v43_9_hybrid_basemap_not_loaded')
                 if 'window.rxVisibleCarCountV43' not in portal_v8.PORTAL_HTML:
                     raise RuntimeError('v43_name_coverage_counter_not_loaded')
                 advanced_routes = [r for r in portal_v8.app.router.routes if getattr(r, 'path', None) == '/v1/live/search/advanced']
@@ -133,7 +133,7 @@ def _load_portal_deferred():
                 if heavy:
                     raise RuntimeError('heavy_modules_loaded_on_portal:' + ','.join(heavy))
                 guard.mark_ready()
-                print(f'RX_PORTAL_V43_EXTENSION=loaded_deferred routes:{len(ready)} snapshot:on single_surface:on advanced_search:on search_resilient:on names:on osm_names:on coverage:on map_stability:on map_polish:on named_pdf:on version:{portal_v8.APP_PORTAL_VERSION}', flush=True)
+                print(f'RX_PORTAL_V43_EXTENSION=loaded_deferred routes:{len(ready)} snapshot:on single_surface:on advanced_search:on search_resilient:on names:on osm_names:on coverage:on map_stability:on map_polish:on hybrid_basemap:on named_pdf:on version:{portal_v8.APP_PORTAL_VERSION}', flush=True)
             except Exception as exc:
                 if guard is not None:
                     try:
