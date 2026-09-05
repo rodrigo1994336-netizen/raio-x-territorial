@@ -84,6 +84,7 @@ def _load_portal_deferred():
                 # V43 is the single canonical experience layer. Do not re-add the
                 # retired visual wrappers (V13/V20/V23/V35/V36/V37/V38/V40).
                 import portal_experience_v43  # noqa: F401
+                import portal_map_stability_v43  # noqa: F401
 
                 import portal_resource_guard_v27  # noqa: F401
                 import portal_feature_smoke  # noqa: F401
@@ -110,15 +111,17 @@ def _load_portal_deferred():
                         raise RuntimeError('missing_portal_route:' + required)
                 if 'RX_EXPERIENCE_V43' not in portal_v8.PORTAL_HTML:
                     raise RuntimeError('v43_experience_not_loaded')
-                if not str(portal_v8.APP_PORTAL_VERSION).startswith('0.43.'):
-                    raise RuntimeError('v43_release_identity_not_loaded')
+                if str(portal_v8.APP_PORTAL_VERSION) != '0.43.5-v43-snapshot-first':
+                    raise RuntimeError('v43_5_release_identity_not_loaded')
+                if 'RX_MAP_STABILITY_V43_5' not in portal_v8.PORTAL_HTML:
+                    raise RuntimeError('v43_5_map_stability_not_loaded')
                 if 'window.rxVisibleCarCountV43' not in portal_v8.PORTAL_HTML:
                     raise RuntimeError('v43_name_coverage_counter_not_loaded')
                 heavy = portal_resource_guard_v27._heavy_loaded()
                 if heavy:
                     raise RuntimeError('heavy_modules_loaded_on_portal:' + ','.join(heavy))
                 guard.mark_ready()
-                print(f'RX_PORTAL_V43_EXTENSION=loaded_deferred routes:{len(ready)} snapshot:on single_surface:on advanced_search:on names:on coverage:on version:{portal_v8.APP_PORTAL_VERSION}', flush=True)
+                print(f'RX_PORTAL_V43_EXTENSION=loaded_deferred routes:{len(ready)} snapshot:on single_surface:on advanced_search:on names:on coverage:on map_stability:on version:{portal_v8.APP_PORTAL_VERSION}', flush=True)
             except Exception as exc:
                 if guard is not None:
                     try: guard.mark_failed(exc)
