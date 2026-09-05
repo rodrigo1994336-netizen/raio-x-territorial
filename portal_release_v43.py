@@ -4,7 +4,7 @@ import portal_v8
 
 # Production identity must describe the experience actually served, not the
 # historical portal_v8 base module that V43 composes underneath.
-portal_v8.APP_PORTAL_VERSION = '0.43.1-v43-snapshot-first'
+portal_v8.APP_PORTAL_VERSION = '0.43.2-v43-snapshot-first'
 
 html = portal_v8.PORTAL_HTML
 _name_count_marker = "setMapState(`${d.features?.length||0} imóvel(is) CAR carregado(s) nesta área"
@@ -19,6 +19,18 @@ html = html.replace(
     1,
 )
 
+# Do not ask for geolocation permission as soon as the application opens.
+# The map must be usable first; location is an explicit user action.
+_auto_locate = "setTimeout(locateUser,350)"
+if _auto_locate not in html:
+    raise RuntimeError('v43_auto_geolocation_injection_point_missing')
+html = html.replace(
+    _auto_locate,
+    "setMapState('Busque um município, mova o mapa ou use “Minha localização”.');setTimeout(()=>loadVisibleParcels(false),420)",
+    1,
+)
+
 portal_v8.PORTAL_HTML = html
 
-print('RX_RELEASE_V43=0.43.1_snapshot_first_name_coverage_ready', flush=True)
+print('RX_RELEASE_V43=0.43.2_snapshot_first_name_coverage_explicit_geolocation', flush=True)
+print('RX_GEOLOCATION_V43=explicit_user_action_only', flush=True)
