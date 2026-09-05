@@ -1,0 +1,104 @@
+name: Raio-X V43.8.1 Postdeploy Validation
+
+on:
+  push:
+    branches: [ v43-8-postdeploy-validation ]
+
+permissions:
+  contents: read
+
+jobs:
+  production:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      PORTAL: https://raio-x-territorial-app.onrender.com
+      CAR: MG-3120904-E0C91FE86A3646D5AFA40786D6C554A9
+      CONFLICT: MG-3120904-DB15158579EB4E07A0FE7ABFD922C7D3
+    steps:
+      - name: Validate live identity and map names
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          python - <<'PY'
+          import json,os,urllib.parse,urllib.request
+          P=os.environ['PORTAL'];C=os.environ['CAR'];X=os.environ['CONFLICT']
+          def get(path):
+            req=urllib.request.Request(P+path,headers={'User-Agent':'RX-V43.8.1-Postdeploy'})
+            with urllib.request.urlopen(req,timeout=45) as r:return json.load(r)
+          a=get('/v1/live/property-identity/'+C);b=get('/v1/live/property-identity/'+X)
+          q=urllib.parse.urlencode({'west':-44.72,'south':-19.22,'east':-44.62,'north':-19.12,'limit':60,'diagnostic':'true','car_visible':40})
+          n=get('/v1/live/property-names/viewport?'+q);cov=n.get('coverage') or {}
+          print('POSITIVE',json.dumps(a,ensure_ascii=False));print('CONFLICT',json.dumps(b,ensure_ascii=False));print('COVERAGE',json.dumps(cov,ensure_ascii=False))
+          assert a.get('name')=='Fazenda Barrinha' and a.get('method')=='audited_osm_point_inside_car',a
+          assert b.get('name') is None and b.get('osm_conflict') is True,b
+          assert any(x.get('name')=='Fazenda Barrinha' for x in n.get('items') or []),n
+          assert int(cov.get('audited_seed_names_returned') or 0)>0,cov
+          assert float(cov.get('elapsed_ms') or 99999)<5000,cov
+          open('evidence/live.json','w').write(json.dumps({'positive':a,'conflict':b,'names':n},ensure_ascii=False,indent=2))
+          PY
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install Chromium
+        run: |
+          pip install playwright
+          python -m playwright install --with-deps chromium
+      - name: Validate dossier desktop and mobile
+        run: |
+          cat > /tmp/browser.py <<'PY'
+          import asyncio,json,os
+          from playwright.async_api import async_playwright
+          P=os.environ['PORTAL'];C=os.environ['CAR']
+          async def one(b,w,h,label,mobile):
+            ctx=await b.new_context(viewport={'width':w,'height':h},is_mobile=mobile);page=await ctx.new_page();errors=[];bad=[]
+            page.on('pageerror',lambda e:errors.append(str(e)[:250]))
+            page.on('response',lambda r:bad.append(r.url) if r.status==422 and ('/v1/live/sicar/viewport' in r.url or '/v1/live/property-names/viewport' in r.url) else None)
+            await page.goto(P,wait_until='domcontentloaded',timeout=60000);await page.wait_for_function('window.showProperty && window.map',timeout=30000)
+            snap=await page.evaluate("async c=>await (await fetch('/v1/live/snapshot/'+encodeURIComponent(c))).json()",C)
+            prop={'car_code':C,'municipality':snap.get('municipality'),'uf':snap.get('uf'),'area_ha':snap.get('area_ha'),'status':snap.get('car_status'),'condition':snap.get('condition'),'type':snap.get('property_type')}
+            await page.evaluate('x=>showProperty(x.p,x.g)',{'p':prop,'g':snap.get('geometry')});await page.wait_for_function("document.querySelector('#rx43Name')?.textContent.includes('Fazenda Barrinha')",timeout=30000)
+            await page.evaluate("window.__opened=[];window.open=u=>{window.__opened.push(u);return null}");await page.click('#rx43Pdf');opened=await page.evaluate('window.__opened')
+            assert opened and '/v1/mobile/report/open/' in opened[-1],opened
+            before=await page.evaluate('()=>({lat:map.getCenter().lat,lng:map.getCenter().lng,z:map.getZoom()})');await page.screenshot(path=f'evidence/{label}_dossier.png',full_page=True)
+            await page.click('#back');await page.wait_for_function("!document.body.classList.contains('rx43-dossier-open')",timeout=10000);after=await page.evaluate('()=>({lat:map.getCenter().lat,lng:map.getCenter().lng,z:map.getZoom()})')
+            assert abs(before['lat']-after['lat'])<1e-7 and abs(before['lng']-after['lng'])<1e-7 and before['z']==after['z'],(before,after)
+            assert not errors,errors;assert not bad,bad
+            print(label.upper(),json.dumps({'opened':opened[-1],'before':before,'after':after},ensure_ascii=False));await ctx.close()
+          async def main():
+            async with async_playwright() as p:
+              b=await p.chromium.launch(headless=True);await one(b,1440,900,'desktop',False);await one(b,390,844,'mobile',True);await b.close()
+          asyncio.run(main())
+          PY
+          python /tmp/browser.py | tee evidence/browser.txt
+      - name: Generate and verify named report
+        run: |
+          set -euo pipefail
+          curl -fsS --max-time 30 -X POST "$PORTAL/v1/mobile/report/prepare/$CAR" | tee evidence/prepare.json
+          for i in $(seq 1 85); do
+            curl -fsS --max-time 25 "$PORTAL/v1/mobile/report/status/$CAR" > evidence/status.json
+            STATE=$(python -c "import json;print(json.load(open('evidence/status.json')).get('state',''))")
+            NAME=$(python -c "import json;print(json.load(open('evidence/status.json')).get('property_name') or '')")
+            echo "REPORT_STATUS $i $STATE $NAME"
+            [ "$STATE" = ready ] && break
+            [ "$STATE" = failed ] && { cat evidence/status.json; exit 1; }
+            sleep 3
+          done
+          python - <<'PY'
+          import json
+          d=json.load(open('evidence/status.json'));assert d.get('state')=='ready',d;assert d.get('property_name')=='Fazenda Barrinha',d;assert int(d.get('bytes') or 0)>100000,d
+          print('REPORT_READY',d.get('elapsed_ms'),d.get('bytes'),d.get('property_name'))
+          PY
+          curl -fLsS --max-time 90 "$PORTAL/v1/mobile/report/open/$CAR" -o evidence/fazenda_barrinha.pdf
+          test $(stat -c%s evidence/fazenda_barrinha.pdf) -gt 100000
+          pdftotext -f 1 -l 1 evidence/fazenda_barrinha.pdf evidence/page1.txt
+          grep -qi 'Fazenda Barrinha' evidence/page1.txt
+          pdftoppm -f 1 -singlefile -png -r 120 evidence/fazenda_barrinha.pdf evidence/report_page1 >/dev/null 2>&1
+          echo PAGE1; cat evidence/page1.txt
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: raio-x-v43-8-1-postdeploy-validation
+          path: evidence/
+          retention-days: 14
