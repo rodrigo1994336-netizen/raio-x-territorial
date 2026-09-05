@@ -28,7 +28,7 @@ def _load_report_v22_after_report_api():
         time.sleep(0.05)
 
 
-def _load_portal_v21():
+def _load_portal_v23():
     if not IS_PORTAL:
         return
     for _ in range(320):
@@ -63,19 +63,20 @@ def _load_portal_v21():
                 import portal_nationwide_v21  # noqa: F401
                 import portal_legacy_source_cleanup  # noqa: F401
                 import portal_mobile_dossier_v20  # noqa: F401
+                import portal_human_reading_v23  # noqa: F401
                 import portal_pdf_v21  # noqa: F401
                 import portal_feature_smoke  # noqa: F401
                 import portal_map_smoke  # noqa: F401
                 import car_resolver_smoke  # noqa: F401
-                print('RX_PORTAL_V21_EXTENSION=loaded_deferred',flush=True)
+                print('RX_PORTAL_V23_EXTENSION=loaded_deferred',flush=True)
             except Exception as exc:
-                print(f'RX_PORTAL_V21_EXTENSION=failed:{type(exc).__name__}:{str(exc)[:300]}',flush=True)
+                print(f'RX_PORTAL_V23_EXTENSION=failed:{type(exc).__name__}:{str(exc)[:300]}',flush=True)
             return
         time.sleep(0.05)
-    print('RX_PORTAL_V21_EXTENSION=timeout_waiting_portal_api',flush=True)
+    print('RX_PORTAL_V23_EXTENSION=timeout_waiting_portal_api',flush=True)
 
 
 if IS_PORTAL:
-    threading.Thread(target=_load_portal_v21,daemon=True).start()
+    threading.Thread(target=_load_portal_v23,daemon=True).start()
 else:
     threading.Thread(target=_load_report_v22_after_report_api,daemon=True).start()
