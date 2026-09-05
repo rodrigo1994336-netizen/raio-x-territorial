@@ -1,0 +1,97 @@
+name: Raio-X V43.6 Visual Smoke
+
+on:
+  push:
+    branches: [ v43-6-visual-smoke ]
+
+permissions:
+  contents: read
+
+jobs:
+  visual:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PORTAL: https://raio-x-territorial-app.onrender.com
+      CAR: MG-3120904-DFB380BECD7A4323AD8AA68FA14D011F
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install browser
+        run: |
+          pip install playwright
+          python -m playwright install --with-deps chromium
+      - name: Inspect V43.6 production
+        run: |
+          mkdir -p evidence
+          cat > /tmp/v43_6_visual.py <<'PY'
+          import asyncio, json, os
+          from pathlib import Path
+          from playwright.async_api import async_playwright
+
+          PORTAL=os.environ['PORTAL']; CAR=os.environ['CAR']
+
+          async def rect(page, sel):
+              return await page.evaluate("""sel=>{const e=document.querySelector(sel);if(!e)return null;const s=getComputedStyle(e),r=e.getBoundingClientRect();if(s.display==='none'||s.visibility==='hidden'||Number(s.opacity)===0||r.width<=0||r.height<=0)return null;return {x:r.x,y:r.y,w:r.width,h:r.height,right:r.right,bottom:r.bottom}}""", sel)
+
+          def overlap(a,b):
+              if not a or not b:return False
+              return not (a['right']<=b['x'] or b['right']<=a['x'] or a['bottom']<=b['y'] or b['bottom']<=a['y'])
+
+          async def probe(browser,name,w,h):
+              ctx=await browser.new_context(viewport={'width':w,'height':h})
+              page=await ctx.new_page(); errors=[]; bad=[]
+              page.on('pageerror',lambda e:errors.append(str(e)[:300]))
+              page.on('response',lambda r:bad.append({'status':r.status,'url':r.url}) if r.status==422 or r.status>=500 else None)
+              await page.goto(PORTAL,wait_until='domcontentloaded',timeout=60000)
+              await page.wait_for_selector('#map',state='visible',timeout=30000)
+              await page.wait_for_function("typeof map!=='undefined'&&!!map&&typeof L!=='undefined'",timeout=30000)
+              await page.evaluate("""async car=>{const r=await fetch('/v1/live/snapshot/'+encodeURIComponent(car));const d=await r.json();if(!r.ok||!d.geometry)throw new Error('snapshot geometry unavailable');const c=L.geoJSON(d.geometry).getBounds().getCenter();map.setView(c,14,{animate:false});map.fire('moveend')}""",CAR)
+              try: await page.wait_for_function("document.querySelectorAll('.leaflet-overlay-pane path').length>0",timeout=30000)
+              except Exception: pass
+              await page.wait_for_timeout(2500)
+              initial=await page.locator('.leaflet-overlay-pane path').count()
+              samples=await page.evaluate("""async()=>{const a=[],c=()=>document.querySelectorAll('.leaflet-overlay-pane path').length;a.push(c());map.panBy([90,0],{animate:false});for(let i=0;i<18;i++){await new Promise(r=>setTimeout(r,100));a.push(c())}map.panBy([-90,0],{animate:false});for(let i=0;i<18;i++){await new Promise(r=>setTimeout(r,100));a.push(c())}return a}""")
+              await page.wait_for_timeout(1000)
+              sels=['#rxLocateBtn','#rxFilterBtn','#rxMapLegend','#rxFarmNameSource','#rxContextLegend','.hint','.rx-rare-mode','.leaflet-control-zoom','.leaflet-control-attribution','.rx-map-state']
+              rects={s:await rect(page,s) for s in sels}
+              context_icons=await page.evaluate("""()=>[...document.querySelectorAll('.rx-context-icon')].filter(e=>{const s=getComputedStyle(e),r=e.getBoundingClientRect();return s.display!=='none'&&s.visibility!=='hidden'&&r.width>0&&r.height>0}).length""")
+              styles=await page.evaluate("""()=>[...new Set([...document.querySelectorAll('.leaflet-overlay-pane path')].map(e=>{const s=getComputedStyle(e);return [s.stroke,s.fill,s.strokeWidth,s.fillOpacity].join('|')}))].slice(0,10)""")
+              assert not rects['#rxMapLegend'] and not rects['#rxFarmNameSource'] and not rects['#rxContextLegend'] and not rects['.hint'],rects
+              assert context_icons==0,context_icons
+              if initial>0: assert all(v>0 for v in samples),samples
+              assert not errors,errors
+              assert not bad,bad
+              if name.startswith('mobile'):
+                  assert rects['#rxLocateBtn'] and rects['#rxFilterBtn'] and not overlap(rects['#rxLocateBtn'],rects['#rxFilterBtn']),rects
+                  await page.click('#rxFilterBtn'); await page.wait_for_timeout(300)
+                  p=await rect(page,'.rx-filter-panel')
+                  assert p and p['x']>=0 and p['right']<=w+1 and p['y']>=0 and p['bottom']<=h+1,p
+                  assert not overlap(p,rects['#rxLocateBtn']) and not overlap(p,rects['#rxFilterBtn']),p
+                  await page.screenshot(path=f'evidence/{name}_filter.png',full_page=True)
+                  await page.click('#rxFilterBtn')
+              await page.screenshot(path=f'evidence/{name}.png',full_page=True)
+              out={'name':name,'viewport':[w,h],'initial_paths':initial,'sample_min':min(samples) if samples else None,'sample_max':max(samples) if samples else None,'zero_samples':sum(v==0 for v in samples),'context_icons':context_icons,'styles':styles,'rects':rects,'errors':errors,'bad':bad}
+              await ctx.close(); return out
+
+          async def main():
+              async with async_playwright() as p:
+                  b=await p.chromium.launch(headless=True)
+                  sizes=[('mobile_390',390,844),('tablet_portrait',834,1194),('tablet_landscape',1194,834),('desktop',1440,900)]
+                  results=[await probe(b,*x) for x in sizes]
+                  await b.close()
+              Path('evidence/result.json').write_text(json.dumps(results,ensure_ascii=False,indent=2))
+              print('RX_V43_6_VISUAL='+json.dumps(results,ensure_ascii=False))
+
+          asyncio.run(main())
+          PY
+          python /tmp/v43_6_visual.py
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: raio-x-v43-6-visual-smoke
+          path: evidence/
+          retention-days: 14
