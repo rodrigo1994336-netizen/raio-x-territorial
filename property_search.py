@@ -6,12 +6,14 @@ from urllib.parse import urlencode
 
 from fastapi import HTTPException
 from shapely.geometry import shape
+from pyproj import Geod
 
 import portal_v8
 from deploy_app import SIGEF_MIRROR, _curl
 from car_resilient import fetch_car_live_resilient, CAR_RE
 
 app=portal_v8.app
+GEOD=Geod(ellps='GRS80')
 
 
 def _safe_term(v:str)->str:
@@ -29,12 +31,12 @@ def _sigef_search_sync(term:str,limit:int=20):
     if not raw.get('ok'):return {'ok':False,'source':'SIGEF/INCRA — espelho público IBAMA/PAMGIA','detail':raw.get('detail') or raw.get('preview')}
     data=raw.get('json') or {};features=data.get('features') or [];items=[]
     for f in features:
-        props=f.get('properties') or {};geom=f.get('geometry')
-        center=None
+        props=f.get('properties') or {};geom=f.get('geometry');center=None;area_ha=None
         try:
-            c=shape(geom).centroid;center={'lat':float(c.y),'lon':float(c.x)}
+            g=shape(geom);c=g.centroid;center={'lat':float(c.y),'lon':float(c.x)}
+            area_ha=abs(GEOD.geometry_area_perimeter(g)[0])/10000.0
         except Exception:pass
-        items.append({'type':'sigef','name':props.get('nome_area') or 'Área certificada SIGEF','municipality':props.get('municipio_'),'uf':props.get('uf_id'),'parcel_code':props.get('parcela_co'),'property_code':props.get('codigo_imo'),'registry':props.get('registro_m') or props.get('registro_d'),'status':props.get('status') or props.get('situacao_i'),'center':center,'geometry':geom,'source':'SIGEF/INCRA — espelho público'})
+        items.append({'type':'sigef','name':props.get('nome_area') or 'Área certificada SIGEF','municipality':props.get('municipio_'),'uf':props.get('uf_id'),'parcel_code':props.get('parcela_co'),'property_code':props.get('codigo_imo'),'registry':props.get('registro_m') or props.get('registro_d'),'status':props.get('status') or props.get('situacao_i'),'area_ha':round(area_ha,4) if area_ha is not None else None,'center':center,'geometry':geom,'source':'SIGEF/INCRA — espelho público'})
     return {'ok':True,'source':'SIGEF/INCRA — espelho público IBAMA/PAMGIA','items':items,'count':len(items)}
 
 
@@ -54,4 +56,4 @@ async def smart_property_search(q:str,limit:int=20):
     sig=await asyncio.to_thread(_sigef_search_sync,term,limit)
     return {'ok':sig.get('ok',False),'mode':'name_or_identifier','query':term,'items':sig.get('items') or [],'source':sig.get('source'),'detail':sig.get('detail'),'note':'Busca nominal usa campos públicos efetivamente expostos pelo SIGEF/espelho público. Titularidade por CPF/CNPJ só será habilitada por integração legalmente autorizada.'}
 
-print('RX_PROPERTY_SEARCH=farm_name_car_registry_sigef',flush=True)
+print('RX_PROPERTY_SEARCH=farm_name_car_registry_sigef_area',flush=True)
