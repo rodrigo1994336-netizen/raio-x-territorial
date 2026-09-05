@@ -4,7 +4,7 @@ import portal_v8
 
 # Production identity must describe the experience actually served, not the
 # historical portal_v8 base module that V43 composes underneath.
-portal_v8.APP_PORTAL_VERSION = '0.43.2-v43-snapshot-first'
+portal_v8.APP_PORTAL_VERSION = '0.43.3-v43-snapshot-first'
 
 html = portal_v8.PORTAL_HTML
 _name_count_marker = "setMapState(`${d.features?.length||0} imóvel(is) CAR carregado(s) nesta área"
@@ -32,5 +32,5 @@ html = html.replace(
 
 portal_v8.PORTAL_HTML = html
 
-print('RX_RELEASE_V43=0.43.2_snapshot_first_name_coverage_explicit_geolocation', flush=True)
+print('RX_RELEASE_V43=0.43.3_snapshot_first_name_coverage_observable_explicit_geolocation', flush=True)
 print('RX_GEOLOCATION_V43=explicit_user_action_only', flush=True)
