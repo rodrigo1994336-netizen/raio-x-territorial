@@ -1,3 +1,4 @@
+import importlib.util
 import os
 import sys
 import threading
@@ -5,16 +6,23 @@ import time
 
 IS_PORTAL = os.getenv('RX_RELEASE') == 'V8_OPERATIONAL_ZERO_COST'
 
+# sitecustomize is imported automatically by *every* Python process, including pip
+# during Render builds. Never import application modules until core dependencies are
+# already installed. This prevents build-time ModuleNotFoundError and concurrent
+# mutation of site-packages.
+CORE_RUNTIME_READY = all(importlib.util.find_spec(name) is not None for name in ('fastapi', 'httpx', 'shapely'))
+
 
 def _load_report_v24_after_report_api():
     if IS_PORTAL:
-        print('RX_REPORT_V24_RUNTIME=skipped_on_portal_service', flush=True)
         return
     for _ in range(320):
         mod = sys.modules.get('report_api')
         if mod is not None and hasattr(mod, 'app') and hasattr(mod, '_analyze_with_live_addons'):
             try:
                 import car_resilient  # noqa: F401
+                # Raster dependencies belong only to the heavy report worker. The
+                # bootstrap may prepare them at runtime, but never on the portal.
                 import rasterio_runtime_bootstrap
                 rasterio_runtime_bootstrap.ensure_rasterio()
                 import prodes_fast_v24  # noqa: F401
@@ -30,26 +38,11 @@ def _load_report_v24_after_report_api():
         time.sleep(0.05)
 
 
-def _optional_bootstraps():
-    for module_name, fn_name, label in (
-        ('postgres_runtime_bootstrap', 'ensure_postgres_driver', 'POSTGRES'),
-        ('redis_runtime_bootstrap', 'ensure_redis_driver', 'REDIS'),
-        ('jwt_runtime_bootstrap', 'ensure_jwt', 'JWT'),
-    ):
-        try:
-            mod = __import__(module_name)
-            getattr(mod, fn_name)()
-        except Exception as exc:
-            print(f'RX_OPTIONAL_{label}_BOOTSTRAP={type(exc).__name__}:{str(exc)[:180]}', flush=True)
-
-
 def _load_portal_v26_deferred():
-    """Open the HTTP port first; then assemble the full portal in the background.
+    """Keep HTTP startup independent from every optional integration.
 
-    V25 imported the entire portal from sitecustomize before Uvicorn could bind its
-    port. Any slow import or optional dependency could therefore cause a real 502.
-    V26 restores nonblocking startup and uses a boot guard to prevent users from
-    interacting with a half-ready interface.
+    No pip installer is called here. Missing optional drivers may degrade alerts or
+    persistence, but they can never prevent the public portal from binding its port.
     """
     if not IS_PORTAL:
         return
@@ -58,8 +51,8 @@ def _load_portal_v26_deferred():
         if mod is not None and hasattr(mod, 'PORTAL_HTML') and hasattr(mod, 'app'):
             guard = None
             try:
+                # Install the lightweight boot guard before importing extensions.
                 import portal_boot_guard_v26 as guard
-                threading.Thread(target=_optional_bootstraps, daemon=True).start()
 
                 import car_resilient  # noqa: F401
                 import parity_public_layers  # noqa: F401
@@ -108,7 +101,10 @@ def _load_portal_v26_deferred():
     print('RX_PORTAL_V26_EXTENSION=timeout_waiting_portal_api', flush=True)
 
 
-if IS_PORTAL:
-    threading.Thread(target=_load_portal_v26_deferred, daemon=True).start()
-else:
-    threading.Thread(target=_load_report_v24_after_report_api, daemon=True).start()
+# During Render's build, core dependencies do not exist yet and this file becomes a
+# true no-op. At runtime Uvicorn starts with dependencies already installed.
+if CORE_RUNTIME_READY:
+    if IS_PORTAL:
+        threading.Thread(target=_load_portal_v26_deferred, daemon=True).start()
+    else:
+        threading.Thread(target=_load_report_v24_after_report_api, daemon=True).start()
