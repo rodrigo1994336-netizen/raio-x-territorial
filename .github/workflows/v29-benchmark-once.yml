@@ -1,0 +1,56 @@
+name: Raio-X V29 Benchmark Evidence
+
+on:
+  push:
+    paths:
+      - '.github/workflows/v29-benchmark-once.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Measure V29 production
+        shell: bash
+        env:
+          WORKER: https://raio-x-territorial-report.onrender.com
+          CAR: MG-3120904-DFB380BECD7A4323AD8AA68FA14D011F
+        run: |
+          set +e
+          mkdir -p evidence
+          echo "benchmark_started=$(date -u +%FT%TZ)" | tee evidence/summary.txt
+          quick=$(curl -sS --max-time 20 -w '%{time_total}' "$WORKER/v1/live/quick/$CAR" -o evidence/quick.json)
+          echo "quick_seconds=$quick" | tee -a evidence/summary.txt
+          start=$(date +%s)
+          code=$(curl -sS --max-time 20 -o evidence/prepare.json -w '%{http_code}' -X POST "$WORKER/v1/reports/property/$CAR/prepare?property_name=V29%20Benchmark%20Fazenda")
+          echo "prepare_http=$code" | tee -a evidence/summary.txt
+          ready=0
+          for i in $(seq 1 75); do
+            curl -sS --max-time 12 "$WORKER/v1/reports/property/$CAR/status?property_name=V29%20Benchmark%20Fazenda" -o evidence/status.json
+            state=$(python -c "import json; print(json.load(open('evidence/status.json')).get('state',''))" 2>/dev/null)
+            echo "poll=$i state=$state"
+            if [ "$state" = "ready" ]; then ready=1; break; fi
+            if [ "$state" = "failed" ]; then break; fi
+            sleep 2
+          done
+          end=$(date +%s)
+          echo "first_pdf_wall_seconds=$((end-start))" | tee -a evidence/summary.txt
+          echo "pdf_ready=$ready" | tee -a evidence/summary.txt
+          if [ "$ready" = "1" ]; then
+            cached=$(curl -sS --max-time 25 -w '%{time_total}' "$WORKER/v1/reports/property/$CAR?property_name=V29%20Benchmark%20Fazenda" -o evidence/report.pdf)
+            echo "cached_open_seconds=$cached" | tee -a evidence/summary.txt
+            echo "pdf_bytes=$(wc -c < evidence/report.pdf)" | tee -a evidence/summary.txt
+          fi
+          echo "benchmark_finished=$(date -u +%FT%TZ)" | tee -a evidence/summary.txt
+          cat evidence/summary.txt
+          exit 0
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: raio-x-v29-benchmark-evidence
+          path: evidence/
+          retention-days: 7
