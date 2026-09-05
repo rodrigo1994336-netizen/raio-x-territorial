@@ -12,53 +12,41 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 8
     env:
-      PORTAL: https://raio-x-territorial-app.onrender.com
       SIGEF: https://pamgia.ibama.gov.br/server/rest/services/01_Publicacoes_Bases/lim_imovel_sigef_publico_a/FeatureServer/10/query
     steps:
-      - name: Compare direct SIGEF query with resolver
+      - name: Measure Curvelo SIGEF coverage
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p evidence
           python - <<'PY'
           import json, os, urllib.parse, urllib.request
-          portal=os.environ['PORTAL']; sigef=os.environ['SIGEF']
-          req=urllib.request.Request(portal+'/v1/live/search/advanced?uf=MG&municipality=Curvelo&limit=10',headers={'User-Agent':'Raio-X-V43.8-Diagnostic'})
-          with urllib.request.urlopen(req,timeout=70) as r: search=json.load(r)
-          item=(search.get('items') or [])[0]
-          geom=item['geometry']
-          def coords(x):
-              if isinstance(x,(list,tuple)):
-                  if len(x)>=2 and isinstance(x[0],(int,float)) and isinstance(x[1],(int,float)):
-                      yield float(x[0]),float(x[1])
-                  else:
-                      for y in x: yield from coords(y)
-          pts=list(coords(geom.get('coordinates') or [])); xs=[p[0] for p in pts]; ys=[p[1] for p in pts]
-          bbox=[min(xs),min(ys),max(xs),max(ys)]
-          envelope=','.join(map(str,bbox))
-          out=[]
-          for sr in ('4326','4674'):
-              p={'f':'geojson','where':'1=1','geometry':envelope,'geometryType':'esriGeometryEnvelope','inSR':sr,'spatialRel':'esriSpatialRelIntersects','outFields':'parcela_co,codigo_imo,nome_area,registro_m,registro_d,municipio_,uf_id,status,situacao_i','returnGeometry':'true','outSR':sr,'resultRecordCount':'80'}
-              url=sigef+'?'+urllib.parse.urlencode(p)
-              try:
-                  q=urllib.request.Request(url,headers={'User-Agent':'Raio-X-V43.8-Diagnostic'})
-                  with urllib.request.urlopen(q,timeout=45) as r: data=json.load(r)
-                  features=data.get('features') or []
-                  row={'sr':sr,'feature_count':len(features),'error':data.get('error'),'sample_names':[(f.get('properties') or {}).get('nome_area') for f in features[:10]],'url':url}
-              except Exception as e:
-                  row={'sr':sr,'error':type(e).__name__+':'+str(e)[:300],'feature_count':-1,'url':url}
-              out.append(row); print('DIRECT',json.dumps(row,ensure_ascii=False))
-          car=item['car_code']
-          req=urllib.request.Request(portal+'/v1/live/property-identity/'+urllib.parse.quote(car,safe=''),headers={'User-Agent':'Raio-X-V43.8-Diagnostic'})
-          with urllib.request.urlopen(req,timeout=45) as r: identity=json.load(r)
-          result={'car':car,'bbox':bbox,'direct':out,'identity':identity}
-          open('evidence/direct_sigef.json','w').write(json.dumps(result,ensure_ascii=False,indent=2))
-          print('IDENTITY',json.dumps(identity,ensure_ascii=False))
+          sigef=os.environ['SIGEF']
+          headers={'User-Agent':'Raio-X-V43.8-Diagnostic'}
+          def call(params):
+              url=sigef+'?'+urllib.parse.urlencode(params)
+              req=urllib.request.Request(url,headers=headers)
+              with urllib.request.urlopen(req,timeout=45) as r:return json.load(r),url
+          tests=[]
+          for label,where in (
+              ('all_curvelo','municipio_=3120904'),
+              ('named_curvelo',"municipio_=3120904 AND nome_area IS NOT NULL AND nome_area <> ''"),
+              ('all_layer','1=1'),
+          ):
+              data,url=call({'f':'json','where':where,'returnCountOnly':'true'})
+              row={'label':label,'where':where,'count':data.get('count'),'error':data.get('error'),'url':url}
+              tests.append(row);print('COUNT',json.dumps(row,ensure_ascii=False))
+          data,url=call({'f':'json','where':"municipio_=3120904 AND nome_area IS NOT NULL AND nome_area <> ''",'outFields':'objectid,parcela_co,codigo_imo,nome_area,registro_m,municipio_,uf_id,status,situacao_i','returnGeometry':'false','resultRecordCount':'50','orderByFields':'objectid ASC'})
+          feats=data.get('features') or []
+          samples=[f.get('attributes') or {} for f in feats]
+          print('SAMPLES',json.dumps(samples[:20],ensure_ascii=False))
+          out={'tests':tests,'sample_count':len(samples),'samples':samples}
+          open('evidence/curvelo_sigef_coverage.json','w').write(json.dumps(out,ensure_ascii=False,indent=2))
           PY
       - name: Upload evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: raio-x-v43-8-direct-sigef
+          name: raio-x-v43-8-curvelo-sigef-coverage
           path: evidence/
           retention-days: 14
