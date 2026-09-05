@@ -29,6 +29,8 @@ def _load_v8_after_portal():
             try:
                 import postgres_runtime_bootstrap
                 postgres_runtime_bootstrap.ensure_postgres_driver()
+                import redis_runtime_bootstrap
+                redis_runtime_bootstrap.ensure_redis_driver()
                 import jwt_runtime_bootstrap
                 threading.Thread(target=jwt_runtime_bootstrap.ensure_jwt,daemon=True).start()
                 import car_resilient  # noqa: F401
