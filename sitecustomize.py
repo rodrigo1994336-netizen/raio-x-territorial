@@ -81,6 +81,7 @@ def _load_portal_v40_deferred():
                 import portal_layout_guard_v37  # noqa: F401
                 import portal_premium_copy_v38  # noqa: F401
                 import portal_advanced_search_v39  # noqa: F401
+                import portal_advanced_name_v40  # noqa: F401
                 import portal_reliability_v40  # noqa: F401
                 import portal_resource_guard_v27  # noqa: F401
                 import portal_feature_smoke  # noqa: F401
@@ -104,7 +105,7 @@ def _load_portal_v40_deferred():
                 if heavy:
                     raise RuntimeError('heavy_modules_loaded_on_portal:' + ','.join(heavy))
                 guard.mark_ready()
-                print(f'RX_PORTAL_V40_EXTENSION=loaded_deferred routes:{len(ready)} advanced_search:on productive_profiles:on reliability:on names:on premium_ux:on', flush=True)
+                print(f'RX_PORTAL_V40_EXTENSION=loaded_deferred routes:{len(ready)} advanced_search:on name_registry:on productive_profiles:on reliability:on names:on premium_ux:on', flush=True)
             except Exception as exc:
                 if guard is not None:
                     try: guard.mark_failed(exc)
