@@ -10,7 +10,7 @@ permissions:
 jobs:
   identity:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 10
     env:
       RX_RELEASE: OFF
     steps:
@@ -18,7 +18,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: pip install fastapi httpx shapely pyproj uvicorn
+      - run: pip install fastapi httpx shapely pyproj pillow reportlab uvicorn "psycopg[binary]" "redis>=5,<7" "numpy>=2,<3" "rasterio>=1.4,<2" "PyJWT[crypto]>=2.10,<3"
       - name: Validate exact Curvelo OSM-name to CAR association
         run: |
           python - <<'PY'
