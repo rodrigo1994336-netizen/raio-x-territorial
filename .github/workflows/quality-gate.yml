@@ -3,6 +3,8 @@ name: Raio-X Quality Gate
 on:
   push:
     branches: [ main ]
+  pull_request:
+    branches: [ main ]
   workflow_dispatch:
 
 jobs:
@@ -20,17 +22,7 @@ jobs:
           pip install fastapi httpx shapely pyproj pillow reportlab uvicorn "psycopg[binary]" "redis>=5,<7" "numpy>=2,<3" "rasterio>=1.4,<2" "PyJWT[crypto]>=2.10,<3"
       - name: Compile Python modules
         run: |
-          python -m py_compile \
-            climate_nasa.py groundwater_siagas.py safras_ibge.py satellite_real.py soilgrids_wcs.py whatsapp_gateway.py \
-            sicar_detail_sources.py sicar_detail_sources_v2.py aerodromes_anac.py property_search.py property_identity_runtime.py property_names_viewport_v30.py map_context.py \
-            territorial_production.py portal_boot_guard_v26.py portal_resource_guard_v27.py portal_property_tabs.py portal_live_fix_v18.py portal_smart_search.py portal_map_context_symbols.py portal_mobile_v19.py portal_nationwide_v21.py portal_property_names_v30.py portal_field_mode_v31.py portal_map_visual_v32.py portal_territorial_production_v33.py portal_mining_resilience_v34.py portal_premium_ux_v35.py portal_premium_interactions_v36.py portal_layout_guard_v37.py portal_premium_copy_v38.py portal_advanced_search_v39.py portal_advanced_name_v40.py portal_reliability_v40.py portal_legacy_source_cleanup.py portal_mobile_dossier_v20.py portal_human_reading_v23.py portal_pdf_v21.py portal_action_runtime_v25.py \
-            portal_rare_earth_symbols.py portal_property_identity_v13.py report_book_style.py property_visual_plate_v25.py \
-            report_engine_v6.py report_engine_v7.py report_engine_v8.py rasterio_runtime_bootstrap.py redis_runtime_bootstrap.py sentinel_cog.py \
-            highres_reference.py street_level_access.py visual_hybrid.py terrain_srtm.py mapbiomas_coverage.py landuse_profile_v39.py heavy_live_api_v20.py \
-            prodes_fast_v24.py anm_fast_v29.py core_retry_fast_v29.py report_perf_v24.py report_extras_perf_v30.py report_truth_guard_v16.py report_pdf_cache_v21.py report_quick_v22.py live_report_adapter_v12.py live_report_adapter_v13.py \
-            live_report_adapter_v14.py live_report_adapter_v15.py live_report_adapter_v16.py live_report_adapter_v17.py live_report_adapter_v18.py report_visual_identity_v28.py \
-            github_oidc_auth.py jwt_runtime_bootstrap.py monitoring_store.py monitoring_routes.py alerts_routes.py \
-            report_v13_patch.py report_v14_patch.py report_v15_patch.py report_v16_patch.py report_v17_patch.py report_v18_patch.py sitecustomize.py
+          python -m compileall -q .
       - name: Import standalone engines
         env:
           RX_RELEASE: OFF
@@ -47,7 +39,7 @@ jobs:
           assert 'livestock_pasture' in p['profile_codes'] and 'soy' in p['profile_codes'] and 'mixed_agro' in p['profile_codes']
           print('RX_CI_IMPORT_OK')
           PY
-      - name: V40 portal reliability gate
+      - name: V43 portal simplification and reliability gate
         env:
           RX_RELEASE: V8_OPERATIONAL_ZERO_COST
           RX_PORTAL_RSS_BUDGET_MB: '220'
@@ -61,34 +53,52 @@ jobs:
           while time.time()<deadline and not portal_boot_guard_v26.STATE.get('ready') and not portal_boot_guard_v26.STATE.get('error'):
               time.sleep(.1)
           assert portal_boot_guard_v26.STATE.get('ready'), portal_boot_guard_v26.STATE
-          import portal_v8, portal_action_runtime_v25, portal_resource_guard_v27, portal_advanced_name_v40
+          import portal_v8, portal_action_runtime_v25, portal_resource_guard_v27
           paths={getattr(r,'path',None) for r in portal_v8.app.router.routes}
           missing=[x for x in portal_action_runtime_v25.REQUIRED_ROUTES if x not in paths]
           assert not missing, f'missing routes: {missing}'
-          for path in ('/v1/live/property-names/viewport','/sw.js','/v1/live/territorial-production/{car_code}','/v1/live/critical-minerals/{car_code}','/v1/live/search/advanced','/v1/live/search/landuse-profiles'):
-              assert path in paths, f'missing V40 route: {path}'
+          required_routes=(
+              '/v1/live/snapshot/{car_code}',
+              '/v1/live/property-identity/{car_code}',
+              '/v1/live/property-names/viewport',
+              '/v1/live/sicar/viewport',
+              '/v1/live/resolve',
+              '/sw.js',
+              '/v1/live/territorial-production/{car_code}',
+              '/v1/live/critical-minerals/{car_code}',
+              '/v1/live/search/advanced',
+              '/v1/live/search/landuse-profiles',
+          )
+          for path in required_routes:
+              assert path in paths, f'missing V43 route: {path}'
           assert sum(1 for r in portal_v8.app.router.routes if getattr(r,'path',None)=='/v1/live/search/advanced')==1
           html=portal_v8.PORTAL_HTML
-          required=('RX_ACTION_RUNTIME_V25','RX_PDF_V25','rxMobileFull','rxPropertyTabs','rxFilterBtn','rxBootGuard','RX_PROPERTY_NAMES_V40','RX_FIELD_MODE_V31','RX_MAP_VISUAL_V32','RX_TERRITORIAL_PRODUCTION_V33','RX_PREMIUM_UX_V35','RX_PREMIUM_INTERACTIONS_V36','RX_LAYOUT_GUARD_V37','RX_ADVANCED_SEARCH_V39','RX_RELIABILITY_V40','rxAdvTrigger','Pecuária / gado','Silvicultura','Aquicultura','__rxClimateCacheV35','__rxTabCacheV40','loadingV40','rx-dossier-open','rx-filter-open','rx-sheet-backdrop','rx-overflow-corrected')
+          required=(
+              'RX_EXPERIENCE_V43','SNAPSHOT DO IMÓVEL','VER ANÁLISE COMPLETA',
+              'body.rx43-dossier-open #map','rx43-dossier-open','rx43-full-requested',
+              'RX_ACTION_RUNTIME_V25','RX_FIELD_MODE_V31','RX_MAP_VISUAL_V32',
+              'RX_PROPERTY_NAMES_V40','RX_ADVANCED_SEARCH_V39','rxAdvTrigger',
+              'serviceWorker.register','rxParcelStyle','Produção rural',
+          )
           absent=[x for x in required if x not in html]
-          assert not absent, f'missing UI/action markers: {absent}'
-          assert 'body.rx-dossier-open #map' in html and 'z-index:10000' in html
-          assert 'rxPrefetchV40' in html and 'Não foi possível atualizar esta aba agora' in html
+          assert not absent, f'missing V43 UI/action markers: {absent}'
+          retired=(
+              'RX_PORTAL_IDENTITY_V18','RX_MOBILE_DOSSIER_V20','RX_HUMAN_READING_V23',
+              'RX_PREMIUM_UX_V35','RX_PREMIUM_INTERACTIONS_V36','RX_LAYOUT_GUARD_V37',
+              'RX_PREMIUM_COPY_V38','RX_RELIABILITY_V40','rxPrefetchV40','loadingV40',
+          )
+          leaked=[x for x in retired if x in html]
+          assert not leaked, f'retired UI leaked into V43: {leaked}'
+          assert 'setInterval(install,500);' not in html
+          assert 'Fontes pesadas não foram disparadas' in html
+          assert 'IMÓVEL RURAL — NOME NÃO CONFIRMADO' in html
           assert 'z<11' in html and 'span>1.50' in html
           assert all(uf in html for uf in ('AC','AM','BA','DF','GO','MG','MT','PA','PR','RS','SC','SP','TO'))
-          assert 'serviceWorker.register' in html
-          assert 'rxParcelStyle' in html
-          assert 'Produção e território' in html and 'Produção rural' in html
-          assert 'NÃO CONCLUÍDO' in html
-          assert '7 dias' in html and '30 dias' in html and '1 ano' in html
-          assert 'Atualizando período' in html
-          assert 'Montando a leitura inicial…' not in html
-          assert 'schedulePrepare' not in html
           heavy=portal_resource_guard_v27._heavy_loaded()
           assert not heavy, f'heavy modules leaked into portal: {heavy}'
           rss=portal_resource_guard_v27._rss_bytes()/1024/1024
           assert rss < 220, f'portal RSS too high in gate: {rss:.1f} MB'
-          print('RX_CI_PORTAL_V40_READY',len(paths),'rss_mb=',round(rss,1))
+          print('RX_CI_PORTAL_V43_READY',len(paths),'rss_mb=',round(rss,1))
           PY
       - name: V41 report bounded-latency and CAR-composition gate
         env:
@@ -107,7 +117,8 @@ jobs:
           assert "--max-time','7'" in a and "--retry','0'" in a
           assert 'anm_retry=skipped' in r and "query_anm_fast" not in r
           assert 'report_extras_perf_v30' in s
-          assert 'landuse_profile_v39' in s and 'portal_advanced_search_v39' in s and 'portal_advanced_name_v40' in s and 'portal_reliability_v40' in s
+          assert 'landuse_profile_v39' in s and 'portal_advanced_search_v39' in s and 'portal_advanced_name_v40' in s and 'portal_experience_v43' in s
+          assert 'portal_reliability_v40' not in s
           assert 'SIGEF/INCRA + SICAR spatial match' in Path('portal_advanced_name_v40.py').read_text()
           assert 'async def _read4' in sent and 'items[:2]' in sent and "'GDAL_HTTP_TIMEOUT':'9'" in sent
           assert 'httpx.Timeout(12,connect=5)' in hi
