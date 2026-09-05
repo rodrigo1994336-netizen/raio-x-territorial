@@ -81,11 +81,13 @@ def _load_portal_deferred():
                 import portal_advanced_name_v40  # noqa: F401
                 import portal_incra_certified_v42  # noqa: F401
 
-                # V43 canonical experience: stable map, quiet visual and resilient city search.
+                # V43 canonical experience: stable map, quiet visual, resilient search
+                # and a satellite-first hybrid basemap with an explicit street toggle.
                 import portal_experience_v43  # noqa: F401
                 import portal_map_stability_v43  # noqa: F401
                 import portal_map_polish_v43  # noqa: F401
                 import portal_search_resilient_v43  # noqa: F401
+                import portal_hybrid_basemap_v43  # noqa: F401
 
                 import portal_resource_guard_v27  # noqa: F401
                 import portal_feature_smoke  # noqa: F401
@@ -112,8 +114,8 @@ def _load_portal_deferred():
                         raise RuntimeError('missing_portal_route:' + required)
                 if 'RX_EXPERIENCE_V43' not in portal_v8.PORTAL_HTML:
                     raise RuntimeError('v43_experience_not_loaded')
-                if str(portal_v8.APP_PORTAL_VERSION) != '0.43.8-v43-snapshot-first':
-                    raise RuntimeError('v43_8_release_identity_not_loaded')
+                if str(portal_v8.APP_PORTAL_VERSION) != '0.43.9-v43-snapshot-first':
+                    raise RuntimeError('v43_9_release_identity_not_loaded')
                 if 'RX_MAP_STABILITY_V43_5' not in portal_v8.PORTAL_HTML:
                     raise RuntimeError('v43_5_map_stability_not_loaded')
                 if 'RX_MAP_POLISH_V43_6' not in portal_v8.PORTAL_HTML:
@@ -124,6 +126,8 @@ def _load_portal_deferred():
                     raise RuntimeError('v43_7_search_auto_not_loaded')
                 if 'RX_REPORT_IDENTITY_V43_8' not in portal_v8.PORTAL_HTML:
                     raise RuntimeError('v43_8_named_report_action_not_loaded')
+                if 'RX_HYBRID_BASEMAP_V43_9' not in portal_v8.PORTAL_HTML:
+                    raise RuntimeError('v43_9_hybrid_basemap_not_loaded')
                 if 'window.rxVisibleCarCountV43' not in portal_v8.PORTAL_HTML:
                     raise RuntimeError('v43_name_coverage_counter_not_loaded')
                 advanced_routes = [r for r in portal_v8.app.router.routes if getattr(r, 'path', None) == '/v1/live/search/advanced']
@@ -133,7 +137,7 @@ def _load_portal_deferred():
                 if heavy:
                     raise RuntimeError('heavy_modules_loaded_on_portal:' + ','.join(heavy))
                 guard.mark_ready()
-                print(f'RX_PORTAL_V43_EXTENSION=loaded_deferred routes:{len(ready)} snapshot:on single_surface:on advanced_search:on search_resilient:on names:on osm_names:on coverage:on map_stability:on map_polish:on named_pdf:on version:{portal_v8.APP_PORTAL_VERSION}', flush=True)
+                print(f'RX_PORTAL_V43_EXTENSION=loaded_deferred routes:{len(ready)} snapshot:on single_surface:on advanced_search:on search_resilient:on names:on osm_names:on coverage:on map_stability:on map_polish:on hybrid_basemap:on named_pdf:on version:{portal_v8.APP_PORTAL_VERSION}', flush=True)
             except Exception as exc:
                 if guard is not None:
                     try:
