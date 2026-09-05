@@ -11,53 +11,72 @@ jobs:
   identity:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      PORTAL: https://raio-x-territorial-app.onrender.com
     steps:
-      - name: Probe public identity sources for Curvelo
+      - name: Match named OSM farms to exact SICAR CAR polygons
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p evidence
           python - <<'PY'
-          import json, subprocess, urllib.parse, urllib.request
-          headers={'User-Agent':'Raio-X-V43.8-Diagnostic'}
-          # Official Curvelo bbox from Nominatim geocoding.
+          import concurrent.futures, json, os, urllib.error, urllib.parse, urllib.request
+          portal=os.environ['PORTAL']; headers={'User-Agent':'Raio-X-V43.8-Diagnostic'}
+          # Curvelo official bbox.
           nom='https://nominatim.openstreetmap.org/search?'+urllib.parse.urlencode({'q':'Curvelo, Minas Gerais, Brasil','format':'jsonv2','countrycodes':'br','limit':'5','addressdetails':'1'})
           with urllib.request.urlopen(urllib.request.Request(nom,headers=headers),timeout=30) as r: rows=json.load(r)
           chosen=next(x for x in rows if 'minas gerais' in str((x.get('address') or {}).get('state') or '').lower() or str((x.get('address') or {}).get('ISO3166-2-lvl4') or '').upper()=='BR-MG')
-          south,north,west,east=map(float,chosen['boundingbox']); bbox=[west,south,east,north]
-          out={'bbox':bbox}
-
-          # INCRA Acervo Fundiario official WFS: check whether it is reachable outside Render.
-          base='https://acervofundiario.incra.gov.br/i3geo/ogc.php'
-          cap=base+'?'+urllib.parse.urlencode({'tema':'imoveiscertificados_privado_mg','service':'WFS','request':'GetCapabilities'})
-          p=subprocess.run(['curl','-k','-sS','-L','--connect-timeout','8','--max-time','25','-A','Raio-X-V43.8-Diagnostic',cap],capture_output=True,text=True)
-          out['incra']={'returncode':p.returncode,'bytes':len(p.stdout.encode()),'stderr':p.stderr[:300],'preview':p.stdout[:500]}
-          print('INCRA',json.dumps(out['incra'],ensure_ascii=False))
-
-          # OSM/Overpass named rural features, as a public fallback candidate source.
+          south,north,west,east=map(float,chosen['boundingbox'])
           q=f'''[out:json][timeout:35];(nwr["name"]["place"="farm"]({south},{west},{north},{east});nwr["name"]["landuse"="farmyard"]({south},{west},{north},{east});nwr["name"]["landuse"="farmland"]({south},{west},{north},{east}););out center tags 300;'''
           body=urllib.parse.urlencode({'data':q}).encode()
           req=urllib.request.Request('https://overpass-api.de/api/interpreter',data=body,headers={'User-Agent':'Raio-X-V43.8-Diagnostic','Content-Type':'application/x-www-form-urlencoded'})
-          try:
-              with urllib.request.urlopen(req,timeout=60) as r: osm=json.load(r)
-              elems=osm.get('elements') or []
-              named=[]
-              for e in elems:
-                  tags=e.get('tags') or {}; name=str(tags.get('name') or '').strip()
-                  if not name: continue
-                  c=e.get('center') or {'lat':e.get('lat'),'lon':e.get('lon')}
-                  named.append({'type':e.get('type'),'id':e.get('id'),'name':name,'lat':c.get('lat'),'lon':c.get('lon'),'place':tags.get('place'),'landuse':tags.get('landuse'),'source':'OpenStreetMap'})
-              out['osm']={'count':len(named),'sample':named[:100]}
-          except Exception as e:
-              out['osm']={'error':type(e).__name__+':'+str(e)[:300],'count':-1,'sample':[]}
-          print('OSM_COUNT',out['osm'].get('count'))
-          print('OSM_SAMPLE',json.dumps(out['osm'].get('sample',[])[:30],ensure_ascii=False))
-          open('evidence/curvelo_public_name_sources.json','w').write(json.dumps(out,ensure_ascii=False,indent=2))
+          with urllib.request.urlopen(req,timeout=65) as r: osm=json.load(r)
+          candidates=[]
+          for e in osm.get('elements') or []:
+              tags=e.get('tags') or {}; name=' '.join(str(tags.get('name') or '').split())
+              if not name: continue
+              c=e.get('center') or {'lat':e.get('lat'),'lon':e.get('lon')}
+              lat,lon=c.get('lat'),c.get('lon')
+              if lat is None or lon is None: continue
+              candidates.append({'osm_type':e.get('type'),'osm_id':e.get('id'),'name':name,'lat':float(lat),'lon':float(lon),'place':tags.get('place'),'landuse':tags.get('landuse')})
+          print('OSM_CANDIDATES',len(candidates))
+          def resolve(x):
+              u=portal+'/v1/live/resolve?'+urllib.parse.urlencode({'lat':x['lat'],'lon':x['lon']})
+              try:
+                  req=urllib.request.Request(u,headers=headers)
+                  with urllib.request.urlopen(req,timeout=30) as r: d=json.load(r)
+                  prop=d.get('property') or {}; car=prop.get('car_code')
+                  return {**x,'resolved':bool(car),'car_code':car,'municipality':prop.get('municipality'),'uf':prop.get('uf'),'area_ha':prop.get('area_ha'),'candidate_count':d.get('candidate_count'),'exact_count':d.get('exact_count')}
+              except urllib.error.HTTPError as e:
+                  return {**x,'resolved':False,'http':e.code}
+              except Exception as e:
+                  return {**x,'resolved':False,'error':type(e).__name__+':'+str(e)[:160]}
+          with concurrent.futures.ThreadPoolExecutor(max_workers=5) as ex:
+              rows=list(ex.map(resolve,candidates))
+          matched=[x for x in rows if x.get('resolved')]
+          # Only Curvelo CARs are eligible; nearby municipality spillover is rejected.
+          matched=[x for x in matched if str(x.get('municipality') or '').strip().lower()=='curvelo' and str(x.get('uf') or '').upper()=='MG']
+          by={}
+          for x in matched: by.setdefault(x['car_code'],[]).append(x)
+          safe=[]; conflicts=[]
+          for car,items in by.items():
+              names=sorted({x['name'].casefold():x['name'] for x in items}.values(),key=str.casefold)
+              if len(names)==1:
+                  safe.append({'car_code':car,'name':names[0],'area_ha':items[0].get('area_ha'),'evidence_count':len(items),'osm':[{'type':x['osm_type'],'id':x['osm_id'],'lat':x['lat'],'lon':x['lon'],'place':x.get('place'),'landuse':x.get('landuse')} for x in items]})
+              else:
+                  conflicts.append({'car_code':car,'names':names,'items':items})
+          safe.sort(key=lambda x:(-x['evidence_count'],x['name']))
+          out={'osm_candidates':len(candidates),'resolved_points':len(matched),'unique_cars':len(by),'safe_single_name_cars':len(safe),'conflicting_cars':len(conflicts),'safe':safe,'conflicts':conflicts,'rows':rows}
+          print('MATCH_SUMMARY',json.dumps({k:out[k] for k in ('osm_candidates','resolved_points','unique_cars','safe_single_name_cars','conflicting_cars')},ensure_ascii=False))
+          print('SAFE_MATCHES',json.dumps(safe[:30],ensure_ascii=False))
+          print('CONFLICTS',json.dumps(conflicts[:10],ensure_ascii=False))
+          open('evidence/curvelo_osm_car_matches.json','w').write(json.dumps(out,ensure_ascii=False,indent=2))
+          assert len(safe)>0,'no exact OSM farm name -> Curvelo CAR match found'
           PY
       - name: Upload evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: raio-x-v43-8-public-name-sources
+          name: raio-x-v43-8-osm-car-matches
           path: evidence/
           retention-days: 14
