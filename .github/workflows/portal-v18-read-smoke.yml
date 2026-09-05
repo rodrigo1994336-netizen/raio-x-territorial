@@ -1,0 +1,67 @@
+name: Raio-X Portal V18 Read Smoke
+
+on:
+  push:
+    paths:
+      - '.github/workflows/portal-v18-read-smoke.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      BASE: https://raio-x-territorial-app.onrender.com
+      CAR: MG-3120904-DFB380BECD7A4323AD8AA68FA14D011F
+    steps:
+      - name: Wait for portal
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 36); do
+            if curl -fsS --max-time 20 "$BASE/v1/monitoring/status" >/dev/null; then break; fi
+            sleep 10
+          done
+      - name: Read public V18 endpoints
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p smoke
+          curl -fsS --retry 3 --max-time 30 "$BASE/v1/monitoring/status" | tee smoke/monitoring_status.json
+          curl -fsS --retry 3 --max-time 30 "$BASE/v1/alerts/summary" | tee smoke/alerts_summary.json
+          curl -fsS --retry 2 --max-time 90 "$BASE/v1/live/property-identity/$CAR" | tee smoke/identity.json
+          curl -fsS --retry 2 --max-time 150 "$BASE/v1/live/groundwater/$CAR?radius_km=20" | tee smoke/groundwater.json
+          curl -fsS --retry 2 --max-time 180 "$BASE/v1/live/critical-minerals/$CAR" | tee smoke/mining.json
+          curl -fsS --retry 2 --max-time 210 "$BASE/v1/live/agropecuaria/$CAR" | tee smoke/agro.json
+      - name: Assert operational state
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          rd=lambda n:json.load(open('smoke/'+n+'.json'))
+          st=rd('monitoring_status'); al=rd('alerts_summary'); ident=rd('identity'); water=rd('groundwater'); mining=rd('mining'); agro=rd('agro')
+          assert st.get('ok') is True, st
+          assert st.get('backend') in ('redis','postgres'), st
+          assert st.get('persistence') in ('operational_nonpersistent','durable'), st
+          assert al.get('ok') is True, al
+          assert ident.get('ok') is True, ident
+          assert water.get('ok') is True, water
+          assert mining.get('ok') is True, mining
+          assert agro.get('ok') is True, agro
+          assert 'pasture' in agro, agro
+          print('MONITOR',st.get('backend'),st.get('persistence'))
+          print('IDENTITY',ident.get('name'),ident.get('method'))
+          print('WATER',water.get('well_count'),water.get('source'))
+          print('MINING',mining.get('state'),mining.get('anm_available'),mining.get('sgb_available'))
+          print('AGRO',agro.get('state'),(agro.get('pasture') or {}).get('pasture_area_ha'),(agro.get('pasture') or {}).get('pasture_share_pct'))
+          PY
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: raio-x-portal-v18-read-smoke
+          path: smoke/
+          retention-days: 14
