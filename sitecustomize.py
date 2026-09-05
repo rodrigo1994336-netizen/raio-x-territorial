@@ -37,6 +37,7 @@ def _load_v8_after_portal():
                 import portal_sicar_resilient  # noqa: F401
                 import portal_car_resilient  # noqa: F401
                 import property_search  # noqa: F401
+                import property_identity_runtime  # noqa: F401
                 import map_context  # noqa: F401
                 import portal_progressive  # noqa: F401
                 import portal_alerts  # noqa: F401
