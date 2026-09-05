@@ -8,7 +8,7 @@ IS_PORTAL = os.getenv('RX_RELEASE') == 'V8_OPERATIONAL_ZERO_COST'
 CORE_RUNTIME_READY = all(importlib.util.find_spec(name) is not None for name in ('fastapi', 'httpx', 'shapely'))
 
 
-def _load_report_v30_after_report_api():
+def _load_report_after_report_api():
     if IS_PORTAL:
         return
     for _ in range(320):
@@ -29,14 +29,14 @@ def _load_report_v30_after_report_api():
                 import heavy_live_api_v20  # noqa: F401
                 import report_pdf_cache_v21  # noqa: F401
                 import report_quick_v22  # noqa: F401
-                print('RX_REPORT_V40_RUNTIME=loaded_deferred anm_retry:off extras_timing:on landuse_batch:on', flush=True)
+                print('RX_REPORT_V41_RUNTIME=loaded_deferred anm_retry:off extras_bounded:on sicar_parallel:on landuse_batch:on', flush=True)
             except Exception as exc:
-                print(f'RX_REPORT_V40_RUNTIME=failed:{type(exc).__name__}:{str(exc)[:300]}', flush=True)
+                print(f'RX_REPORT_V41_RUNTIME=failed:{type(exc).__name__}:{str(exc)[:300]}', flush=True)
             return
         time.sleep(0.05)
 
 
-def _load_portal_v40_deferred():
+def _load_portal_deferred():
     if not IS_PORTAL:
         return
     for _ in range(600):
@@ -83,6 +83,7 @@ def _load_portal_v40_deferred():
                 import portal_advanced_search_v39  # noqa: F401
                 import portal_advanced_name_v40  # noqa: F401
                 import portal_reliability_v40  # noqa: F401
+                import portal_incra_certified_v42  # noqa: F401
                 import portal_resource_guard_v27  # noqa: F401
                 import portal_feature_smoke  # noqa: F401
                 import portal_map_smoke  # noqa: F401
@@ -92,32 +93,32 @@ def _load_portal_v40_deferred():
                 missing = [x for x in portal_action_runtime_v25.REQUIRED_ROUTES if x not in ready]
                 if missing:
                     raise RuntimeError('missing_required_routes:' + ','.join(missing))
-                for required in ('/sw.js','/v1/live/property-names/viewport','/v1/live/territorial-production/{car_code}','/v1/live/critical-minerals/{car_code}','/v1/live/search/advanced','/v1/live/search/landuse-profiles'):
+                for required in ('/sw.js','/v1/live/property-names/viewport','/v1/live/territorial-production/{car_code}','/v1/live/critical-minerals/{car_code}','/v1/live/search/advanced','/v1/live/search/landuse-profiles','/v1/live/incra-certified/status/{uf}','/v1/live/incra-certified/viewport'):
                     if required not in ready:
-                        raise RuntimeError('missing_v40_route:' + required)
+                        raise RuntimeError('missing_portal_route:' + required)
                 html = portal_v8.PORTAL_HTML
                 for marker in ('RX_PREMIUM_UX_V35','RX_PREMIUM_INTERACTIONS_V36','RX_LAYOUT_GUARD_V37','RX_ADVANCED_SEARCH_V39','RX_RELIABILITY_V40'):
                     if marker not in html:
                         raise RuntimeError('missing_premium_ui_marker:' + marker)
                 if 'Produção rural' not in html:
-                    raise RuntimeError('missing_v40_rural_production_label')
+                    raise RuntimeError('missing_rural_production_label')
                 heavy = portal_resource_guard_v27._heavy_loaded()
                 if heavy:
                     raise RuntimeError('heavy_modules_loaded_on_portal:' + ','.join(heavy))
                 guard.mark_ready()
-                print(f'RX_PORTAL_V40_EXTENSION=loaded_deferred routes:{len(ready)} advanced_search:on name_registry:on productive_profiles:on reliability:on names:on premium_ux:on', flush=True)
+                print(f'RX_PORTAL_V42_EXTENSION=loaded_deferred routes:{len(ready)} advanced_search:on names:on incra_probe:on reliability:on', flush=True)
             except Exception as exc:
                 if guard is not None:
                     try: guard.mark_failed(exc)
                     except Exception: pass
-                print(f'RX_PORTAL_V40_EXTENSION=failed:{type(exc).__name__}:{str(exc)[:500]}', flush=True)
+                print(f'RX_PORTAL_V42_EXTENSION=failed:{type(exc).__name__}:{str(exc)[:500]}', flush=True)
             return
         time.sleep(0.05)
-    print('RX_PORTAL_V40_EXTENSION=timeout_waiting_portal_api', flush=True)
+    print('RX_PORTAL_V42_EXTENSION=timeout_waiting_portal_api', flush=True)
 
 
 if CORE_RUNTIME_READY:
     if IS_PORTAL:
-        threading.Thread(target=_load_portal_v40_deferred, daemon=True).start()
+        threading.Thread(target=_load_portal_deferred, daemon=True).start()
     else:
-        threading.Thread(target=_load_report_v30_after_report_api, daemon=True).start()
+        threading.Thread(target=_load_report_after_report_api, daemon=True).start()
