@@ -1,0 +1,1 @@
+V43.8.2 corrige falha transitória 502 quando o worker de relatório está em cold start. O portal repete 502/503/504 e falhas de transporte com espera limitada, sem alterar o worker V41. Critério: usuário não deve precisar repetir manualmente o clique para acordar o worker.
