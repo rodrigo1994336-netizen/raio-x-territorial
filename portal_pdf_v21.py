@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 from urllib.parse import quote
 
 import httpx
@@ -33,28 +34,57 @@ async def _report_name(car_code:str,property_name:str|None)->str:
         return ''
 
 
+async def _wait_worker_ready(car_code:str,property_name:str='',max_wait:float=40.0)->bool:
+    """Wake the report service and wait until the deferred V41 status route exists.
+
+    Render may accept traffic before the report extensions finish registering. A root
+    200 is therefore not enough; readiness is the real PDF status route returning a
+    JSON state. The wait is bounded and happens only when a report is requested.
+    """
+    code=str(car_code or '').upper();name=_provided_name(property_name)
+    path=f'/v1/reports/property/{quote(code)}/status'
+    deadline=time.monotonic()+max(5.0,float(max_wait));attempt=0
+    async with httpx.AsyncClient(timeout=httpx.Timeout(7,connect=4),follow_redirects=True,headers={'User-Agent':'Raio-X-Territorial-Portal/V43.8.3'}) as c:
+        while time.monotonic()<deadline:
+            attempt+=1
+            try:
+                r=await c.get(WORKER+path,params={'property_name':name})
+                if r.status_code==200:
+                    try:data=r.json()
+                    except Exception:data={}
+                    if isinstance(data,dict) and data.get('state') is not None:
+                        print(f'RX_PORTAL_WORKER_READY={code}:attempt_{attempt}:state_{data.get("state")}',flush=True)
+                        return True
+                detail=f'http_{r.status_code}'
+            except Exception as exc:
+                detail=type(exc).__name__
+            remaining=deadline-time.monotonic()
+            if remaining<=0:break
+            print(f'RX_PORTAL_WORKER_READY_WAIT={code}:{detail}:attempt_{attempt}',flush=True)
+            await asyncio.sleep(min(2.0,remaining))
+    print(f'RX_PORTAL_WORKER_READY_TIMEOUT={code}:attempts_{attempt}',flush=True)
+    return False
+
+
 async def _proxy(method:str,path:str,params=None,timeout=25,retries=0):
     last_error=None
     for attempt in range(max(0,int(retries))+1):
         try:
-            async with httpx.AsyncClient(timeout=timeout,follow_redirects=True,headers={'User-Agent':'Raio-X-Territorial-Portal/V43.8.2'}) as c:
+            async with httpx.AsyncClient(timeout=timeout,follow_redirects=True,headers={'User-Agent':'Raio-X-Territorial-Portal/V43.8.3'}) as c:
                 r=await c.request(method,WORKER+path,params=params)
                 try:data=r.json()
                 except Exception:data={'detail':r.text[:300]}
             if r.status_code<400:return data
             if r.status_code in TRANSIENT_STATUS and attempt<retries:
                 print(f'RX_PORTAL_WORKER_RETRY={path}:http_{r.status_code}:attempt_{attempt+1}',flush=True)
-                await asyncio.sleep(2.5*(attempt+1))
-                continue
+                await asyncio.sleep(2.0*(attempt+1));continue
             raise HTTPException(status_code=r.status_code,detail=data.get('detail') or 'worker indisponível')
-        except HTTPException:
-            raise
+        except HTTPException:raise
         except Exception as e:
             last_error=e
             if attempt<retries:
                 print(f'RX_PORTAL_WORKER_RETRY={path}:{type(e).__name__}:attempt_{attempt+1}',flush=True)
-                await asyncio.sleep(2.5*(attempt+1))
-                continue
+                await asyncio.sleep(2.0*(attempt+1));continue
             raise HTTPException(status_code=502,detail=f'Worker de análise indisponível: {type(e).__name__}')
     raise HTTPException(status_code=502,detail=f'Worker de análise indisponível: {type(last_error).__name__ if last_error else "transient"}')
 
@@ -63,7 +93,9 @@ async def _proxy(method:str,path:str,params=None,timeout=25,retries=0):
 @app.get('/v1/mobile/report/prepare/{car_code}')
 async def mobile_report_prepare(car_code:str,property_name:str|None=None):
     name=await _report_name(car_code,property_name)
-    return await _proxy('POST',f'/v1/reports/property/{quote(car_code.upper())}/prepare',{'property_name':name},12,retries=2)
+    if not await _wait_worker_ready(car_code,name,40):
+        raise HTTPException(status_code=503,detail='Motor do relatório está iniciando. Tente novamente em alguns segundos.')
+    return await _proxy('POST',f'/v1/reports/property/{quote(car_code.upper())}/prepare',{'property_name':name},12,retries=1)
 
 
 @app.get('/v1/mobile/report/status/{car_code}')
@@ -122,7 +154,7 @@ UI=r'''
  }
  async function prepare(p){
    if(!p?.car_code)return;const code=p.car_code,name=goodName(p),token=++pollToken;startedAt=Date.now();
-   setBtn('PDF PREPARANDO · 0s','running');tell('Geração do PDF iniciada. O progresso ficará visível no botão.','ok');
+   setBtn('PDF PREPARANDO · 0s','running');tell('Preparando o motor e gerando o PDF. Você não precisa tocar novamente.','ok');
    try{
      const r=await fetch(`/v1/mobile/report/prepare/${enc(code)}?property_name=${enc(name)}`,{method:'POST',cache:'no-store'});
      const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.detail||'prepare falhou');
@@ -135,7 +167,7 @@ UI=r'''
    if(window.__rxPdfReady?.code===code)setBtn('ABRIR PDF','ready');else setBtn('GERAR PDF','idle');
    b.addEventListener('click',()=>{
      const cur=getCurrent()||p,c=cur?.car_code,name=goodName(cur);if(!c){tell('Selecione uma propriedade antes de gerar o PDF.','bad');return}
-     if(b.dataset.pdfState==='running'){tell('O PDF ainda está sendo gerado.','ok');return}
+     if(b.dataset.pdfState==='running'){tell('O PDF está sendo preparado. Não é necessário tocar novamente.','ok');return}
      if(b.dataset.pdfState==='ready'||window.__rxPdfReady?.code===c){window.open(`/v1/mobile/report/open/${enc(c)}?property_name=${enc(name)}`,'_blank');return}
      prepare(cur)
    });
@@ -154,4 +186,4 @@ UI=r'''
 if 'RX_PDF_V43_8' not in portal_v8.PORTAL_HTML:
     portal_v8.PORTAL_HTML=portal_v8.PORTAL_HTML.replace('</body>',UI+'<!-- RX_PDF_V43_8 --></body>')
 
-print('RX_PORTAL_PDF_V43_8_2=identity_resolved_worker_delegation_cold_start_retry',flush=True)
+print('RX_PORTAL_PDF_V43_8_3=worker_readiness_wait_named_report',flush=True)
