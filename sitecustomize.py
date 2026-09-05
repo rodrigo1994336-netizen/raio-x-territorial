@@ -6,9 +6,9 @@ import time
 IS_PORTAL = os.getenv('RX_RELEASE') == 'V8_OPERATIONAL_ZERO_COST'
 
 
-def _load_report_v22_after_report_api():
+def _load_report_v24_after_report_api():
     if IS_PORTAL:
-        print('RX_REPORT_V22_RUNTIME=skipped_on_portal_service',flush=True)
+        print('RX_REPORT_V24_RUNTIME=skipped_on_portal_service',flush=True)
         return
     for _ in range(320):
         mod=sys.modules.get('report_api')
@@ -17,13 +17,16 @@ def _load_report_v22_after_report_api():
                 import car_resilient  # noqa: F401
                 import rasterio_runtime_bootstrap
                 rasterio_runtime_bootstrap.ensure_rasterio()
+                # Patch the slowest core source before any report request can start.
+                import prodes_fast_v24  # noqa: F401
+                import report_perf_v24  # noqa: F401
                 import report_v18_patch  # noqa: F401
                 import heavy_live_api_v20  # noqa: F401
                 import report_pdf_cache_v21  # noqa: F401
                 import report_quick_v22  # noqa: F401
-                print('RX_REPORT_V22_RUNTIME=loaded_deferred',flush=True)
+                print('RX_REPORT_V24_RUNTIME=loaded_deferred',flush=True)
             except Exception as exc:
-                print(f'RX_REPORT_V22_RUNTIME=failed:{type(exc).__name__}:{str(exc)[:300]}',flush=True)
+                print(f'RX_REPORT_V24_RUNTIME=failed:{type(exc).__name__}:{str(exc)[:300]}',flush=True)
             return
         time.sleep(0.05)
 
@@ -79,4 +82,4 @@ def _load_portal_v23():
 if IS_PORTAL:
     threading.Thread(target=_load_portal_v23,daemon=True).start()
 else:
-    threading.Thread(target=_load_report_v22_after_report_api,daemon=True).start()
+    threading.Thread(target=_load_report_v24_after_report_api,daemon=True).start()
