@@ -23,14 +23,17 @@ def _name(v):
     return ' '.join(str(v or '').strip().split())[:120]
 
 
-def _key(code,name):
-    return code.upper()+'|'+_name(name).casefold()
+def _key(code,name=''):
+    # A CAR identifies one property report. The previous CAR+name key allowed the
+    # mobile prewarm (often name='') and a named request to render the SAME PDF at
+    # the same time. That doubled raster/network/ReportLab work on small instances.
+    return code.upper()
 
 
 def _prune():
     now=time.monotonic()
     for k,v in list(_CACHE.items()):
-        if now-float(v.get('ts') or 0)>TTL or not Path(str((v.get('meta') or {}).get('pdf_path') or '')).exists():
+        if now-float(v.get('ts') or 0)>TTL or (v.get('state')=='ready' and not Path(str((v.get('meta') or {}).get('pdf_path') or '')).exists()):
             _CACHE.pop(k,None)
     while len(_CACHE)>MAX:
         _CACHE.popitem(last=False)
@@ -46,13 +49,30 @@ def _public(state:dict):
     }
 
 
+def _prefer_name(current:str|None,new:str|None)->str:
+    current=_name(current);new=_name(new)
+    if not current and new:return new
+    # Generic UI/test labels should never replace a real property designation.
+    generic=('imóvel rural','imovel rural','property','benchmark','fazenda selecionada')
+    cur_generic=any(x in current.casefold() for x in generic) if current else True
+    new_generic=any(x in new.casefold() for x in generic) if new else True
+    if cur_generic and new and not new_generic:return new
+    return current or new
+
+
 async def _worker(code:str,property_name:str,key:str):
     started=time.monotonic(); st=_CACHE.setdefault(key,{})
+    property_name=_prefer_name(st.get('property_name'),property_name)
     st.update(state='running',car_code=code,property_name=property_name,started_at_ms=int(time.time()*1000),ts=time.monotonic())
+    print(f'RX_PDF_STAGE={code}:worker_start:name={property_name or "(auto)"}',flush=True)
     try:
+        t0=time.monotonic()
         result,meta=await v13._build_v13(code,property_name or None)
-        st.update(state='ready',meta=meta,elapsed_ms=round((time.monotonic()-started)*1000),ts=time.monotonic())
+        build_ms=round((time.monotonic()-t0)*1000)
+        st.update(state='ready',meta=meta,property_name=meta.get('property_name') or property_name,
+                  elapsed_ms=round((time.monotonic()-started)*1000),build_ms=build_ms,ts=time.monotonic())
         _CACHE.move_to_end(key);_prune()
+        print(f'RX_PDF_STAGE={code}:build_complete:{build_ms}ms',flush=True)
         print(f'RX_PDF_CACHE_READY={code}:{st["elapsed_ms"]}ms:{meta.get("bytes")}',flush=True)
         return result,meta
     except Exception as e:
@@ -64,13 +84,17 @@ async def _worker(code:str,property_name:str,key:str):
 
 
 def _ensure(code:str,property_name:str=''):
-    code=code.upper();property_name=_name(property_name);key=_key(code,property_name);_prune()
+    code=code.upper();property_name=_name(property_name);key=_key(code);_prune()
     st=_CACHE.get(key)
+    if st:
+        st['property_name']=_prefer_name(st.get('property_name'),property_name)
     if st and st.get('state')=='ready' and Path(str((st.get('meta') or {}).get('pdf_path') or '')).exists():
         _CACHE.move_to_end(key);return key,None
     task=_TASKS.get(key)
-    if not task or task.done():
-        _TASKS[key]=asyncio.create_task(_worker(code,property_name,key));task=_TASKS[key]
+    if task and not task.done():
+        print(f'RX_PDF_DEDUP_HIT={code}:existing_task',flush=True)
+        return key,task
+    _TASKS[key]=asyncio.create_task(_worker(code,property_name,key));task=_TASKS[key]
     return key,task
 
 
@@ -91,9 +115,12 @@ async def prepare_pdf_v21(car_code:str,property_name:str|None=None):
 
 @app.get('/v1/reports/property/{car_code}/status')
 async def pdf_status_v21(car_code:str,property_name:str|None=None):
-    key=_key(car_code,property_name or '');_prune();st=_CACHE.get(key)
+    key=_key(car_code);_prune();st=_CACHE.get(key)
     if not st:return {'ok':True,'state':'idle','car_code':car_code.upper(),'property_name':_name(property_name),'cached':False}
-    return {'ok':True,**_public(st)}
+    if property_name:st['property_name']=_prefer_name(st.get('property_name'),property_name)
+    data=_public(st)
+    if st.get('build_ms') is not None:data['build_ms']=st.get('build_ms')
+    return {'ok':True,**data}
 
 
 @app.get('/v1/reports/property/{car_code}/meta')
@@ -104,7 +131,7 @@ async def report_meta_v21(car_code:str,property_name:str|None=None):
         except Exception as e:raise HTTPException(status_code=502,detail=f'Falha ao gerar relatório: {type(e).__name__}')
     else:
         st=_CACHE[key];meta=st['meta'];result=await base._analyze_with_live_addons(car_code.upper())
-    public=base._public_meta(meta);public['property_name']=meta.get('property_name') or _name(property_name)
+    public=base._public_meta(meta);public['property_name']=meta.get('property_name') or (_CACHE.get(key) or {}).get('property_name') or _name(property_name)
     return {'report':public,'analysis':base._report_summary(result),'cache':'ready'}
 
 
@@ -118,9 +145,10 @@ async def report_pdf_v21(car_code:str,property_name:str|None=None):
     pdf=Path(str(meta.get('pdf_path') or ''))
     if not pdf.exists():raise HTTPException(status_code=500,detail='PDF pronto sem arquivo disponível')
     return FileResponse(str(pdf),media_type='application/pdf',filename=f'raio_x_territorial_{car_code.upper()}.pdf',headers={
-        'Cache-Control':'private, max-age=900','X-RaioX-Report-ID':str(meta.get('report_id') or ''),
-        'X-RaioX-SHA256':str(meta.get('sha256') or ''),'X-RaioX-PDF-Cache':'HIT'
+        'Cache-Control':'private, max-age=3600, immutable','X-RaioX-Report-ID':str(meta.get('report_id') or ''),
+        'X-RaioX-SHA256':str(meta.get('sha256') or ''),'X-RaioX-PDF-Cache':'HIT',
+        'Content-Disposition':f'inline; filename="raio_x_territorial_{car_code.upper()}.pdf"'
     })
 
 
-print('RX_PDF_CACHE_V21=prewarm_cache_status',flush=True)
+print('RX_PDF_CACHE_V24=car_dedup_prewarm_cache_status',flush=True)
