@@ -110,10 +110,10 @@ jobs:
           assert "function schedule(){clearTimeout(timer);timer=setTimeout(refresh,420)}" not in field
           assert "u.searchParams.set('limit',z>=15?'60':'35');" not in field
           assert 'window.rxFieldMode' in names and 'limitFor(z)' in names and 'Nomes já carregados · atualização pendente' in names
-          assert 'window.rxNameCoverageV43' in names and "u.searchParams.set('car_visible'" in names and 'names_rendered' in names
+          assert 'window.rxNameCoverageV43' in names and "u.searchParams.set('car_visible'" in names and "u.searchParams.set('diagnostic','true')" in names and 'names_rendered' in names
           assert "'sigef_candidates'" in names_backend and "'sigef_with_valid_name'" in names_backend and "'sigef_named_with_valid_geometry'" in names_backend
           assert "'car_visible'" in names_backend and 'RX_PROPERTY_NAMES_COVERAGE=' in names_backend and 'diagnostic:bool=False' in names_backend
-          assert "0.43.2-v43-snapshot-first" in release and 'window.rxVisibleCarCountV43' in release
+          assert "0.43.3-v43-snapshot-first" in release and 'window.rxVisibleCarCountV43' in release
           assert 'RX_GEOLOCATION_V43=explicit_user_action_only' in release and '_auto_locate' in release
           assert 'portal_release_v43' in site and 'v43_name_coverage_counter_not_loaded' in site
           assert 'Fontes pesadas não foram disparadas' in html
@@ -128,7 +128,7 @@ jobs:
           assert not heavy, f'heavy modules leaked into portal: {heavy}'
           rss=portal_resource_guard_v27._rss_bytes()/1024/1024
           assert rss < 220, f'portal RSS too high in gate: {rss:.1f} MB'
-          print('RX_CI_PORTAL_V43_READY',len(paths),'rss_mb=',round(rss,1),'mutation_observers=',observer_count,'intervals=',interval_count,'version=',portal_v8.APP_PORTAL_VERSION,'name_coverage=on','geolocation=explicit')
+          print('RX_CI_PORTAL_V43_READY',len(paths),'rss_mb=',round(rss,1),'mutation_observers=',observer_count,'intervals=',interval_count,'version=',portal_v8.APP_PORTAL_VERSION,'name_coverage=observable','geolocation=explicit')
           PY
       - name: V41 report bounded-latency and CAR-composition gate
         env:
