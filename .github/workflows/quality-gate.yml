@@ -23,7 +23,7 @@ jobs:
           python -m py_compile \
             climate_nasa.py groundwater_siagas.py safras_ibge.py satellite_real.py soilgrids_wcs.py \
             sicar_detail_sources.py sicar_detail_sources_v2.py aerodromes_anac.py property_search.py property_identity_runtime.py property_names_viewport_v30.py map_context.py \
-            portal_boot_guard_v26.py portal_resource_guard_v27.py portal_property_tabs.py portal_live_fix_v18.py portal_smart_search.py portal_map_context_symbols.py portal_mobile_v19.py portal_nationwide_v21.py portal_property_names_v30.py portal_legacy_source_cleanup.py portal_mobile_dossier_v20.py portal_human_reading_v23.py portal_pdf_v21.py portal_action_runtime_v25.py \
+            territorial_production.py portal_boot_guard_v26.py portal_resource_guard_v27.py portal_property_tabs.py portal_live_fix_v18.py portal_smart_search.py portal_map_context_symbols.py portal_mobile_v19.py portal_nationwide_v21.py portal_property_names_v30.py portal_field_mode_v31.py portal_map_visual_v32.py portal_territorial_production_v33.py portal_legacy_source_cleanup.py portal_mobile_dossier_v20.py portal_human_reading_v23.py portal_pdf_v21.py portal_action_runtime_v25.py \
             portal_rare_earth_symbols.py portal_property_identity_v13.py report_book_style.py property_visual_plate_v25.py \
             report_engine_v6.py report_engine_v7.py report_engine_v8.py rasterio_runtime_bootstrap.py redis_runtime_bootstrap.py sentinel_cog.py \
             highres_reference.py street_level_access.py visual_hybrid.py terrain_srtm.py mapbiomas_coverage.py heavy_live_api_v20.py \
@@ -39,12 +39,12 @@ jobs:
           import climate_nasa, groundwater_siagas, safras_ibge, satellite_real
           import soilgrids_wcs, sicar_detail_sources_v2, aerodromes_anac, sentinel_cog, mapbiomas_coverage
           import highres_reference, street_level_access, visual_hybrid, terrain_srtm, property_visual_plate_v25
-          import prodes_fast_v24, anm_fast_v29, core_retry_fast_v29
+          import prodes_fast_v24, anm_fast_v29, core_retry_fast_v29, territorial_production
           import report_truth_guard_v16, report_book_style, report_engine_v6, report_engine_v7, report_engine_v8
           import live_report_adapter_v18, report_visual_identity_v28, heavy_live_api_v20, report_pdf_cache_v21, report_quick_v22, github_oidc_auth, monitoring_store, monitoring_routes, alerts_routes
           print('RX_CI_IMPORT_OK')
           PY
-      - name: V30 nonblocking light-portal gate
+      - name: V33 field portal gate
         env:
           RX_RELEASE: V8_OPERATIONAL_ZERO_COST
           RX_PORTAL_RSS_BUDGET_MB: '220'
@@ -64,15 +64,19 @@ jobs:
           paths={getattr(r,'path',None) for r in portal_v8.app.router.routes}
           missing=[x for x in portal_action_runtime_v25.REQUIRED_ROUTES if x not in paths]
           assert not missing, f'missing routes: {missing}'
-          assert '/v1/live/property-names/viewport' in paths, 'farm-name viewport route missing'
+          for path in ('/v1/live/property-names/viewport','/sw.js','/v1/live/territorial-production/{car_code}'):
+              assert path in paths, f'missing V33 route: {path}'
           html=portal_v8.PORTAL_HTML
-          required=('RX_ACTION_RUNTIME_V25','RX_PDF_V25','rxMobileFull','rxPropertyTabs','rxFilterBtn','rxBootGuard','RX_PROPERTY_NAMES_V30')
+          required=('RX_ACTION_RUNTIME_V25','RX_PDF_V25','rxMobileFull','rxPropertyTabs','rxFilterBtn','rxBootGuard','RX_PROPERTY_NAMES_V30','RX_FIELD_MODE_V31','RX_MAP_VISUAL_V32','RX_TERRITORIAL_PRODUCTION_V33')
           absent=[x for x in required if x not in html]
           assert not absent, f'missing UI/action markers: {absent}'
+          assert 'serviceWorker.register' in html, 'field-mode service worker registration missing'
+          assert 'rxParcelStyle' in html, 'differentiated property symbology missing'
+          assert 'Produção e território' in html, 'broader territorial production UI missing'
           assert 'schedulePrepare' not in html, 'hidden PDF prewarm must not return'
           heavy=portal_resource_guard_v27._heavy_loaded()
           assert not heavy, f'heavy modules leaked into portal: {heavy}'
           rss=portal_resource_guard_v27._rss_bytes()/1024/1024
           assert rss < 220, f'portal RSS too high in gate: {rss:.1f} MB'
-          print('RX_CI_PORTAL_V30_READY',len(paths),'rss_mb=',round(rss,1))
+          print('RX_CI_PORTAL_V33_READY',len(paths),'rss_mb=',round(rss,1))
           PY
