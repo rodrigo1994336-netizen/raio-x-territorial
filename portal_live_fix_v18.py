@@ -1,101 +1,84 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import httpx
 from fastapi import HTTPException
 
 import portal_v8
-import report_api
 from critical_minerals import query_critical_minerals
 from agropecuaria import build_agro_profile
+from car_resilient import fetch_car_live_resilient
+from anm_resilient import query_anm_curl_exact
 
 app=portal_v8.app
+HEAVY_BASE=os.getenv('RX_HEAVY_BASE_URL','https://raio-x-territorial-report.onrender.com').rstrip('/')
 
-# Replace brittle V8 endpoints with resilient versions loaded after portal_v8.
 REPLACE_PATHS={'/v1/live/critical-minerals/{car_code}','/v1/live/agropecuaria/{car_code}'}
 app.router.routes=[r for r in app.router.routes if getattr(r,'path',None) not in REPLACE_PATHS]
 
-
-async def _result(code:str):
-    try:
-        return await report_api._analyze_with_live_addons(code.upper())
-    except Exception as exc:
-        raise HTTPException(status_code=502,detail=f'análise territorial indisponível: {type(exc).__name__}:{str(exc)[:180]}')
-
+async def _car(code:str):
+    car=await asyncio.to_thread(fetch_car_live_resilient,code.upper())
+    if not car.get('ok'):
+        raise HTTPException(status_code=404 if car.get('not_found') else 502,detail='CAR não localizado ou SICAR indisponível')
+    return car
 
 @app.get('/v1/live/critical-minerals/{car_code}')
 async def critical_minerals_v18(car_code:str):
-    result=await _result(car_code);car=result.get('car') or {}
-    if not car.get('ok'):raise HTTPException(status_code=404,detail='CAR não localizado')
-    current=result.get('critical_minerals') or {}
-    if not current or (not current.get('anm') and not current.get('sgb')):
-        try:current=await query_critical_minerals(car.get('geometry'),result.get('anm'))
-        except Exception as e:current={'ok':False,'detail':f'{type(e).__name__}:{str(e)[:220]}'}
-    anm=current.get('anm') or {};sgb=current.get('sgb') or {}
-    anm_exact=((result.get('anm') or {}).get('exact') or {})
-    anm_available=bool((result.get('anm') or {}).get('ok') or anm_exact.get('available'))
+    code=car_code.upper();car=await _car(code);geom=car.get('geometry');bbox=car.get('bbox') or []
+    anm_task=asyncio.to_thread(query_anm_curl_exact,geom,bbox)
+    # SGB can classify the ANM payload, but doing both serially is slow. Query ANM
+    # first with a strict direct endpoint, then give it to SGB classification.
+    anm=await anm_task
+    try:current=await asyncio.wait_for(query_critical_minerals(geom,anm),timeout=45)
+    except Exception as e:current={'ok':False,'detail':f'{type(e).__name__}:{str(e)[:220]}','anm':{}}
+    classified=current.get('anm') or {};sgb=current.get('sgb') or {};exact=anm.get('exact') or {}
+    anm_available=bool(anm.get('ok') and exact.get('available'))
     sgb_available=bool(sgb.get('capabilities_ok'))
     return {
-        **current,
-        'ok':bool(anm_available or sgb_available),
+        **current,'ok':bool(anm_available or sgb_available),
         'state':'consulted' if anm_available and sgb_available else ('partial' if anm_available or sgb_available else 'unavailable'),
         'anm_available':anm_available,'sgb_available':sgb_available,
-        'anm':{**anm,'process_count':anm.get('process_count') if anm.get('process_count') is not None else anm_exact.get('occurrence_count')},
+        'anm':{**classified,'process_count':classified.get('process_count') if classified.get('process_count') is not None else exact.get('occurrence_count',0),'exact':exact},
         'source':'ANM/SIGMINE + Serviço Geológico do Brasil (GeoSGB)',
-        'note':'ANM e GeoSGB são avaliados separadamente. Falha de uma fonte não é interpretada como ausência de processo ou potencial mineral.'
+        'note':'Consulta direta da aba. Não depende da geração do dossiê completo; falha de uma fonte não é tratada como ausência.'
     }
 
-
-def _run_mapbiomas(geom):
-    # Raster engines are intentionally imported only inside the request worker.
-    # A native GDAL mismatch can degrade this one metric, never the portal boot.
+async def _heavy_agro(code:str):
     try:
-        from mapbiomas_coverage import query_mapbiomas_coverage
-        return query_mapbiomas_coverage(geom,2025)
-    except Exception as e:
-        return {'ok':False,'source':'MapBiomas Brasil — Coleção 11','detail':f'raster_runtime:{type(e).__name__}:{str(e)[:220]}'}
-
-
-def _run_terrain(geom):
-    try:
-        from terrain_srtm import query_terrain_srtm
-        return query_terrain_srtm(geom)
-    except Exception as e:
-        return {'ok':False,'source':'SRTM ~30 m','detail':f'raster_runtime:{type(e).__name__}:{str(e)[:220]}'}
-
+        async with httpx.AsyncClient(timeout=120,follow_redirects=True,headers={'User-Agent':'Raio-X-Territorial/mobile-heavy-proxy'}) as c:
+            r=await c.get(f'{HEAVY_BASE}/v1/heavy/agro-raster/{code}')
+            if r.status_code>=400:return {'ok':False,'detail':f'heavy_http_{r.status_code}'}
+            return r.json()
+    except Exception as e:return {'ok':False,'detail':f'heavy_worker:{type(e).__name__}:{str(e)[:180]}'}
 
 @app.get('/v1/live/agropecuaria/{car_code}')
 async def agropecuaria_v18(car_code:str):
-    code=car_code.upper();result=await _result(code);car=result.get('car') or {};geom=car.get('geometry')
-    if not car.get('ok'):raise HTTPException(status_code=404,detail='CAR não localizado')
-    profile_task=build_agro_profile(result,code,True)
-    mb_task=asyncio.to_thread(_run_mapbiomas,geom)
-    terrain_task=asyncio.to_thread(_run_terrain,geom)
-    profile,mb,terrain=await asyncio.gather(profile_task,mb_task,terrain_task,return_exceptions=True)
+    code=car_code.upper();car=await _car(code)
+    minimal={'car':car}
+    profile_task=build_agro_profile(minimal,code,True)
+    heavy_task=_heavy_agro(code)
+    profile,heavy=await asyncio.gather(profile_task,heavy_task,return_exceptions=True)
     if isinstance(profile,Exception):profile={'ok':False,'detail':f'{type(profile).__name__}:{str(profile)[:200]}'}
-    if isinstance(mb,Exception):mb={'ok':False,'detail':f'{type(mb).__name__}:{str(mb)[:200]}'}
-    if isinstance(terrain,Exception):terrain={'ok':False,'detail':f'{type(terrain).__name__}:{str(terrain)[:200]}'}
-    ide=result.get('ide_layers') or {}
-    soil=ide.get('soil') or ide.get('solo') or {};apt=ide.get('aptitude') or ide.get('aptidao') or {};slope=ide.get('slope') or ide.get('declividade') or {}
+    if isinstance(heavy,Exception):heavy={'ok':False,'detail':f'{type(heavy).__name__}:{str(heavy)[:200]}'}
+    mb=(heavy or {}).get('mapbiomas') or {};terrain=(heavy or {}).get('terrain_srtm') or {}
     screening=(profile.setdefault('property_screening',{}) if isinstance(profile,dict) else {}).setdefault('checks',[])
+    # Remove stale placeholder terrain/soil rows from the lightweight municipal profile.
     screening=[x for x in screening if str(x.get('factor') or '') not in {'Solo','Aptidão agrícola','Declividade'}]
-    screening += [
-        {'factor':'Solo','scope':'interseção cartográfica','status':'consultada' if soil.get('ok') else 'parcial','value':{'count':soil.get('exact_count'),'layer':soil.get('layer')}},
-        {'factor':'Aptidão agrícola','scope':'interseção cartográfica','status':'consultada' if apt.get('ok') else 'parcial','value':{'count':apt.get('exact_count'),'layer':apt.get('layer')}},
-        {'factor':'Declividade','scope':'SRTM ~30 m dentro do CAR','status':'consultada' if terrain.get('ok') else ('consultada' if slope.get('ok') else 'parcial'),'value':{'median_deg':terrain.get('slope_median_deg'),'p90_deg':terrain.get('slope_p90_deg')}},
-    ]
+    if terrain.get('ok'):
+        screening.append({'factor':'Declividade','scope':'SRTM ~30 m dentro do CAR','status':'consultada','value':{'median_deg':terrain.get('slope_median_deg'),'p90_deg':terrain.get('slope_p90_deg'),'elevation_median_m':terrain.get('elevation_median_m')}})
     profile['property_screening']['checks']=screening
-    profile['mapbiomas']=mb
-    profile['terrain_srtm']=terrain
+    profile['mapbiomas']=mb;profile['terrain_srtm']=terrain
     profile['pasture']={
         'state':'ready' if mb.get('ok') else 'unavailable','source':mb.get('source') or 'MapBiomas Brasil — Coleção 11',
         'year':mb.get('year'),'pasture_area_ha':mb.get('pasture_area_ha'),'pasture_share_pct':mb.get('pasture_share_pct'),
         'native_vegetation_share_pct':mb.get('native_vegetation_share_pct'),'agriculture_and_pasture_share_pct':mb.get('agriculture_and_pasture_share_pct'),
-        'note':mb.get('note') or mb.get('detail')
+        'note':mb.get('note') or mb.get('detail') or heavy.get('detail')
     }
+    profile['heavy_worker']='report-service' if heavy.get('ok') else 'degraded'
     profile['ok']=bool(profile.get('ok') or mb.get('ok') or terrain.get('ok'))
     profile['state']='consulted' if profile['ok'] else 'unavailable'
     return profile
-
 
 # Final HTML corrections after tabs are loaded.
 def install_ui_fixes():
@@ -108,4 +91,4 @@ def install_ui_fixes():
     portal_v8.PORTAL_HTML=html
 
 install_ui_fixes()
-print('RX_PORTAL_LIVE_FIX=V18_LAZY_RASTER_MINING_AGRO_MONITORING',flush=True)
+print('RX_PORTAL_LIVE_FIX=V20_DIRECT_TABS_HEAVY_WORKER',flush=True)
