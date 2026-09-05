@@ -7,34 +7,22 @@ permissions:
 jobs:
   audit:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 6
     steps:
-      - name: Inspect public SICAR consultation scripts
+      - name: Extract exact SICAR public property endpoints
         shell: bash
         run: |
           set -euo pipefail
           python - <<'PY'
-          import requests,re,urllib.parse
+          import requests,re
+          base='https://consultapublica.car.gov.br/publico/public/javascripts/'
           h={'User-Agent':'Mozilla/5.0 (Raio-X Territorial public-source audit)'}
-          pages=[
-            'https://consultapublica.car.gov.br/publico/imoveis/index',
-            'https://www.car.gov.br/#/consultar',
-          ]
-          for page in pages:
-              r=requests.get(page,headers=h,timeout=25,allow_redirects=True)
-              print('\nPAGE',page,'status',r.status_code,'final',r.url,'bytes',len(r.content))
-              scripts=re.findall(r'<script[^>]+src=["\']([^"\']+)',r.text,re.I)
-              print('SCRIPTS',scripts)
-              for src in scripts:
-                  u=urllib.parse.urljoin(r.url,src)
-                  try:
-                      rr=requests.get(u,headers=h,timeout=25)
-                      txt=rr.text
-                      print('SCRIPT',u,'status',rr.status_code,'bytes',len(rr.content))
-                      for pat in ['imoveis','consultar','demonstrativo','cod_imovel','nome_imovel','denominacao','recibo','protocolo','/publico/','ajax','url:']:
-                          if pat.lower() in txt.lower(): print(' HIT',pat)
-                      for m in re.finditer(r'[^\n]{0,100}(?:imoveis|demonstrativo|cod_imovel|nome_imovel|recibo|protocolo)[^\n]{0,180}',txt,re.I):
-                          s=m.group(0).strip()
-                          if len(s)<500: print(' EXCERPT',s[:480])
-                  except Exception as e: print('SCRIPT_ERROR',u,type(e).__name__,str(e)[:180])
+          for path in ['layers/imovel.js','search-button.js','imoveis.js']:
+              r=requests.get(base+path,headers=h,timeout=20)
+              print('\nFILE',path,'status',r.status_code,'bytes',len(r.content))
+              txt=r.text
+              for i,line in enumerate(txt.splitlines(),1):
+                  l=line.lower()
+                  if any(k in l for k in ['$.ajax','$.get','$.post','url:','demonstrativo','imovel/','imoveis/','codigo','cod_imovel','nome','denomin','car']):
+                      print(f'{i}: {line[:900]}')
           PY
