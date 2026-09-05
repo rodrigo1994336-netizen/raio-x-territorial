@@ -1,0 +1,40 @@
+name: V44 Name Source Audit
+on:
+  push:
+    branches: [ v44-property-sidebar ]
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: Audit exact public sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import requests,re,json
+          cars=['MG-3120904-752581D6FFA24FBC802D7A56C99E0B0F','MG-3120904-DFB380BECD7A4323AD8AA68FA14D011F']
+          h={'User-Agent':'Mozilla/5.0 (Raio-X Territorial public-source audit)'}
+          for car in cars:
+              print('\nCAR',car)
+              for label,url in [
+                  ('registro_rural',f'https://www.registrorural.com.br/car/item/{car}/'),
+                  ('sicar_public','https://consultapublica.car.gov.br/publico/imoveis/index'),
+                  ('sicar_demo','https://www.car.gov.br/#/consultar')]:
+                  try:
+                      r=requests.get(url,headers=h,timeout=25,allow_redirects=True)
+                      text=r.text
+                      print(label,'status',r.status_code,'final',r.url,'bytes',len(r.content))
+                      if label=='registro_rural':
+                          title=re.search(r'<title[^>]*>(.*?)</title>',text,re.I|re.S)
+                          h1=re.search(r'<h1[^>]*>(.*?)</h1>',text,re.I|re.S)
+                          clean=lambda s:re.sub(r'<[^>]+>',' ',s or '').strip()
+                          print('TITLE',clean(title.group(1) if title else ''))
+                          print('H1',clean(h1.group(1) if h1 else ''))
+                      else:
+                          for token in ['demonstrativo','consultar','nome_imovel','denominacao','imoveis']:
+                              if token in text.lower(): print('TOKEN',token)
+                  except Exception as e: print(label,'ERROR',type(e).__name__,str(e)[:220])
+          PY
