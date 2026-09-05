@@ -167,7 +167,7 @@ REPORT_UI = r'''
 if 'RX_REPORT_IDENTITY_V43_8' not in portal_v8.PORTAL_HTML:
     portal_v8.PORTAL_HTML = portal_v8.PORTAL_HTML.replace('</body>', REPORT_UI + '</body>')
 
-portal_v8.APP_PORTAL_VERSION = '0.43.7-v43-snapshot-first'
+portal_v8.APP_PORTAL_VERSION = '0.43.8-v43-snapshot-first'
 print('RX_SEARCH_V43=resilient_city_auto_list', flush=True)
 print('RX_SEARCH_CITY_TRIGGER_V43=uf_plus_municipality_auto', flush=True)
 print('RX_REPORT_IDENTITY_V43_8=canonical_dossier_to_named_worker_pdf', flush=True)
