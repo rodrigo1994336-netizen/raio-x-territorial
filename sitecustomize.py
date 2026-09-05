@@ -18,6 +18,7 @@ def _load_report_v18_after_report_api():
                 import rasterio_runtime_bootstrap
                 rasterio_runtime_bootstrap.ensure_rasterio()
                 import report_v18_patch  # noqa: F401
+                import heavy_live_api_v20  # noqa: F401
                 print('RX_REPORT_V18_RUNTIME=loaded_deferred',flush=True)
             except Exception as exc:
                 print(f'RX_REPORT_V18_RUNTIME=failed:{type(exc).__name__}:{str(exc)[:300]}',flush=True)
@@ -58,7 +59,7 @@ def _load_v8_after_portal():
                 import portal_property_identity_v13  # noqa: F401
                 import portal_mobile_v19  # noqa: F401
                 import portal_legacy_source_cleanup  # noqa: F401
-                import portal_mobile_dossier_v20  # noqa: F401 — must be last UI behavior patch
+                import portal_mobile_dossier_v20  # noqa: F401
                 import portal_feature_smoke  # noqa: F401
                 import portal_map_smoke  # noqa: F401
                 import car_resolver_smoke  # noqa: F401
