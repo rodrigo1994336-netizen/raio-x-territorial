@@ -45,18 +45,18 @@ POLISH = r'''
 .leaflet-control-attribution{background:rgba(5,13,9,.68)!important;color:#dce8e1!important;font-size:8px!important;backdrop-filter:blur(4px)!important}
 .leaflet-control-attribution a{color:#dce8e1!important}
 @media(max-width:720px){
- .rx-basemap-switch{margin-left:62px!important;margin-bottom:8px!important;padding:3px!important;border-radius:10px!important}
+ .rx-basemap-switch{margin-left:120px!important;margin-bottom:8px!important;padding:3px!important;border-radius:10px!important}
  .rx-basemap-switch button{height:31px!important;padding:0 9px!important;font-size:8px!important}
  .leaflet-control-attribution{max-width:68vw!important;white-space:normal!important;line-height:1.15!important}
 }
 body.rx43-dossier-open .rx-basemap-switch{display:none!important}
 </style>
 <!-- RX_HYBRID_BASEMAP_V43_9 -->
-<!-- RX_HYBRID_BASEMAP_MOBILE_SPACING_V43_9_1 -->
+<!-- RX_HYBRID_BASEMAP_MOBILE_SPACING_V43_9_2 -->
 '''
 
 html = html.replace('</body>', POLISH + '</body>')
 portal_v8.PORTAL_HTML = html
 portal_v8.APP_PORTAL_VERSION = '0.43.8-v43-snapshot-first'
 
-print('RX_HYBRID_BASEMAP_V43=V43_9_1_satellite_default_mobile_spacing', flush=True)
+print('RX_HYBRID_BASEMAP_V43=V43_9_2_satellite_default_mobile_controls_clear', flush=True)
