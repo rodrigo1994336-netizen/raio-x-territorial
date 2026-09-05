@@ -51,6 +51,7 @@ def _load_v8_after_portal():
                 import portal_smart_search  # noqa: F401
                 import portal_map_context_symbols  # noqa: F401
                 import portal_property_identity_v13  # noqa: F401
+                import portal_mobile_v19  # noqa: F401 — must load last to own map routes/mobile CSS
                 import portal_feature_smoke  # noqa: F401
                 import portal_map_smoke  # noqa: F401
                 import car_resolver_smoke  # noqa: F401
