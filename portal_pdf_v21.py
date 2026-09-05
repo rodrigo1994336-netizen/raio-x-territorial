@@ -13,6 +13,7 @@ from property_identity_runtime import resolve_property_identity_sync
 
 app=portal_v8.app
 WORKER=os.getenv('RX_REPORT_WORKER_URL','https://raio-x-territorial-report.onrender.com').rstrip('/')
+TRANSIENT_STATUS={502,503,504}
 
 
 def _provided_name(value:str|None)->str:
@@ -32,29 +33,43 @@ async def _report_name(car_code:str,property_name:str|None)->str:
         return ''
 
 
-async def _proxy(method:str,path:str,params=None,timeout=25):
-    try:
-        async with httpx.AsyncClient(timeout=timeout,follow_redirects=True,headers={'User-Agent':'Raio-X-Territorial-Portal/V43.8'}) as c:
-            r=await c.request(method,WORKER+path,params=params)
-            try:data=r.json()
-            except Exception:data={'detail':r.text[:300]}
-        if r.status_code>=400:raise HTTPException(status_code=r.status_code,detail=data.get('detail') or 'worker indisponível')
-        return data
-    except HTTPException:raise
-    except Exception as e:raise HTTPException(status_code=502,detail=f'Worker de análise indisponível: {type(e).__name__}')
+async def _proxy(method:str,path:str,params=None,timeout=25,retries=0):
+    last_error=None
+    for attempt in range(max(0,int(retries))+1):
+        try:
+            async with httpx.AsyncClient(timeout=timeout,follow_redirects=True,headers={'User-Agent':'Raio-X-Territorial-Portal/V43.8.2'}) as c:
+                r=await c.request(method,WORKER+path,params=params)
+                try:data=r.json()
+                except Exception:data={'detail':r.text[:300]}
+            if r.status_code<400:return data
+            if r.status_code in TRANSIENT_STATUS and attempt<retries:
+                print(f'RX_PORTAL_WORKER_RETRY={path}:http_{r.status_code}:attempt_{attempt+1}',flush=True)
+                await asyncio.sleep(2.5*(attempt+1))
+                continue
+            raise HTTPException(status_code=r.status_code,detail=data.get('detail') or 'worker indisponível')
+        except HTTPException:
+            raise
+        except Exception as e:
+            last_error=e
+            if attempt<retries:
+                print(f'RX_PORTAL_WORKER_RETRY={path}:{type(e).__name__}:attempt_{attempt+1}',flush=True)
+                await asyncio.sleep(2.5*(attempt+1))
+                continue
+            raise HTTPException(status_code=502,detail=f'Worker de análise indisponível: {type(e).__name__}')
+    raise HTTPException(status_code=502,detail=f'Worker de análise indisponível: {type(last_error).__name__ if last_error else "transient"}')
 
 
 @app.post('/v1/mobile/report/prepare/{car_code}')
 @app.get('/v1/mobile/report/prepare/{car_code}')
 async def mobile_report_prepare(car_code:str,property_name:str|None=None):
     name=await _report_name(car_code,property_name)
-    return await _proxy('POST',f'/v1/reports/property/{quote(car_code.upper())}/prepare',{'property_name':name},12)
+    return await _proxy('POST',f'/v1/reports/property/{quote(car_code.upper())}/prepare',{'property_name':name},12,retries=2)
 
 
 @app.get('/v1/mobile/report/status/{car_code}')
 async def mobile_report_status(car_code:str,property_name:str|None=None):
     name=await _report_name(car_code,property_name)
-    return await _proxy('GET',f'/v1/reports/property/{quote(car_code.upper())}/status',{'property_name':name},10)
+    return await _proxy('GET',f'/v1/reports/property/{quote(car_code.upper())}/status',{'property_name':name},10,retries=2)
 
 
 @app.get('/v1/mobile/report/open/{car_code}')
@@ -67,12 +82,12 @@ async def mobile_report_open(car_code:str,property_name:str|None=None):
 
 @app.get('/v1/live/quick/{car_code}')
 async def portal_quick_proxy(car_code:str,deep:bool=False):
-    return await _proxy('GET',f'/v1/live/quick/{quote(car_code.upper())}',params={'deep':'1' if deep else '0'},timeout=22)
+    return await _proxy('GET',f'/v1/live/quick/{quote(car_code.upper())}',params={'deep':'1' if deep else '0'},timeout=22,retries=1)
 
 
 @app.get('/v1/live/progressive/status/{car_code}')
 async def portal_progress_proxy(car_code:str):
-    return await _proxy('GET',f'/v1/live/progressive/status/{quote(car_code.upper())}',timeout=10)
+    return await _proxy('GET',f'/v1/live/progressive/status/{quote(car_code.upper())}',timeout=10,retries=1)
 
 
 UI=r'''
@@ -139,4 +154,4 @@ UI=r'''
 if 'RX_PDF_V43_8' not in portal_v8.PORTAL_HTML:
     portal_v8.PORTAL_HTML=portal_v8.PORTAL_HTML.replace('</body>',UI+'<!-- RX_PDF_V43_8 --></body>')
 
-print('RX_PORTAL_PDF_V43_8=identity_resolved_worker_delegation',flush=True)
+print('RX_PORTAL_PDF_V43_8_2=identity_resolved_worker_delegation_cold_start_retry',flush=True)
