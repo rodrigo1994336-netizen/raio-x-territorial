@@ -10,55 +10,39 @@ permissions:
 jobs:
   identity:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 8
     env:
       PORTAL: https://raio-x-territorial-app.onrender.com
     steps:
-      - name: Find positive Curvelo property identities
+      - name: Inspect unresolved Curvelo identity candidates
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p evidence
           python - <<'PY'
-          import json, urllib.parse, urllib.request, time
+          import json, urllib.parse, urllib.request
           portal='https://raio-x-territorial-app.onrender.com'
-          with urllib.request.urlopen(portal+'/v1/live/search/advanced?uf=MG&municipality=Curvelo&limit=40', timeout=70) as r:
+          with urllib.request.urlopen(portal+'/v1/live/search/advanced?uf=MG&municipality=Curvelo&limit=10', timeout=70) as r:
               search=json.load(r)
           rows=[]
-          positives=[]
-          for i,item in enumerate((search.get('items') or [])[:30],1):
-              car=item.get('car_code')
-              if not car: continue
-              url=portal+'/v1/live/property-identity/'+urllib.parse.quote(car,safe='')
-              try:
-                  with urllib.request.urlopen(url,timeout=35) as r:
-                      d=json.load(r)
-                  row={
-                      'i':i,'car':car,'area_ha':item.get('area_ha'),
-                      'name':d.get('name'),'source':d.get('source'),
-                      'confidence':d.get('confidence'),'status':d.get('status'),
-                      'overlap_ratio':d.get('overlap_ratio'),
-                      'candidate_count':d.get('candidate_count'),
-                  }
-                  rows.append(row)
-                  if d.get('name'):
-                      positives.append(row)
-                      print('POSITIVE',json.dumps(row,ensure_ascii=False))
-                      if len(positives)>=5: break
-                  else:
-                      print('NO_NAME',i,car,d.get('status'),d.get('candidate_count'))
-              except Exception as e:
-                  row={'i':i,'car':car,'error':type(e).__name__+':'+str(e)[:180]}
-                  rows.append(row); print('ERROR',json.dumps(row,ensure_ascii=False))
-              time.sleep(.15)
-          out={'search_count':search.get('count'),'checked':len(rows),'positives':positives,'rows':rows}
-          open('evidence/curvelo_identity.json','w').write(json.dumps(out,ensure_ascii=False,indent=2))
-          print('SUMMARY',json.dumps({'checked':len(rows),'positive_count':len(positives),'positives':positives},ensure_ascii=False))
+          for i,item in enumerate((search.get('items') or [])[:10],1):
+              car=item['car_code']
+              with urllib.request.urlopen(portal+'/v1/live/property-identity/'+urllib.parse.quote(car,safe=''),timeout=35) as r:
+                  d=json.load(r)
+              row={
+                  'i':i,'car':car,'area_ha':item.get('area_ha'),'name':d.get('name'),
+                  'source':d.get('source'),'confidence':d.get('confidence'),'method':d.get('method'),
+                  'candidate_count':len(d.get('candidates') or []),'candidates':d.get('candidates') or []
+              }
+              rows.append(row)
+              print('IDENTITY',json.dumps(row,ensure_ascii=False))
+          open('evidence/curvelo_candidates.json','w').write(json.dumps(rows,ensure_ascii=False,indent=2))
+          print('SUMMARY',json.dumps({'checked':len(rows),'with_candidates':sum(bool(x['candidate_count']) for x in rows),'with_names':sum(bool(x['name']) for x in rows)},ensure_ascii=False))
           PY
       - name: Upload evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: raio-x-v43-8-identity-diagnostic
+          name: raio-x-v43-8-identity-candidates
           path: evidence/
           retention-days: 14
