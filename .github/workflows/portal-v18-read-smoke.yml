@@ -1,4 +1,4 @@
-name: Raio-X Portal V18 Read Smoke
+name: Raio-X Portal V19 Mobile Read Smoke
 
 on:
   push:
@@ -12,37 +12,49 @@ permissions:
 jobs:
   smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 15
     env:
       BASE: https://raio-x-territorial-app.onrender.com
       CAR: MG-3120904-DFB380BECD7A4323AD8AA68FA14D011F
     steps:
-      - name: Wait for portal
+      - name: Wait for V19 portal
         shell: bash
         run: |
           set -euo pipefail
-          for i in $(seq 1 36); do
-            if curl -fsS --max-time 20 "$BASE/v1/monitoring/status" >/dev/null; then break; fi
+          for i in $(seq 1 48); do
+            if curl -fsS --max-time 20 "$BASE/" | grep -q 'RX_MOBILE_V19'; then
+              echo 'V19 mobile runtime is live'
+              exit 0
+            fi
             sleep 10
           done
-      - name: Read public V18 endpoints
+          echo 'V19 marker not found after wait window' >&2
+          exit 1
+      - name: Read mobile-critical public endpoints
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p smoke
+          curl -fsS --retry 3 --max-time 30 "$BASE/" -o smoke/portal.html
+          curl -fsS --retry 3 --max-time 90 "$BASE/v1/live/sicar/viewport?west=-44.48&south=-18.83&east=-44.35&north=-18.68&limit=20" | tee smoke/viewport_no_uf.json
           curl -fsS --retry 3 --max-time 30 "$BASE/v1/monitoring/status" | tee smoke/monitoring_status.json
           curl -fsS --retry 3 --max-time 30 "$BASE/v1/alerts/summary" | tee smoke/alerts_summary.json
           curl -fsS --retry 2 --max-time 90 "$BASE/v1/live/property-identity/$CAR" | tee smoke/identity.json
           curl -fsS --retry 2 --max-time 150 "$BASE/v1/live/groundwater/$CAR?radius_km=20" | tee smoke/groundwater.json
           curl -fsS --retry 2 --max-time 180 "$BASE/v1/live/critical-minerals/$CAR" | tee smoke/mining.json
           curl -fsS --retry 2 --max-time 210 "$BASE/v1/live/agropecuaria/$CAR" | tee smoke/agro.json
-      - name: Assert operational state
+      - name: Assert V19 operational state
         shell: bash
         run: |
           python - <<'PY'
           import json
           rd=lambda n:json.load(open('smoke/'+n+'.json'))
-          st=rd('monitoring_status'); al=rd('alerts_summary'); ident=rd('identity'); water=rd('groundwater'); mining=rd('mining'); agro=rd('agro')
+          html=open('smoke/portal.html',encoding='utf-8').read()
+          vp=rd('viewport_no_uf');st=rd('monitoring_status');al=rd('alerts_summary');ident=rd('identity');water=rd('groundwater');mining=rd('mining');agro=rd('agro')
+          assert 'RX_MOBILE_V19' in html
+          assert len(vp.get('features') or [])>0, vp
+          assert 'MG' in (vp.get('ufs_consultadas') or [vp.get('uf')]), vp
+          assert 'UF resiliente' in str(vp.get('source') or ''), vp
           assert st.get('ok') is True, st
           assert st.get('backend') in ('redis','postgres'), st
           assert st.get('persistence') in ('operational_nonpersistent','durable'), st
@@ -51,7 +63,7 @@ jobs:
           assert water.get('ok') is True, water
           assert mining.get('ok') is True, mining
           assert agro.get('ok') is True, agro
-          assert 'pasture' in agro, agro
+          print('VIEWPORT',len(vp.get('features') or []),vp.get('ufs_consultadas'),vp.get('source'))
           print('MONITOR',st.get('backend'),st.get('persistence'))
           print('IDENTITY',ident.get('name'),ident.get('method'))
           print('WATER',water.get('well_count'),water.get('source'))
@@ -62,6 +74,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: raio-x-portal-v18-read-smoke
+          name: raio-x-portal-v19-mobile-read-smoke
           path: smoke/
           retention-days: 14
