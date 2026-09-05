@@ -1,0 +1,76 @@
+name: Raio-X V28 Benchmark Evidence
+
+on:
+  push:
+    paths:
+      - '.github/workflows/v28-benchmark-once.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Measure production without failing notification
+        shell: bash
+        env:
+          WORKER: https://raio-x-territorial-report.onrender.com
+          CAR: MG-3120904-DFB380BECD7A4323AD8AA68FA14D011F
+          NAME: V28 Benchmark Fazenda
+        run: |
+          set +e
+          mkdir -p evidence
+          echo "benchmark_started=$(date -u +%FT%TZ)" | tee evidence/summary.txt
+
+          quick=$(curl -sS --max-time 20 -w '%{time_total}' "$WORKER/v1/live/quick/$CAR" -o evidence/quick.json)
+          qcode=$?
+          echo "quick_curl_exit=$qcode" | tee -a evidence/summary.txt
+          echo "quick_seconds=$quick" | tee -a evidence/summary.txt
+
+          start=$(date +%s)
+          pcode=$(curl -sS --max-time 20 -o evidence/prepare.json -w '%{http_code}' -X POST "$WORKER/v1/reports/property/$CAR/prepare?property_name=V28%20Benchmark%20Fazenda")
+          echo "prepare_http=$pcode" | tee -a evidence/summary.txt
+
+          ready=0
+          for i in $(seq 1 90); do
+            curl -sS --max-time 12 "$WORKER/v1/reports/property/$CAR/status?property_name=V28%20Benchmark%20Fazenda" -o evidence/status.json
+            state=$(python - <<'PY'
+          import json
+          try: print(json.load(open('evidence/status.json')).get('state',''))
+          except Exception: print('')
+          PY
+          )
+            echo "poll=$i state=$state"
+            if [ "$state" = "ready" ]; then ready=1; break; fi
+            if [ "$state" = "failed" ]; then break; fi
+            sleep 3
+          done
+          end=$(date +%s)
+          echo "first_pdf_wall_seconds=$((end-start))" | tee -a evidence/summary.txt
+          echo "pdf_ready=$ready" | tee -a evidence/summary.txt
+
+          if [ "$ready" = "1" ]; then
+            cached=$(curl -sS --max-time 25 -w '%{time_total}' "$WORKER/v1/reports/property/$CAR?property_name=V28%20Benchmark%20Fazenda" -o evidence/report.pdf)
+            echo "cached_open_seconds=$cached" | tee -a evidence/summary.txt
+            echo "pdf_bytes=$(wc -c < evidence/report.pdf)" | tee -a evidence/summary.txt
+            if command -v pdftotext >/dev/null 2>&1; then
+              pdftotext evidence/report.pdf evidence/report.txt 2>/dev/null
+              echo "pdf_pages_text_lines=$(wc -l < evidence/report.txt 2>/dev/null)" | tee -a evidence/summary.txt
+              grep -i -E 'V28 Benchmark Fazenda|clima|MapBiomas|Sentinel|NDVI|Reserva Legal|APP' evidence/report.txt | head -80 > evidence/key_text.txt
+            fi
+          fi
+
+          echo "benchmark_finished=$(date -u +%FT%TZ)" | tee -a evidence/summary.txt
+          cat evidence/summary.txt
+          # Evidence benchmark is diagnostic by design. Never emit a red workflow email.
+          exit 0
+
+      - name: Upload benchmark evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: raio-x-v28-benchmark-evidence
+          path: evidence/
+          retention-days: 7
