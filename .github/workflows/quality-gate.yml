@@ -100,7 +100,8 @@ jobs:
           assert 'registered_ui_dormant_until_durable_persistence' in alerts
           assert "rx-field-v43" in field and 'staleWhileRevalidate' in field
           assert "/v1/live/snapshot/" in field and "/v1/live/property-identity/" in field and "'/v1/live/resolve'" in field
-          assert 'Names are no longer patched here' in field
+          assert "function schedule(){clearTimeout(timer);timer=setTimeout(refresh,420)}" not in field
+          assert "u.searchParams.set('limit',z>=15?'60':'35');" not in field
           assert 'window.rxFieldMode' in names and 'limitFor(z)' in names and 'Nomes já carregados · atualização pendente' in names
           assert 'Fontes pesadas não foram disparadas' in html
           assert 'IMÓVEL RURAL — NOME NÃO CONFIRMADO' in html
