@@ -1,0 +1,43 @@
+name: Raio-X V43.7 Postdeploy Validation
+
+on:
+  push:
+    branches: [ v43-7-postdeploy-validation ]
+
+permissions:
+  contents: read
+
+jobs:
+  search:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      PORTAL: https://raio-x-territorial-app.onrender.com
+    steps:
+      - name: Validate MG Curvelo backend
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          curl -fsS --max-time 60 -w '\nHTTP_STATUS=%{http_code}\nTIME=%{time_total}\n' "$PORTAL/v1/live/search/advanced?uf=MG&municipality=Curvelo&limit=40" | tee evidence/curvelo.txt
+          python - <<'PY'
+          import json,re
+          t=open('evidence/curvelo.txt').read()
+          body=t.split('\nHTTP_STATUS=')[0]
+          status=int(re.search(r'HTTP_STATUS=(\d+)',t).group(1))
+          d=json.loads(body)
+          print('STATUS',status,'COUNT',d.get('count'),'MUNICIPALITY',d.get('municipality'),'UF',d.get('uf'),'TRUNCATED',d.get('truncated'))
+          print('FIRST',[(x.get('name'),x.get('car_code'),x.get('area_ha')) for x in (d.get('items') or [])[:5]])
+          assert status==200,status
+          assert d.get('ok') is True,d
+          assert d.get('uf')=='MG',d
+          assert int(d.get('count') or 0)>0,d
+          assert len(d.get('items') or [])>0,d
+          PY
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: raio-x-v43-7-postdeploy-validation
+          path: evidence/
+          retention-days: 14
