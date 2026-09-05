@@ -1,0 +1,94 @@
+name: Raio-X V43.9 Postdeploy Visual
+
+on:
+  push:
+    branches: [ v43-9-postdeploy-visual ]
+
+permissions:
+  contents: read
+
+jobs:
+  visual:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PORTAL: https://raio-x-territorial-app.onrender.com
+      CAR: MG-3120904-E0C91FE86A3646D5AFA40786D6C554A9
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install Chromium
+        run: |
+          pip install playwright
+          python -m playwright install --with-deps chromium
+      - name: Validate hybrid map desktop tablet mobile
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          cat > /tmp/map.py <<'PY'
+          import asyncio,json,os,urllib.request
+          from playwright.async_api import async_playwright
+          P=os.environ['PORTAL'];C=os.environ['CAR']
+          def api(path):
+              req=urllib.request.Request(P+path,headers={'User-Agent':'RX-V43.9-Visual'})
+              with urllib.request.urlopen(req,timeout=45) as r:return json.load(r)
+          snap=api('/v1/live/snapshot/'+C)
+          prop={'car_code':C,'municipality':snap.get('municipality'),'uf':snap.get('uf'),'area_ha':snap.get('area_ha'),'status':snap.get('car_status'),'condition':snap.get('condition'),'type':snap.get('property_type')}
+          async def one(browser,w,h,label,mobile=False):
+              ctx=await browser.new_context(viewport={'width':w,'height':h},is_mobile=mobile)
+              page=await ctx.new_page();errors=[];bad=[]
+              page.on('pageerror',lambda e:errors.append(str(e)[:250]))
+              page.on('response',lambda r:bad.append((r.status,r.url)) if r.status>=500 else None)
+              await page.goto(P,wait_until='networkidle',timeout=60000)
+              await page.wait_for_function("window.rxBasemapModeV43==='satellite' && window.rxBasemapLayersV43",timeout=30000)
+              await page.wait_for_timeout(1800)
+              tiles=await page.evaluate("""()=>[...document.querySelectorAll('.leaflet-tile')].filter(x=>x.complete&&x.naturalWidth>0).map(x=>x.src)""")
+              assert any('World_Imagery' in x for x in tiles),tiles[:10]
+              assert any('World_Transportation' in x or 'World_Boundaries_and_Places' in x for x in tiles),tiles[:10]
+              await page.evaluate('x=>window.showProperty(x.p,x.g)',{'p':prop,'g':snap.get('geometry')})
+              await page.wait_for_timeout(1400)
+              paths=await page.locator('.leaflet-overlay-pane path').count()
+              assert paths>0,paths
+              switch=page.locator('.rx-basemap-switch')
+              assert await switch.is_visible()
+              boxes=[]
+              for sel in ['.rx-basemap-switch','#rxLocateBtn','#rxFilterBtn']:
+                  loc=page.locator(sel)
+                  if await loc.count() and await loc.first.is_visible():boxes.append((sel,await loc.first.bounding_box()))
+              def ov(a,b):
+                  return a and b and not (a['x']+a['width']<=b['x'] or b['x']+b['width']<=a['x'] or a['y']+a['height']<=b['y'] or b['y']+b['height']<=a['y'])
+              for i in range(len(boxes)):
+                  for j in range(i+1,len(boxes)):
+                      assert not ov(boxes[i][1],boxes[j][1]),(boxes[i],boxes[j])
+              await page.screenshot(path=f'evidence/{label}_satellite.png',full_page=True)
+              await page.click('.rx-basemap-switch button[data-mode="street"]')
+              await page.wait_for_function("window.rxBasemapModeV43==='street'",timeout=5000)
+              await page.wait_for_timeout(900)
+              street=await page.evaluate("""()=>[...document.querySelectorAll('.leaflet-tile')].filter(x=>x.complete&&x.naturalWidth>0).map(x=>x.src)""")
+              assert any('tile.openstreetmap.org' in x for x in street),street[:10]
+              await page.screenshot(path=f'evidence/{label}_street.png',full_page=True)
+              await page.click('.rx-basemap-switch button[data-mode="satellite"]')
+              assert not errors,errors
+              assert not bad,bad
+              print(label.upper(),json.dumps({'satellite_tiles':len(tiles),'street_tiles':len(street),'paths':paths,'controls':boxes},ensure_ascii=False))
+              await ctx.close()
+          async def main():
+              async with async_playwright() as p:
+                  b=await p.chromium.launch(headless=True)
+                  await one(b,1440,900,'desktop')
+                  await one(b,820,1180,'tablet_portrait')
+                  await one(b,1180,820,'tablet_landscape')
+                  await one(b,390,844,'mobile',True)
+                  await b.close()
+          asyncio.run(main())
+          PY
+          python /tmp/map.py | tee evidence/result.txt
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: raio-x-v43-9-postdeploy-visual
+          path: evidence/
+          retention-days: 14
