@@ -1,0 +1,110 @@
+name: Raio-X V43.9.3 Acceptance
+
+on:
+  push:
+    branches: [ v43-9-3-acceptance ]
+
+permissions:
+  contents: read
+
+jobs:
+  acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      PORTAL: https://raio-x-territorial-app.onrender.com
+      CAR: MG-3120904-E0C91FE86A3646D5AFA40786D6C554A9
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install Chromium
+        run: |
+          pip install playwright
+          python -m playwright install --with-deps chromium
+      - name: Validate one-click PDF viewer return and mobile controls
+        run: |
+          mkdir -p evidence
+          cat > /tmp/accept.py <<'PY'
+          import asyncio, json, os, time
+          from pathlib import Path
+          from playwright.async_api import async_playwright
+
+          PORTAL=os.environ['PORTAL']; CAR=os.environ['CAR']
+
+          def overlap(a,b):
+              if not a or not b:return False
+              return not (a['x']+a['width']<=b['x'] or b['x']+b['width']<=a['x'] or a['y']+a['height']<=b['y'] or b['y']+b['height']<=a['y'])
+
+          async def open_property(page):
+              await page.goto(PORTAL,wait_until='domcontentloaded',timeout=60000)
+              await page.wait_for_function("typeof window.showProperty==='function'",timeout=30000)
+              snap=await page.evaluate("""async car=>{const r=await fetch('/v1/live/snapshot/'+encodeURIComponent(car));if(!r.ok)throw new Error('snapshot '+r.status);return await r.json()}""",CAR)
+              prop={'car_code':CAR,'public_name':'Fazenda Barrinha','name':'Fazenda Barrinha','municipality':snap.get('municipality'),'uf':snap.get('uf'),'area_ha':snap.get('area_ha'),'status':snap.get('car_status'),'condition':snap.get('condition'),'type':snap.get('property_type')}
+              await page.evaluate("x=>window.showProperty(x.p,x.g)",{'p':prop,'g':snap.get('geometry')})
+              await page.wait_for_selector('#rxMobilePdf',state='visible',timeout=20000)
+              return prop
+
+          async def desktop(browser):
+              ctx=await browser.new_context(viewport={'width':1440,'height':900})
+              page=await ctx.new_page();errors=[]
+              page.on('pageerror',lambda e: errors.append(str(e)[:250]))
+              await open_property(page)
+              b=page.locator('#rxMobilePdf')
+              before=(await b.inner_text()).strip();assert before in ('GERAR PDF','ABRIR PDF'),before
+              started=time.monotonic()
+              if before!='ABRIR PDF':
+                  await b.click()
+                  await page.wait_for_function("document.querySelector('#rxMobilePdf')?.textContent.trim()==='ABRIR PDF'",timeout=210000)
+              ready_s=round(time.monotonic()-started,2)
+              await page.screenshot(path='evidence/desktop_ready.png',full_page=True)
+              async with page.expect_popup(timeout=10000) as pop:
+                  await b.click()
+              viewer=await pop.value
+              await viewer.wait_for_load_state('domcontentloaded',timeout=30000)
+              assert '/v1/mobile/report/view/' in viewer.url,viewer.url
+              assert await viewer.get_by_text('VOLTAR AO RAIO-X').is_visible()
+              assert await viewer.locator('iframe').count()==1
+              title=await viewer.locator('.title strong').inner_text();assert 'Barrinha' in title,title
+              await viewer.screenshot(path='evidence/pdf_viewer.png',full_page=True)
+              await viewer.locator('.back').click();await asyncio.sleep(.7)
+              assert viewer.is_closed(),'viewer did not close/return'
+              assert not page.is_closed(),'original app closed'
+              assert await page.locator('#rxMobilePdf').is_visible(),'app dossier not preserved'
+              assert not errors,errors
+              Path('evidence/pdf_result.json').write_text(json.dumps({'one_click':True,'ready_seconds':ready_s,'viewer':True,'return_to_app':True,'title':title},ensure_ascii=False,indent=2))
+              print('PDF_ACCEPTANCE',ready_s,title)
+              await ctx.close()
+
+          async def mobile(browser):
+              ctx=await browser.new_context(viewport={'width':390,'height':844},is_mobile=True)
+              page=await ctx.new_page();await page.goto(PORTAL,wait_until='domcontentloaded',timeout=60000)
+              await page.wait_for_selector('.rx-basemap-switch',state='visible',timeout=30000)
+              sels=['.rx-basemap-switch','#rxLocateBtn','#rxFilterBtn'];boxes=[]
+              for s in sels:
+                  loc=page.locator(s).first
+                  assert await loc.is_visible(),s
+                  boxes.append((s,await loc.bounding_box()))
+              for i in range(len(boxes)):
+                  for j in range(i+1,len(boxes)):
+                      assert not overlap(boxes[i][1],boxes[j][1]),(boxes[i],boxes[j])
+              await page.screenshot(path='evidence/mobile_controls.png',full_page=True)
+              Path('evidence/mobile_result.json').write_text(json.dumps({'overlap':False,'boxes':boxes},ensure_ascii=False,indent=2))
+              print('MOBILE_ACCEPTANCE',json.dumps(boxes))
+              await ctx.close()
+
+          async def main():
+              async with async_playwright() as p:
+                  browser=await p.chromium.launch(headless=True)
+                  await desktop(browser);await mobile(browser)
+                  await browser.close()
+          asyncio.run(main())
+          PY
+          python /tmp/accept.py
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: raio-x-v43-9-3-acceptance
+          path: evidence/
+          retention-days: 14
