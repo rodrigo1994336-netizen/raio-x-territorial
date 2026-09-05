@@ -75,7 +75,6 @@ jobs:
           assert 'body.rx-dossier-open #map' in html and 'z-index:10000' in html
           assert 'rxPrefetchV40' in html and 'Não foi possível atualizar esta aba agora' in html
           assert 'z<11' in html and 'span>1.50' in html
-          assert 'SIGEF/INCRA + SICAR spatial match' in Path('portal_advanced_name_v40.py').read_text() if False else True
           assert all(uf in html for uf in ('AC','AM','BA','DF','GO','MG','MT','PA','PR','RS','SC','SP','TO'))
           assert 'serviceWorker.register' in html
           assert 'rxParcelStyle' in html
@@ -91,7 +90,7 @@ jobs:
           assert rss < 220, f'portal RSS too high in gate: {rss:.1f} MB'
           print('RX_CI_PORTAL_V40_READY',len(paths),'rss_mb=',round(rss,1))
           PY
-      - name: V40 report critical-path gate
+      - name: V41 report bounded-latency and CAR-composition gate
         env:
           RX_RELEASE: OFF
         run: |
@@ -100,10 +99,20 @@ jobs:
           a=Path('anm_fast_v29.py').read_text()
           r=Path('core_retry_fast_v29.py').read_text()
           s=Path('sitecustomize.py').read_text()
+          sent=Path('sentinel_cog.py').read_text()
+          hi=Path('highres_reference.py').read_text()
+          extras=Path('report_extras_perf_v30.py').read_text()
+          car=Path('sicar_detail_sources_v2.py').read_text()
+          adapter=Path('live_report_adapter_v17.py').read_text()
           assert "--max-time','7'" in a and "--retry','0'" in a
           assert 'anm_retry=skipped' in r and "query_anm_fast" not in r
-          assert 'report_extras_perf_v30' in s and 'RX_REPORT_V40_RUNTIME' in s
+          assert 'report_extras_perf_v30' in s
           assert 'landuse_profile_v39' in s and 'portal_advanced_search_v39' in s and 'portal_advanced_name_v40' in s and 'portal_reliability_v40' in s
           assert 'SIGEF/INCRA + SICAR spatial match' in Path('portal_advanced_name_v40.py').read_text()
-          print('RX_CI_REPORT_V40_READY')
+          assert 'async def _read4' in sent and 'items[:2]' in sent and "'GDAL_HTTP_TIMEOUT':'9'" in sent
+          assert 'httpx.Timeout(12,connect=5)' in hi
+          assert 'ThreadPoolExecutor' in car and 'CAP_TTL=21600' in car and "'share_pct'" in car
+          assert 'asyncio.wait_for' in extras and "_timed('visual_hybrid'" in extras and ',34)' in extras
+          assert "car['environmental_composition']" in adapter and 'passivo/excedente legal' in adapter
+          print('RX_CI_REPORT_V41_READY')
           PY
