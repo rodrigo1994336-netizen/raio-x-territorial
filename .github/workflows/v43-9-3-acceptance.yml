@@ -1,4 +1,4 @@
-name: Raio-X V43 Names Coverage One Shot
+name: Raio-X V43 Final Visual One Shot
 
 on:
   push:
@@ -8,32 +8,92 @@ permissions:
   contents: read
 
 jobs:
-  names:
+  visual:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     env:
       PORTAL: https://raio-x-territorial-app.onrender.com
+      CAR_DESKTOP: MG-3120904-E0C91FE86A3646D5AFA40786D6C554A9
+      CAR_MOBILE: MG-3120904-1622A283926042CA8F25CC6468B7FE8A
     steps:
-      - name: Capture diagnostic coverage
-        shell: bash
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install Chromium
         run: |
-          set -euo pipefail
+          pip install playwright
+          python -m playwright install --with-deps chromium
+      - name: Capture final visual states
+        run: |
           mkdir -p evidence
-          curl -fsS --max-time 30 "$PORTAL/v1/live/property-names/viewport?west=-44.75&south=-19.25&east=-44.35&north=-19.00&limit=35&diagnostic=true&car_visible=35" -o evidence/names_coverage.json
-          python - <<'PY'
-          import json
-          d=json.load(open('evidence/names_coverage.json'))
-          print('NAMES_COVERAGE',json.dumps(d,ensure_ascii=False))
-          assert d.get('ok') is True,d
-          assert isinstance(d.get('coverage'),dict),d
-          assert isinstance(d.get('items'),list),d
-          assert d.get('count',0)>0,d
-          assert d.get('coverage',{}).get('names_returned',0)>0,d
+          cat > /tmp/visual.py <<'PY'
+          import asyncio,json,os
+          from pathlib import Path
+          from playwright.async_api import async_playwright
+          PORTAL=os.environ['PORTAL'].rstrip('/')
+
+          async def ready(page):
+              await page.goto(PORTAL,wait_until='domcontentloaded',timeout=60000)
+              await page.wait_for_timeout(1800)
+              await page.wait_for_selector('#q',state='visible',timeout=30000)
+
+          async def open_car(page,code):
+              await ready(page)
+              await page.locator('#q').fill(code)
+              await page.locator('#go').click()
+              await page.wait_for_selector('#rx43Full',state='visible',timeout=90000)
+              assert await page.locator('body').evaluate("b=>b.classList.contains('rx43-dossier-open')")
+
+          async def desktop(browser):
+              ctx=await browser.new_context(viewport={'width':1440,'height':900},service_workers='block')
+              page=await ctx.new_page();errors=[]
+              page.on('pageerror',lambda e:errors.append(str(e)[:300]))
+              await open_car(page,os.environ['CAR_DESKTOP'])
+              await page.wait_for_timeout(1200)
+              await page.screenshot(path='evidence/desktop_snapshot.png',full_page=True)
+              await page.locator('#rx43Full').click()
+              await page.locator('.downloads').wait_for(state='visible',timeout=120000)
+              await page.screenshot(path='evidence/desktop_full.png',full_page=True)
+              await page.locator('#back').click();await page.wait_for_timeout(800)
+              assert not await page.locator('body').evaluate("b=>b.classList.contains('rx43-dossier-open')")
+              await page.screenshot(path='evidence/desktop_return.png',full_page=True)
+              assert not errors,errors
+              Path('evidence/desktop_visual.json').write_text(json.dumps({'snapshot':True,'full':True,'return':True,'errors':errors},indent=2))
+              await ctx.close()
+
+          async def mobile(browser):
+              ctx=await browser.new_context(viewport={'width':390,'height':844},is_mobile=True,service_workers='block')
+              page=await ctx.new_page();errors=[]
+              page.on('pageerror',lambda e:errors.append(str(e)[:300]))
+              await open_car(page,os.environ['CAR_MOBILE'])
+              await page.wait_for_function("document.querySelector('#rx43Name') && /Fazenda das Pedras/i.test(document.querySelector('#rx43Name').textContent)",timeout=30000)
+              name=(await page.locator('#rx43Name').inner_text()).strip()
+              assert 'Fazenda das Pedras' in name,name
+              panel=await page.locator('#panel').bounding_box();assert panel and panel['width']>=389 and panel['height']>=843,panel
+              await page.screenshot(path='evidence/mobile_snapshot_long_name.png',full_page=True)
+              await page.locator('#rx43Full').click()
+              await page.locator('.downloads').wait_for(state='visible',timeout=120000)
+              await page.screenshot(path='evidence/mobile_full.png',full_page=True)
+              await page.locator('#back').click();await page.wait_for_timeout(800)
+              for s in ['.rx-basemap-switch','#rxLocateBtn','#rxFilterBtn']:
+                  assert await page.locator(s).first.is_visible(),s
+              await page.screenshot(path='evidence/mobile_return.png',full_page=True)
+              assert not errors,errors
+              Path('evidence/mobile_visual.json').write_text(json.dumps({'long_name':name,'full_screen':True,'full':True,'return':True,'errors':errors},ensure_ascii=False,indent=2))
+              await ctx.close()
+
+          async def main():
+              async with async_playwright() as p:
+                  browser=await p.chromium.launch(headless=True)
+                  await desktop(browser);await mobile(browser)
+                  await browser.close()
+          asyncio.run(main())
           PY
+          python /tmp/visual.py
       - name: Upload evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: raio-x-v43-names-coverage
+          name: raio-x-v43-final-visual
           path: evidence/
           retention-days: 14
