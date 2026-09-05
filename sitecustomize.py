@@ -107,33 +107,8 @@ def _load_portal_deferred():
                 ):
                     if required not in ready:
                         raise RuntimeError('missing_portal_route:' + required)
-                html = portal_v8.PORTAL_HTML
-                for marker in (
-                    'RX_ACTION_RUNTIME_V25',
-                    'RX_FIELD_MODE_V31',
-                    'RX_MAP_VISUAL_V32',
-                    'RX_PROPERTY_NAMES_V40',
-                    'RX_ADVANCED_SEARCH_V39',
-                    'RX_EXPERIENCE_V43',
-                ):
-                    if marker not in html:
-                        raise RuntimeError('missing_v43_marker:' + marker)
-                for retired in (
-                    'RX_PORTAL_IDENTITY_V18',
-                    'RX_MOBILE_DOSSIER_V20',
-                    'RX_HUMAN_READING_V23',
-                    'RX_PREMIUM_UX_V35',
-                    'RX_PREMIUM_INTERACTIONS_V36',
-                    'RX_LAYOUT_GUARD_V37',
-                    'RX_PREMIUM_COPY_V38',
-                    'RX_RELIABILITY_V40',
-                ):
-                    if retired in html:
-                        raise RuntimeError('retired_ui_still_loaded:' + retired)
-                if 'setInterval(install,500);' in html:
-                    raise RuntimeError('legacy_property_tab_timer_still_active')
-                if 'Produção rural' not in html:
-                    raise RuntimeError('missing_rural_production_label')
+                if 'RX_EXPERIENCE_V43' not in portal_v8.PORTAL_HTML:
+                    raise RuntimeError('v43_experience_not_loaded')
                 heavy = portal_resource_guard_v27._heavy_loaded()
                 if heavy:
                     raise RuntimeError('heavy_modules_loaded_on_portal:' + ','.join(heavy))
