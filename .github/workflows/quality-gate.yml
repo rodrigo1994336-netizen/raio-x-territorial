@@ -22,7 +22,7 @@ jobs:
         run: |
           python -m py_compile \
             climate_nasa.py groundwater_siagas.py safras_ibge.py satellite_real.py soilgrids_wcs.py \
-            sicar_detail_sources.py sicar_detail_sources_v2.py aerodromes_anac.py property_search.py map_context.py \
+            sicar_detail_sources.py sicar_detail_sources_v2.py aerodromes_anac.py property_search.py property_identity_runtime.py map_context.py \
             portal_property_tabs.py portal_smart_search.py portal_map_context_symbols.py \
             portal_rare_earth_symbols.py portal_property_identity_v13.py report_book_style.py \
             report_engine_v6.py report_engine_v7.py rasterio_runtime_bootstrap.py sentinel_cog.py \
