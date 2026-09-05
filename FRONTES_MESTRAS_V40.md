@@ -12,7 +12,7 @@ Este arquivo é a fila canônica de fechamento. Uma frente só pode sair daqui d
 
 ## P0 — Descoberta e identificação
 - [ ] Mapa nacional: CAR por viewport em todas as UFs, sem UF grudada do GPS.
-- [ ] Nome das fazendas: SICAR quando explícito + SIGEF por sobreposição segura + labels em lote no mapa/lista.
+- [ ] Nome das fazendas: SICAR quando explícito + SIGEF por sobreposição segura + SNCI/Acervo Fundiário quando a camada pública puder ser consumida com estabilidade + labels em lote no mapa/lista.
 - [ ] Busca simples: nome, CAR, município, coordenada e identificadores públicos.
 - [ ] Busca avançada nacional: UF, município, área, nome/identificador.
 - [ ] Busca produtiva: pecuária/pastagem, agricultura, soja, cana, café, citros, algodão, arroz, silvicultura, aquicultura, uso misto e demais perfis suportados por evidência espacial.
