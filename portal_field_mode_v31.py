@@ -7,7 +7,7 @@ import portal_v8
 app = portal_v8.app
 
 SW_JS = r'''
-const RX_VERSION='rx-field-v31';
+const RX_VERSION='rx-field-v43';
 const SHELL_CACHE=RX_VERSION+'-shell';
 const DATA_CACHE=RX_VERSION+'-data';
 const TILE_CACHE=RX_VERSION+'-tiles';
@@ -28,14 +28,19 @@ self.addEventListener('activate',event=>{
   })());
 });
 
-async function networkFirst(req,cacheName,timeoutMs){
+async function trimCache(cacheName,maxEntries){
+  const cache=await caches.open(cacheName),keys=await cache.keys();
+  for(let i=0;i<Math.max(0,keys.length-maxEntries);i++)await cache.delete(keys[i]);
+}
+
+async function networkFirst(req,cacheName,timeoutMs,maxEntries=180){
   const cache=await caches.open(cacheName);
   let timer;
   try{
     const timed=new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('timeout')),timeoutMs)});
     const res=await Promise.race([fetch(req),timed]);
     clearTimeout(timer);
-    if(res&&(res.ok||res.type==='opaque'))cache.put(req,res.clone()).catch(()=>{});
+    if(res&&(res.ok||res.type==='opaque')){await cache.put(req,res.clone()).catch(()=>{});await trimCache(cacheName,maxEntries).catch(()=>{})}
     return res;
   }catch(e){
     clearTimeout(timer);
@@ -45,12 +50,21 @@ async function networkFirst(req,cacheName,timeoutMs){
   }
 }
 
+async function staleWhileRevalidate(event,req,cacheName,maxEntries=180){
+  const cache=await caches.open(cacheName),hit=await cache.match(req);
+  const update=fetch(req).then(async res=>{
+    if(res&&(res.ok||res.type==='opaque')){await cache.put(req,res.clone()).catch(()=>{});await trimCache(cacheName,maxEntries).catch(()=>{})}
+    return res;
+  });
+  if(hit){event.waitUntil(update.catch(()=>{}));return hit}
+  return await update;
+}
+
 async function cacheFirst(req,cacheName){
-  const cache=await caches.open(cacheName);
-  const hit=await cache.match(req);
+  const cache=await caches.open(cacheName),hit=await cache.match(req);
   if(hit)return hit;
   const res=await fetch(req);
-  if(res&&(res.ok||res.type==='opaque'))cache.put(req,res.clone()).catch(()=>{});
+  if(res&&(res.ok||res.type==='opaque'))await cache.put(req,res.clone()).catch(()=>{});
   return res;
 }
 
@@ -60,7 +74,7 @@ self.addEventListener('fetch',event=>{
   const u=new URL(req.url);
 
   if(u.origin===location.origin&&u.pathname==='/'){
-    event.respondWith(networkFirst(req,SHELL_CACHE,2600));
+    event.respondWith(networkFirst(req,SHELL_CACHE,2400,4));
     return;
   }
 
@@ -70,7 +84,7 @@ self.addEventListener('fetch',event=>{
   }
 
   if(u.hostname.endsWith('.tile.openstreetmap.org')){
-    event.respondWith(networkFirst(req,TILE_CACHE,3200));
+    event.respondWith(networkFirst(req,TILE_CACHE,2800,240));
     return;
   }
 
@@ -78,9 +92,12 @@ self.addEventListener('fetch',event=>{
       u.pathname==='/v1/live/sicar/viewport' ||
       u.pathname==='/v1/live/property-names/viewport' ||
       u.pathname==='/v1/live/cities' ||
+      u.pathname==='/v1/live/resolve' ||
+      u.pathname.startsWith('/v1/live/snapshot/') ||
+      u.pathname.startsWith('/v1/live/property-identity/') ||
       u.pathname.startsWith('/v1/live/property/')
   )){
-    event.respondWith(networkFirst(req,DATA_CACHE,4200));
+    event.respondWith(staleWhileRevalidate(event,req,DATA_CACHE,180));
     return;
   }
 });
@@ -95,7 +112,7 @@ def rx_field_service_worker():
         headers={
             'Cache-Control': 'no-cache, no-store, must-revalidate',
             'Service-Worker-Allowed': '/',
-            'X-RaioX-Field-Mode': 'v31',
+            'X-RaioX-Field-Mode': 'v43',
         },
     )
 
@@ -167,55 +184,31 @@ FIELD_UI = r'''
   registerSW();
 })();
 </script>
-<!-- RX_FIELD_MODE_V31 -->
+<!-- RX_FIELD_MODE_V43 -->
 '''
 
 html = portal_v8.PORTAL_HTML
 
-# Connection warm-up for the only two hosts required to paint the base map on a cold visit.
 html = html.replace(
     '<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">',
     '<link rel="preconnect" href="https://unpkg.com" crossorigin><link rel="dns-prefetch" href="//unpkg.com"><link rel="preconnect" href="https://tile.openstreetmap.org" crossorigin><link rel="dns-prefetch" href="//tile.openstreetmap.org"><link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">',
 )
 
-# In the field, wait for navigation to settle and request fewer polygons. The user can
-# always zoom one step further to retrieve the remaining properties; nothing is hidden
-# permanently and the map becomes usable much sooner on poor cellular links.
+# These two replacements target the current nationwide parcel loader. Names are no
+# longer patched here: portal_property_names_v30 reads rxFieldMode directly in V43.
 html = html.replace(
     "function scheduleParcels(){rxLastUf=null;clearTimeout(rxTimer);rxTimer=setTimeout(()=>loadVisibleParcels(false),220)}",
     "function scheduleParcels(){rxLastUf=null;clearTimeout(rxTimer);rxTimer=setTimeout(()=>loadVisibleParcels(false),window.rxFieldMode?850:260)}",
 )
 html = html.replace(
     "u.searchParams.set('limit','80');const r=await fetch(u);",
-    "u.searchParams.set('limit',window.rxFieldMode?'35':'80');const r=await (window.rxFieldFetch?window.rxFieldFetch(u,window.rxFieldMode?7000:11000):fetch(u));",
+    "u.searchParams.set('limit',window.rxFieldMode?'35':'80');const r=await (window.rxFieldFetch?window.rxFieldFetch(u,window.rxFieldMode?6500:10000):fetch(u));",
 )
-
-# City lookup is interactive, so it gets a finite first-visit timeout. Once the service
-# worker controls the page, cached results can be served before that timeout is reached.
 html = html.replace(
     "const r=await fetch(`/v1/live/cities?q=${encodeURIComponent(q)}`);",
-    "const r=await (window.rxFieldFetch?window.rxFieldFetch(`/v1/live/cities?q=${encodeURIComponent(q)}`,7000):fetch(`/v1/live/cities?q=${encodeURIComponent(q)}`));",
-)
-
-# Farm names remain enabled in field mode, but background traffic is throttled so labels
-# do not compete with the base map and CAR polygons for the radio link.
-html = html.replace(
-    "function schedule(){clearTimeout(timer);timer=setTimeout(refresh,420)}",
-    "function schedule(){clearTimeout(timer);timer=setTimeout(refresh,window.rxFieldMode?1500:480)}",
-)
-html = html.replace(
-    "u.searchParams.set('limit',z>=15?'60':'35');",
-    "u.searchParams.set('limit',window.rxFieldMode?(z>=15?'30':'18'):(z>=15?'60':'35'));",
-)
-html = html.replace(
-    "const r=await fetch(u),d=await r.json();",
-    "const r=await (window.rxFieldFetch?window.rxFieldFetch(u,window.rxFieldMode?7000:10000):fetch(u)),d=await r.json();",
-)
-html = html.replace(
-    "setTimeout(refresh,900)",
-    "setTimeout(refresh,window.rxFieldMode?2200:900)",
+    "const r=await (window.rxFieldFetch?window.rxFieldFetch(`/v1/live/cities?q=${encodeURIComponent(q)}`,6500):fetch(`/v1/live/cities?q=${encodeURIComponent(q)}`));",
 )
 
 portal_v8.PORTAL_HTML = html.replace('</body>', FIELD_UI + '</body>')
 
-print('RX_FIELD_MODE_V31=weak_network_map_first_cache_enabled', flush=True)
+print('RX_FIELD_MODE_V43=weak_network_swr_snapshot_identity_map_cache', flush=True)
