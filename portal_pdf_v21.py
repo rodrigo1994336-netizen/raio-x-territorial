@@ -15,7 +15,7 @@ WORKER=os.getenv('RX_REPORT_WORKER_URL','https://raio-x-territorial-report.onren
 
 async def _proxy(method:str,path:str,params=None,timeout=25):
     try:
-        async with httpx.AsyncClient(timeout=timeout,follow_redirects=True,headers={'User-Agent':'Raio-X-Territorial-Portal/V21'}) as c:
+        async with httpx.AsyncClient(timeout=timeout,follow_redirects=True,headers={'User-Agent':'Raio-X-Territorial-Portal/V24'}) as c:
             r=await c.request(method,WORKER+path,params=params)
             try:data=r.json()
             except Exception:data={'detail':r.text[:300]}
@@ -43,8 +43,6 @@ async def mobile_report_open(car_code:str,property_name:str|None=None):
     return RedirectResponse(url=url,status_code=307)
 
 
-# The progressive UI lives on the portal, but its backend routes live on the heavy worker.
-# Proxy them so the mobile app never sees a 404/Not Found again.
 @app.get('/v1/live/quick/{car_code}')
 async def portal_quick_proxy(car_code:str):
     return await _proxy('GET',f'/v1/live/quick/{quote(car_code.upper())}',timeout=22)
@@ -59,10 +57,9 @@ UI=r'''
 <script>
 (function(){
  const enc=s=>encodeURIComponent(String(s||''));
- const mobile=()=>matchMedia('(max-width:720px)').matches;
  const getCurrent=()=>{try{return (typeof current!=='undefined'&&current)?current:window.current}catch(e){return window.current}};
  const goodName=p=>{const n=String(p?.name||'').trim();return n&&!/^im[oó]vel rural/i.test(n)?n:''};
- let pollTimer=null,pollToken=0;
+ let pollTimer=null,prewarmTimer=null,pollToken=0,selectionToken=0;
  function btn(){return document.querySelector('#rxMobilePdf')}
  function setBtn(text,state){const b=btn();if(!b)return;b.textContent=text;b.dataset.pdfState=state||'';b.disabled=false}
  function toastSafe(t){try{if(typeof toast==='function')toast(t)}catch(e){}}
@@ -71,10 +68,10 @@ UI=r'''
    clearTimeout(pollTimer);
    try{
      const d=await status(code,name);if(token!==pollToken)return;
-     if(d.state==='ready'){window.__rxPdfReady={code,name};setBtn('ABRIR PDF','ready');return}
+     if(d.state==='ready'){window.__rxPdfReady={code};setBtn('ABRIR PDF','ready');return}
      if(d.state==='failed'){setBtn('TENTAR PDF','failed');return}
-     setBtn('PDF PREPARANDO…','running');pollTimer=setTimeout(()=>poll(code,name,token),1400);
-   }catch(e){if(token!==pollToken)return;setBtn('PDF PREPARANDO…','running');pollTimer=setTimeout(()=>poll(code,name,token),2200)}
+     setBtn('PDF PREPARANDO…','running');pollTimer=setTimeout(()=>poll(code,name,token),1600);
+   }catch(e){if(token!==pollToken)return;setBtn('PDF PREPARANDO…','running');pollTimer=setTimeout(()=>poll(code,name,token),2400)}
  }
  async function prepare(p){
    if(!p?.car_code)return;const code=p.car_code,name=goodName(p),token=++pollToken;
@@ -82,30 +79,40 @@ UI=r'''
    try{await fetch(`/v1/mobile/report/prepare/${enc(code)}?property_name=${enc(name)}`,{method:'POST',cache:'no-store'}).then(async r=>{if(!r.ok){const d=await r.json().catch(()=>({}));throw new Error(d.detail||'prepare falhou')}})}catch(e){}
    poll(code,name,token);
  }
+ function schedulePrepare(p){
+   clearTimeout(prewarmTimer);const token=++selectionToken;
+   // Do not spend server CPU on every polygon the user briefly taps while browsing.
+   // A stable selection for 2.8s is enough to start background preparation; clicking
+   // the PDF button still starts it immediately.
+   prewarmTimer=setTimeout(()=>{if(token===selectionToken){const cur=getCurrent()||p;if(cur?.car_code===p?.car_code)prepare(cur)}},2800);
+ }
  function bindPdf(p){
    const old=btn();if(!old)return;const b=old.cloneNode(true);old.replaceWith(b);
+   const code=p?.car_code;
+   if(window.__rxPdfReady?.code===code)setBtn('ABRIR PDF','ready');else setBtn('GERAR PDF','idle');
    b.addEventListener('click',async()=>{
-     const cur=getCurrent()||p,code=cur?.car_code,name=goodName(cur);if(!code)return;
-     if(b.dataset.pdfState==='ready'||(window.__rxPdfReady?.code===code&&window.__rxPdfReady?.name===name)){
-       window.open(`/v1/mobile/report/open/${enc(code)}?property_name=${enc(name)}`,'_blank');return;
-     }
-     toastSafe('O PDF está sendo montado em segundo plano. Assim que ficar pronto, o botão muda para ABRIR PDF.');
+     const cur=getCurrent()||p,c=cur?.car_code,name=goodName(cur);if(!c)return;
+     if(b.dataset.pdfState==='ready'||window.__rxPdfReady?.code===c){window.open(`/v1/mobile/report/open/${enc(c)}?property_name=${enc(name)}`,'_blank');return}
+     clearTimeout(prewarmTimer);
+     toastSafe('Preparando o dossiê completo. Você pode continuar usando o mapa enquanto o PDF é gerado.');
      prepare(cur);
    });
  }
  function install(){
-   if(window.__rxPdfV21Installed)return;window.__rxPdfV21Installed=true;
+   if(window.__rxPdfV24Installed)return;window.__rxPdfV24Installed=true;
    const previous=window.showProperty;
-   if(previous)window.showProperty=showProperty=function(p,g){const out=previous(p,g);setTimeout(()=>{const cur=getCurrent()||p;bindPdf(cur);prepare(cur)},120);return out};
-   // If a property was already selected during a hot reload, prewarm it too.
-   setTimeout(()=>{const cur=getCurrent();if(cur?.car_code){bindPdf(cur);prepare(cur)}},500);
+   if(previous)window.showProperty=showProperty=function(p,g){
+     ++selectionToken;clearTimeout(prewarmTimer);clearTimeout(pollTimer);++pollToken;
+     const out=previous(p,g);setTimeout(()=>{const cur=getCurrent()||p;bindPdf(cur);schedulePrepare(cur)},120);return out
+   };
+   setTimeout(()=>{const cur=getCurrent();if(cur?.car_code){bindPdf(cur);schedulePrepare(cur)}},700);
  }
  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',install);else install();
 })();
 </script>
 '''
 
-if 'RX_PDF_V21' not in portal_v8.PORTAL_HTML:
-    portal_v8.PORTAL_HTML=portal_v8.PORTAL_HTML.replace('</body>',UI+'<!-- RX_PDF_V21 --></body>')
+if 'RX_PDF_V24' not in portal_v8.PORTAL_HTML:
+    portal_v8.PORTAL_HTML=portal_v8.PORTAL_HTML.replace('</body>',UI+'<!-- RX_PDF_V24 --></body>')
 
-print('RX_PORTAL_PDF_V21=prewarm_worker_proxy_no_404',flush=True)
+print('RX_PORTAL_PDF_V24=debounced_prewarm_worker_proxy',flush=True)
