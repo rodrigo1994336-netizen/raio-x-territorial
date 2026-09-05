@@ -39,7 +39,9 @@ jobs:
           async def open_property_full(page):
               await page.goto(PORTAL,wait_until='domcontentloaded',timeout=60000)
               await page.wait_for_function("typeof window.showProperty==='function'",timeout=30000)
-              snap=await page.evaluate("""async car=>{const r=await fetch('/v1/live/snapshot/'+encodeURIComponent(car));if(!r.ok)throw new Error('snapshot '+r.status);return await r.json()}""",CAR)
+              response=await page.request.get(PORTAL+'/v1/live/snapshot/'+CAR,timeout=60000)
+              assert response.ok,(response.status,await response.text())
+              snap=await response.json()
               prop={'car_code':CAR,'public_name':'Fazenda Barrinha','name':'Fazenda Barrinha','municipality':snap.get('municipality'),'uf':snap.get('uf'),'area_ha':snap.get('area_ha'),'status':snap.get('car_status'),'condition':snap.get('condition'),'type':snap.get('property_type')}
               await page.evaluate("x=>window.showProperty(x.p,x.g)",{'p':prop,'g':snap.get('geometry')})
               await page.wait_for_selector('#rx43Full',state='visible',timeout=20000)
@@ -48,7 +50,7 @@ jobs:
               return prop
 
           async def desktop(browser):
-              ctx=await browser.new_context(viewport={'width':1440,'height':900})
+              ctx=await browser.new_context(viewport={'width':1440,'height':900},service_workers='block')
               page=await ctx.new_page();errors=[]
               page.on('pageerror',lambda e: errors.append(str(e)[:250]))
               await open_property_full(page)
@@ -79,7 +81,7 @@ jobs:
               await ctx.close()
 
           async def mobile(browser):
-              ctx=await browser.new_context(viewport={'width':390,'height':844},is_mobile=True)
+              ctx=await browser.new_context(viewport={'width':390,'height':844},is_mobile=True,service_workers='block')
               page=await ctx.new_page();await page.goto(PORTAL,wait_until='domcontentloaded',timeout=60000)
               await page.wait_for_selector('.rx-basemap-switch',state='visible',timeout=30000)
               sels=['.rx-basemap-switch','#rxLocateBtn','#rxFilterBtn'];boxes=[]
