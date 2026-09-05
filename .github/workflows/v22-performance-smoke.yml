@@ -2,6 +2,8 @@ name: Raio-X V22 Performance Smoke
 
 on:
   workflow_dispatch:
+  push:
+    branches: [ v22-post-v41-smoke ]
 
 permissions:
   contents: read
