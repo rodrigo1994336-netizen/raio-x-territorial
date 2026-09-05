@@ -1,0 +1,19 @@
+name: Raio-X V43.8.2 Worker Retry Smoke
+
+on:
+  push:
+    branches: [ v43-8-2-worker-wakeup ]
+
+permissions:
+  contents: read
+
+jobs:
+  retry-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python tests_v43_8_2_worker_retry_contract.py
