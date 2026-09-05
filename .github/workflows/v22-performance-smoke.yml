@@ -1,0 +1,111 @@
+name: Raio-X V22 Performance Smoke
+
+on:
+  push:
+    paths:
+      - 'report_quick_v22.py'
+      - 'ide_layer_probe.py'
+      - 'live_report_adapter_v18.py'
+      - 'sitecustomize.py'
+      - '.github/workflows/v22-performance-smoke.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  performance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      PORTAL: https://raio-x-territorial-app.onrender.com
+      WORKER: https://raio-x-territorial-report.onrender.com
+      CAR: MG-3120904-DFB380BECD7A4323AD8AA68FA14D011F
+      NAME: V22 Performance Benchmark
+    steps:
+      - name: Wait for V22 worker
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 60); do
+            if curl -fsS --max-time 15 "$WORKER/" >/dev/null 2>&1 && \
+               curl -fsS --max-time 15 "$WORKER/v1/reports/property/$CAR/status?property_name=V22%20Performance%20Benchmark" | grep -q '"state"'; then
+              sleep 2
+              echo 'worker reachable'
+              exit 0
+            fi
+            sleep 8
+          done
+          exit 1
+
+      - name: Measure quick CAR-first response
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          curl -fsS --max-time 15 -w '%{time_total}' "$WORKER/v1/live/quick/$CAR" -o evidence/quick.json > evidence/quick_seconds.txt
+          python - <<'PY'
+          import json
+          d=json.load(open('evidence/quick.json'))
+          sec=float(open('evidence/quick_seconds.txt').read().strip())
+          print('QUICK_HTTP_SECONDS',sec)
+          print('QUICK_ENGINE_MS',d.get('elapsed_ms'),'MODE',d.get('mode'))
+          assert d.get('ok') is True, d
+          assert d.get('mode') in ('quick-car','quick-cache'), d
+          assert sec < 7.0, sec
+          PY
+
+      - name: Start PDF prewarm while deep analysis continues
+        shell: bash
+        run: |
+          set -euo pipefail
+          start=$(date +%s)
+          curl -fsS --max-time 15 -X POST "$WORKER/v1/reports/property/$CAR/prepare?property_name=V22%20Performance%20Benchmark" -o evidence/prepare.json
+          for i in $(seq 1 50); do
+            curl -fsS --max-time 10 "$WORKER/v1/reports/property/$CAR/status?property_name=V22%20Performance%20Benchmark" -o evidence/pdf_status.json
+            state=$(python - <<'PY'
+          import json
+          print(json.load(open('evidence/pdf_status.json')).get('state',''))
+          PY
+          )
+            echo "poll $i state=$state"
+            if [ "$state" = ready ]; then
+              end=$(date +%s)
+              echo $((end-start)) > evidence/pdf_wall_seconds.txt
+              exit 0
+            fi
+            if [ "$state" = failed ]; then
+              cat evidence/pdf_status.json
+              exit 1
+            fi
+            sleep 3
+          done
+          echo 'PDF did not become ready within benchmark window' >&2
+          exit 1
+
+      - name: Measure cached PDF open
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS --max-time 20 -w '%{time_total}' "$WORKER/v1/reports/property/$CAR?property_name=V22%20Performance%20Benchmark" -o evidence/report.pdf > evidence/cached_open_seconds.txt
+          python - <<'PY'
+          import json,os
+          status=json.load(open('evidence/pdf_status.json'))
+          wall=int(open('evidence/pdf_wall_seconds.txt').read())
+          cached=float(open('evidence/cached_open_seconds.txt').read())
+          size=os.path.getsize('evidence/report.pdf')
+          print('FIRST_PDF_WALL_SECONDS',wall)
+          print('ENGINE_ELAPSED_MS',status.get('elapsed_ms'))
+          print('CACHED_OPEN_SECONDS',cached)
+          print('PDF_BYTES',size)
+          assert size>100000, size
+          assert cached<5.0, cached
+          PY
+
+      - name: Upload benchmark evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: raio-x-v22-performance-smoke
+          path: evidence/
+          retention-days: 14
