@@ -6,12 +6,14 @@ from typing import Any
 
 from highres_reference import build_highres_reference_image
 from sentinel_cog import build_sentinel_cog_property_image
+from property_visual_plate_v25 import build_property_visual_plate
 
 
 async def build_hybrid_property_imagery(car_geometry:dict[str,Any],out_path:str|Path):
     out_path=Path(out_path);out_path.parent.mkdir(parents=True,exist_ok=True)
     high_path=out_path.with_name('property_highres_reference.jpg')
     sentinel_path=out_path.with_name('property_sentinel2_10m.jpg')
+    plate_path=out_path.with_name('property_visual_plate_v25.jpg')
     high,sentinel=await asyncio.gather(
         build_highres_reference_image(car_geometry,high_path),
         build_sentinel_cog_property_image(car_geometry,sentinel_path),
@@ -19,23 +21,37 @@ async def build_hybrid_property_imagery(car_geometry:dict[str,Any],out_path:str|
     )
     if isinstance(high,Exception):high={'ok':False,'source':'Esri World Imagery','detail':f'{type(high).__name__}:{str(high)[:220]}'}
     if isinstance(sentinel,Exception):sentinel={'ok':False,'source':'Sentinel-2','detail':f'{type(sentinel).__name__}:{str(sentinel)[:220]}'}
-    primary=high.get('path') if high.get('ok') else (sentinel.get('path') if sentinel.get('ok') else None)
+
+    try:
+        plate=build_property_visual_plate(
+            plate_path,
+            car_geometry,
+            high.get('path') if high.get('ok') else None,
+            sentinel.get('path') if sentinel.get('ok') else None,
+            sentinel.get('ndvi_image_path') if sentinel.get('ok') else None,
+            sentinel,
+        )
+    except Exception as e:
+        plate={'ok':False,'detail':f'{type(e).__name__}:{str(e)[:220]}'}
+
+    fallback=high.get('path') if high.get('ok') else (sentinel.get('path') if sentinel.get('ok') else None)
+    primary=plate.get('path') if plate.get('ok') else fallback
     meta={
         'ok':bool(primary),'path':primary,
+        'visual_plate':plate,
+        'visual_plate_path':plate.get('path') if plate.get('ok') else None,
         'visual_reference':high,
         'sentinel':sentinel,
         'visual_reference_path':high.get('path') if high.get('ok') else None,
         'sentinel_image_path':sentinel.get('path') if sentinel.get('ok') else None,
         'ndvi_image_path':sentinel.get('ndvi_image_path') if sentinel.get('ok') else None,
-        'source':'Esri World Imagery + Copernicus Sentinel-2' if high.get('ok') and sentinel.get('ok') else (high.get('source') if high.get('ok') else sentinel.get('source')),
-        'note':'A imagem de alta resolução é referência visual. A cena Sentinel-2 datada é a evidência científica usada para NDVI e métricas espectrais.'
+        'source':'Prancha V25: Esri World Imagery + Copernicus Sentinel-2 + NDVI' if plate.get('ok') else ('Esri World Imagery + Copernicus Sentinel-2' if high.get('ok') and sentinel.get('ok') else (high.get('source') if high.get('ok') else sentinel.get('source'))),
+        'note':'A capa usa uma prancha comparativa do mesmo CAR. A alta resolução serve ao reconhecimento visual; a cena Sentinel-2 datada sustenta a evidência temporal e o NDVI.'
     }
-    # Promote scientific Sentinel metadata without changing the visual-reference identity.
     for k in ('scene_id','date','cloud_cover_pct','resolution_m','ndvi_mean','ndvi_median','ndvi_p10','ndvi_p90','ndvi_low_share_pct','ndvi_medium_share_pct','ndvi_high_share_pct','ndvi_pixel_count'):
         if k in sentinel:meta[k]=sentinel.get(k)
-    if not primary:
-        meta['detail']=f"highres={high.get('detail')}; sentinel={sentinel.get('detail')}"
+    if not primary:meta['detail']=f"highres={high.get('detail')}; sentinel={sentinel.get('detail')}; plate={plate.get('detail')}"
     return meta
 
 
-print('RX_VISUAL_HYBRID=highres_reference_plus_sentinel_science',flush=True)
+print('RX_VISUAL_HYBRID_V25=highres_sentinel_ndvi_visual_plate',flush=True)
