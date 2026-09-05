@@ -1,17 +1,19 @@
 from __future__ import annotations
 
 import asyncio
+import html as html_lib
 import os
 import time
 from urllib.parse import quote
 
 import httpx
 from fastapi import HTTPException
-from fastapi.responses import RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 
 import portal_v8
 from property_identity_runtime import resolve_property_identity_sync
 
+# RX_PORTAL_PDF_V43_8 — compatibility marker kept for the protected V43 contract.
 app=portal_v8.app
 WORKER=os.getenv('RX_REPORT_WORKER_URL','https://raio-x-territorial-report.onrender.com').rstrip('/')
 TRANSIENT_STATUS={502,503,504}
@@ -34,17 +36,16 @@ async def _report_name(car_code:str,property_name:str|None)->str:
         return ''
 
 
-async def _wait_worker_ready(car_code:str,property_name:str='',max_wait:float=40.0)->bool:
-    """Wake the report service and wait until the deferred V41 status route exists.
+async def _wait_worker_ready(car_code:str,property_name:str='',max_wait:float=70.0)->bool:
+    """Wait for the real report status route after an on-demand wake.
 
-    Render may accept traffic before the report extensions finish registering. A root
-    200 is therefore not enough; readiness is the real PDF status route returning a
-    JSON state. The wait is bounded and happens only when a report is requested.
+    A browser-side no-cors request wakes Render from the user's network while this
+    server-side loop checks real V41 readiness. The pair avoids a second user click.
     """
     code=str(car_code or '').upper();name=_provided_name(property_name)
     path=f'/v1/reports/property/{quote(code)}/status'
     deadline=time.monotonic()+max(5.0,float(max_wait));attempt=0
-    async with httpx.AsyncClient(timeout=httpx.Timeout(7,connect=4),follow_redirects=True,headers={'User-Agent':'Raio-X-Territorial-Portal/V43.8.3'}) as c:
+    async with httpx.AsyncClient(timeout=httpx.Timeout(7,connect=4),follow_redirects=True,headers={'User-Agent':'Raio-X-Territorial-Portal/V43.9.3'}) as c:
         while time.monotonic()<deadline:
             attempt+=1
             try:
@@ -70,7 +71,7 @@ async def _proxy(method:str,path:str,params=None,timeout=25,retries=0):
     last_error=None
     for attempt in range(max(0,int(retries))+1):
         try:
-            async with httpx.AsyncClient(timeout=timeout,follow_redirects=True,headers={'User-Agent':'Raio-X-Territorial-Portal/V43.8.3'}) as c:
+            async with httpx.AsyncClient(timeout=timeout,follow_redirects=True,headers={'User-Agent':'Raio-X-Territorial-Portal/V43.9.3'}) as c:
                 r=await c.request(method,WORKER+path,params=params)
                 try:data=r.json()
                 except Exception:data={'detail':r.text[:300]}
@@ -93,8 +94,8 @@ async def _proxy(method:str,path:str,params=None,timeout=25,retries=0):
 @app.get('/v1/mobile/report/prepare/{car_code}')
 async def mobile_report_prepare(car_code:str,property_name:str|None=None):
     name=await _report_name(car_code,property_name)
-    if not await _wait_worker_ready(car_code,name,40):
-        raise HTTPException(status_code=503,detail='Motor do relatório está iniciando. Tente novamente em alguns segundos.')
+    if not await _wait_worker_ready(car_code,name,70):
+        raise HTTPException(status_code=503,detail='Motor do relatório ainda está iniciando. A geração não foi iniciada.')
     return await _proxy('POST',f'/v1/reports/property/{quote(car_code.upper())}/prepare',{'property_name':name},12,retries=1)
 
 
@@ -110,6 +111,23 @@ async def mobile_report_open(car_code:str,property_name:str|None=None):
     url=f'{WORKER}/v1/reports/property/{quote(car_code.upper())}'
     if name:url+='?property_name='+quote(name)
     return RedirectResponse(url=url,status_code=307)
+
+
+@app.get('/v1/mobile/report/view/{car_code}',response_class=HTMLResponse)
+async def mobile_report_view(car_code:str,property_name:str|None=None):
+    code=str(car_code or '').upper()
+    name=await _report_name(code,property_name)
+    safe_title=html_lib.escape(name or 'Relatório territorial')
+    safe_code=html_lib.escape(code)
+    pdf_url=f'/v1/mobile/report/open/{quote(code)}'
+    if name:pdf_url+='?property_name='+quote(name)
+    safe_pdf=html_lib.escape(pdf_url,quote=True)
+    page=f'''<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>{safe_title} · Raio-X Territorial</title><style>
+*{{box-sizing:border-box}}html,body{{margin:0;width:100%;height:100%;background:#07140e;color:#edf7f1;font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}}body{{display:flex;flex-direction:column;overflow:hidden}}header{{min-height:62px;padding:10px max(12px,env(safe-area-inset-right)) 10px max(12px,env(safe-area-inset-left));display:flex;align-items:center;gap:10px;border-bottom:1px solid #214033;background:#0a1d14;z-index:2}}.back,.open{{height:40px;border:1px solid #315745;border-radius:11px;padding:0 14px;background:#102a1d;color:#edf7f1;font-weight:800;font-size:12px;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;justify-content:center}}.back{{background:#65dfaa;color:#07140e;border-color:#65dfaa}}.title{{min-width:0;flex:1}}.title strong{{display:block;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}.title small{{display:block;margin-top:2px;color:#92ad9f;font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}iframe{{border:0;width:100%;flex:1;background:#fff}}@media(max-width:640px){{header{{min-height:58px;padding-top:max(8px,env(safe-area-inset-top))}}.open{{padding:0 10px}}.title strong{{font-size:12px}}.title small{{font-size:9px}}}}
+</style></head><body><header><button class="back" type="button" onclick="returnToRaioX()">← VOLTAR AO RAIO-X</button><div class="title"><strong>{safe_title}</strong><small>{safe_code}</small></div><a class="open" href="{safe_pdf}" target="_blank" rel="noopener">ABRIR PDF</a></header><iframe src="{safe_pdf}" title="{safe_title}"></iframe><script>
+function returnToRaioX(){{try{{if(window.opener&&!window.opener.closed){{window.opener.focus();window.close();return}}}}catch(e){{}}if(history.length>1){{history.back()}}else{{location.href='/'}}}}
+</script><!-- RX_PDF_VIEWER_V43_9_3 --></body></html>'''
+    return HTMLResponse(page,headers={'Cache-Control':'no-store'})
 
 
 @app.get('/v1/live/quick/{car_code}')
@@ -130,12 +148,15 @@ UI=r'''
 <script>
 (function(){
  const enc=s=>encodeURIComponent(String(s||''));
+ const workerWake='__RX_WORKER_WAKE_URL__';
  const getCurrent=()=>{try{return (typeof current!=='undefined'&&current)?current:window.current}catch(e){return window.current}};
  const goodName=p=>{const n=String(p?.public_name||p?.name||'').trim();return n&&!/^im[oó]vel rural/i.test(n)?n:''};
  let pollTimer=null,pollToken=0,startedAt=0;
  function btn(){return document.querySelector('#rxMobilePdf')}
  function setBtn(text,state){const b=btn();if(!b)return;b.textContent=text;b.dataset.pdfState=state||'';b.disabled=false}
  function tell(t,kind){try{if(typeof window.rxUiStatus==='function')window.rxUiStatus(t,kind||'ok',3000);else if(typeof toast==='function')toast(t)}catch(e){}}
+ function wakeWorker(){try{fetch(workerWake,{mode:'no-cors',cache:'no-store'}).catch(()=>{})}catch(e){}}
+ function openViewer(code,name){const url=`/v1/mobile/report/view/${enc(code)}?property_name=${enc(name)}`;const standalone=window.matchMedia?.('(display-mode: standalone)').matches||window.navigator.standalone===true;if(standalone){location.href=url;return}const w=window.open(url,'_blank');if(!w)location.href=url}
  async function status(code,name){const r=await fetch(`/v1/mobile/report/status/${enc(code)}?property_name=${enc(name)}`,{cache:'no-store'});const d=await r.json();if(!r.ok)throw new Error(d.detail||'status indisponível');return d}
  async function poll(code,name,token){
    clearTimeout(pollTimer);
@@ -154,6 +175,7 @@ UI=r'''
  }
  async function prepare(p){
    if(!p?.car_code)return;const code=p.car_code,name=goodName(p),token=++pollToken;startedAt=Date.now();
+   wakeWorker();
    setBtn('PDF PREPARANDO · 0s','running');tell('Preparando o motor e gerando o PDF. Você não precisa tocar novamente.','ok');
    try{
      const r=await fetch(`/v1/mobile/report/prepare/${enc(code)}?property_name=${enc(name)}`,{method:'POST',cache:'no-store'});
@@ -168,7 +190,7 @@ UI=r'''
    b.addEventListener('click',()=>{
      const cur=getCurrent()||p,c=cur?.car_code,name=goodName(cur);if(!c){tell('Selecione uma propriedade antes de gerar o PDF.','bad');return}
      if(b.dataset.pdfState==='running'){tell('O PDF está sendo preparado. Não é necessário tocar novamente.','ok');return}
-     if(b.dataset.pdfState==='ready'||window.__rxPdfReady?.code===c){window.open(`/v1/mobile/report/open/${enc(c)}?property_name=${enc(name)}`,'_blank');return}
+     if(b.dataset.pdfState==='ready'||window.__rxPdfReady?.code===c){openViewer(c,name);return}
      prepare(cur)
    });
  }
@@ -181,9 +203,9 @@ UI=r'''
  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',install);else install();
 })();
 </script>
-'''
+'''.replace('__RX_WORKER_WAKE_URL__',WORKER+'/')
 
 if 'RX_PDF_V43_8' not in portal_v8.PORTAL_HTML:
-    portal_v8.PORTAL_HTML=portal_v8.PORTAL_HTML.replace('</body>',UI+'<!-- RX_PDF_V43_8 --></body>')
+    portal_v8.PORTAL_HTML=portal_v8.PORTAL_HTML.replace('</body>',UI+'<!-- RX_PDF_V43_8 --><!-- RX_BROWSER_WORKER_WAKE_V43_9_3 --></body>')
 
-print('RX_PORTAL_PDF_V43_8_3=worker_readiness_wait_named_report',flush=True)
+print('RX_PORTAL_PDF_V43_9_3=browser_wake_viewer_return_to_app',flush=True)
