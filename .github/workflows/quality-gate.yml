@@ -46,6 +46,7 @@ jobs:
         run: |
           python - <<'PY'
           import time
+          from pathlib import Path
           import sitecustomize
           import portal_api
           import portal_boot_guard_v26
@@ -78,7 +79,7 @@ jobs:
               'body.rx43-dossier-open #map','rx43-dossier-open','rx43-full-requested',
               'RX_ACTION_RUNTIME_V25','RX_FIELD_MODE_V31','RX_MAP_VISUAL_V32',
               'RX_PROPERTY_NAMES_V40','RX_ADVANCED_SEARCH_V39','rxAdvTrigger',
-              'serviceWorker.register','rxParcelStyle','Produção rural',
+              'serviceWorker.register','rxParcelStyle',
           )
           absent=[x for x in required if x not in html]
           assert not absent, f'missing V43 UI/action markers: {absent}'
@@ -90,6 +91,9 @@ jobs:
           leaked=[x for x in retired if x in html]
           assert not leaked, f'retired UI leaked into V43: {leaked}'
           assert 'setInterval(install,500);' not in html
+          prod=Path('portal_territorial_production_v33.py').read_text()
+          assert 'setInterval' not in prod and 'MutationObserver' not in prod
+          assert 'route_only_no_legacy_tab_timer' in prod
           assert 'Fontes pesadas não foram disparadas' in html
           assert 'IMÓVEL RURAL — NOME NÃO CONFIRMADO' in html
           assert 'z<11' in html and 'span>1.50' in html
@@ -98,7 +102,7 @@ jobs:
           assert not heavy, f'heavy modules leaked into portal: {heavy}'
           rss=portal_resource_guard_v27._rss_bytes()/1024/1024
           assert rss < 220, f'portal RSS too high in gate: {rss:.1f} MB'
-          print('RX_CI_PORTAL_V43_READY',len(paths),'rss_mb=',round(rss,1))
+          print('RX_CI_PORTAL_V43_READY',len(paths),'rss_mb=',round(rss,1),'mutation_observers=',html.count('MutationObserver'),'intervals=',html.count('setInterval('))
           PY
       - name: V41 report bounded-latency and CAR-composition gate
         env:
