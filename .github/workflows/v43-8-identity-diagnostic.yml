@@ -6,52 +6,31 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   identity:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 10
     env:
       PORTAL: https://raio-x-territorial-app.onrender.com
     steps:
-      - name: Match named OSM farms to exact SICAR CAR polygons
+      - name: Download captured Curvelo public-name evidence
+        uses: actions/download-artifact@v5
+        with:
+          name: raio-x-v43-8-public-name-sources
+          path: evidence/source
+          github-token: ${{ github.token }}
+          run-id: 33991594540
+      - name: Match captured OSM farm names to exact SICAR CAR polygons
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p evidence
           python - <<'PY'
-          import concurrent.futures, json, os, time, urllib.error, urllib.parse, urllib.request
+          import concurrent.futures, json, os, urllib.error, urllib.parse, urllib.request
           portal=os.environ['PORTAL']; headers={'User-Agent':'Raio-X-V43.8-Diagnostic'}
-          # Curvelo bbox previously resolved from Nominatim: west,south,east,north.
-          west,south,east,north=-44.7981262,-19.232,-44.0742789,-18.276
-          mx=(west+east)/2; my=(south+north)/2
-          cells=[(south,west,my,mx),(south,mx,my,east),(my,west,north,mx),(my,mx,north,east)]
-          endpoints=['https://overpass-api.de/api/interpreter','https://overpass.kumi.systems/api/interpreter']
-          found={}; failures=[]
-          for ci,(s,w,n,e) in enumerate(cells,1):
-              q=f'''[out:json][timeout:30];(nwr["name"]["place"="farm"]({s},{w},{n},{e});nwr["name"]["landuse"="farmyard"]({s},{w},{n},{e});nwr["name"]["landuse"="farmland"]({s},{w},{n},{e}););out center tags 200;'''
-              body=urllib.parse.urlencode({'data':q}).encode()
-              data=None
-              for endpoint in endpoints:
-                  try:
-                      req=urllib.request.Request(endpoint,data=body,headers={'User-Agent':'Raio-X-V43.8-Diagnostic','Content-Type':'application/x-www-form-urlencoded'})
-                      with urllib.request.urlopen(req,timeout=50) as r: data=json.load(r)
-                      print('OVERPASS_CELL',ci,'ENDPOINT',endpoint,'ELEMENTS',len(data.get('elements') or []))
-                      break
-                  except Exception as ex:
-                      failures.append({'cell':ci,'endpoint':endpoint,'error':type(ex).__name__+':'+str(ex)[:180]})
-                      print('OVERPASS_FAIL',ci,endpoint,type(ex).__name__,str(ex)[:180])
-                      time.sleep(1)
-              if data is None: continue
-              for el in data.get('elements') or []:
-                  tags=el.get('tags') or {}; name=' '.join(str(tags.get('name') or '').split())
-                  if not name: continue
-                  c=el.get('center') or {'lat':el.get('lat'),'lon':el.get('lon')}
-                  lat,lon=c.get('lat'),c.get('lon')
-                  if lat is None or lon is None: continue
-                  key=f"{el.get('type')}:{el.get('id')}"
-                  found[key]={'osm_type':el.get('type'),'osm_id':el.get('id'),'name':name,'lat':float(lat),'lon':float(lon),'place':tags.get('place'),'landuse':tags.get('landuse')}
-          candidates=list(found.values())
+          src=json.load(open('evidence/source/curvelo_public_name_sources.json'))
+          candidates=src.get('osm',{}).get('sample') or []
           print('OSM_CANDIDATES',len(candidates))
           def resolve(x):
               u=portal+'/v1/live/resolve?'+urllib.parse.urlencode({'lat':x['lat'],'lon':x['lon']})
@@ -67,25 +46,24 @@ jobs:
                   return {**x,'resolved':False,'error':type(ex).__name__+':'+str(ex)[:160]}
           with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
               rows=list(ex.map(resolve,candidates))
-          matched=[x for x in rows if x.get('resolved')]
-          # CAR prefix MG-3120904 is the authoritative municipality filter for Curvelo.
-          matched=[x for x in matched if str(x.get('car_code') or '').upper().startswith('MG-3120904-')]
+          resolved=[x for x in rows if x.get('resolved')]
+          matched=[x for x in resolved if str(x.get('car_code') or '').upper().startswith('MG-3120904-')]
           by={}
           for x in matched: by.setdefault(x['car_code'],[]).append(x)
           safe=[]; conflicts=[]
           for car,items in by.items():
               unique={x['name'].casefold():x['name'] for x in items}; names=sorted(unique.values(),key=str.casefold)
               if len(names)==1:
-                  safe.append({'car_code':car,'name':names[0],'area_ha':items[0].get('area_ha'),'evidence_count':len(items),'osm':[{'type':x['osm_type'],'id':x['osm_id'],'lat':x['lat'],'lon':x['lon'],'place':x.get('place'),'landuse':x.get('landuse')} for x in items]})
+                  safe.append({'car_code':car,'name':names[0],'area_ha':items[0].get('area_ha'),'evidence_count':len(items),'osm':[{'type':x.get('type'),'id':x.get('id'),'lat':x['lat'],'lon':x['lon'],'place':x.get('place'),'landuse':x.get('landuse')} for x in items]})
               else:
                   conflicts.append({'car_code':car,'names':names,'items':items})
           safe.sort(key=lambda x:(-x['evidence_count'],x['name']))
-          out={'osm_candidates':len(candidates),'overpass_failures':failures,'resolved_points':len(matched),'unique_cars':len(by),'safe_single_name_cars':len(safe),'conflicting_cars':len(conflicts),'safe':safe,'conflicts':conflicts,'rows':rows}
-          print('MATCH_SUMMARY',json.dumps({k:out[k] for k in ('osm_candidates','resolved_points','unique_cars','safe_single_name_cars','conflicting_cars')},ensure_ascii=False))
+          out={'osm_candidates':len(candidates),'resolved_any_car':len(resolved),'resolved_curvelo_points':len(matched),'unique_curvelo_cars':len(by),'safe_single_name_cars':len(safe),'conflicting_cars':len(conflicts),'safe':safe,'conflicts':conflicts,'rows':rows}
+          print('MATCH_SUMMARY',json.dumps({k:out[k] for k in ('osm_candidates','resolved_any_car','resolved_curvelo_points','unique_curvelo_cars','safe_single_name_cars','conflicting_cars')},ensure_ascii=False))
           print('SAFE_MATCHES',json.dumps(safe[:30],ensure_ascii=False))
           print('CONFLICTS',json.dumps(conflicts[:10],ensure_ascii=False))
           open('evidence/curvelo_osm_car_matches.json','w').write(json.dumps(out,ensure_ascii=False,indent=2))
-          assert len(candidates)>0,'no OSM named farm candidates loaded'
+          assert len(candidates)==84,('unexpected candidate count',len(candidates))
           assert len(safe)>0,'no exact OSM farm name -> Curvelo CAR match found'
           PY
       - name: Upload evidence
@@ -93,5 +71,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: raio-x-v43-8-osm-car-matches
-          path: evidence/
+          path: evidence/curvelo_osm_car_matches.json
           retention-days: 14
