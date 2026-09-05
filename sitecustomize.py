@@ -3,8 +3,13 @@ import sys
 import threading
 import time
 
+IS_PORTAL = os.getenv('RX_RELEASE') == 'V8_OPERATIONAL_ZERO_COST'
+
 
 def _load_report_v18_after_report_api():
+    if IS_PORTAL:
+        print('RX_REPORT_V18_RUNTIME=skipped_on_portal_service',flush=True)
+        return
     for _ in range(320):
         mod=sys.modules.get('report_api')
         if mod is not None and hasattr(mod,'app') and hasattr(mod,'_analyze_with_live_addons'):
@@ -21,7 +26,7 @@ def _load_report_v18_after_report_api():
 
 
 def _load_v8_after_portal():
-    if os.getenv('RX_RELEASE') != 'V8_OPERATIONAL_ZERO_COST':
+    if not IS_PORTAL:
         return
     for _ in range(320):
         mod=sys.modules.get('portal_api')
@@ -63,6 +68,7 @@ def _load_v8_after_portal():
     print('RX_PORTAL_V8_EXTENSION=timeout_waiting_portal_api',flush=True)
 
 
-threading.Thread(target=_load_report_v18_after_report_api,daemon=True).start()
-if os.getenv('RX_RELEASE') == 'V8_OPERATIONAL_ZERO_COST':
+if IS_PORTAL:
     threading.Thread(target=_load_v8_after_portal,daemon=True).start()
+else:
+    threading.Thread(target=_load_report_v18_after_report_api,daemon=True).start()
