@@ -30,25 +30,39 @@ def _load_report_v24_after_report_api():
         time.sleep(0.05)
 
 
-def _load_portal_v25_sync():
-    """Import the complete portal before Uvicorn exposes the app.
+def _optional_bootstraps():
+    """Optional persistence/auth drivers must never hold the HTTP port hostage."""
+    try:
+        import postgres_runtime_bootstrap
+        postgres_runtime_bootstrap.ensure_postgres_driver()
+    except Exception as exc:
+        print(f'RX_OPTIONAL_POSTGRES_BOOTSTRAP={type(exc).__name__}:{str(exc)[:180]}',flush=True)
+    try:
+        import redis_runtime_bootstrap
+        redis_runtime_bootstrap.ensure_redis_driver()
+    except Exception as exc:
+        print(f'RX_OPTIONAL_REDIS_BOOTSTRAP={type(exc).__name__}:{str(exc)[:180]}',flush=True)
+    try:
+        import jwt_runtime_bootstrap
+        jwt_runtime_bootstrap.ensure_jwt()
+    except Exception as exc:
+        print(f'RX_OPTIONAL_JWT_BOOTSTRAP={type(exc).__name__}:{str(exc)[:180]}',flush=True)
 
-    V23 loaded these modules in a background thread after the server was already
-    accepting requests. That produced a real half-ready window: HTML was 200 while
-    routes such as /v1/alerts/summary were still 404. Buttons could therefore look
-    dead even though their backend appeared seconds later.
+
+def _load_portal_v25_sync():
+    """Load all routes/UI synchronously; load optional drivers independently.
+
+    The service must never expose a half-ready portal. Conversely, an optional
+    Redis/Postgres/JWT installer must not prevent the HTTP port from opening.
     """
     if not IS_PORTAL:return
     try:
+        # Optional infrastructure is deliberately detached from route registration.
+        threading.Thread(target=_optional_bootstraps,daemon=True).start()
+
         # Importing portal_api here is intentional. Uvicorn later imports the same
-        # cached module, but only after every extension below has finished loading.
+        # cached module, after every essential extension below has registered routes.
         import portal_api  # noqa: F401
-        import postgres_runtime_bootstrap
-        postgres_runtime_bootstrap.ensure_postgres_driver()
-        import redis_runtime_bootstrap
-        redis_runtime_bootstrap.ensure_redis_driver()
-        import jwt_runtime_bootstrap
-        threading.Thread(target=jwt_runtime_bootstrap.ensure_jwt,daemon=True).start()
         import car_resilient  # noqa: F401
         import parity_public_layers  # noqa: F401
         import portal_v8  # noqa: F401
