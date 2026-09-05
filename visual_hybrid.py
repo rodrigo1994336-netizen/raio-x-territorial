@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+import time
 from typing import Any
 
 from highres_reference import build_highres_reference_image
@@ -9,19 +10,28 @@ from sentinel_cog import build_sentinel_cog_property_image
 from property_visual_plate_v25 import build_property_visual_plate
 
 
+async def _timed(label:str,coro):
+    t0=time.monotonic()
+    try:
+        value=await coro
+        print(f'RX_VISUAL_STAGE={label}:{round((time.monotonic()-t0)*1000)}ms:ok={bool((value or {}).get("ok"))}',flush=True)
+        return value
+    except Exception as e:
+        print(f'RX_VISUAL_STAGE={label}:{round((time.monotonic()-t0)*1000)}ms:error={type(e).__name__}',flush=True)
+        return {'ok':False,'source':label,'detail':f'{type(e).__name__}:{str(e)[:220]}'}
+
+
 async def build_hybrid_property_imagery(car_geometry:dict[str,Any],out_path:str|Path,property_meta:dict[str,Any]|None=None):
-    out_path=Path(out_path);out_path.parent.mkdir(parents=True,exist_ok=True)
+    total=time.monotonic();out_path=Path(out_path);out_path.parent.mkdir(parents=True,exist_ok=True)
     high_path=out_path.with_name('property_highres_reference.jpg')
     sentinel_path=out_path.with_name('property_sentinel2_10m.jpg')
     plate_path=out_path.with_name('property_visual_plate_v28.jpg')
     high,sentinel=await asyncio.gather(
-        build_highres_reference_image(car_geometry,high_path),
-        build_sentinel_cog_property_image(car_geometry,sentinel_path),
-        return_exceptions=True
+        _timed('highres_reference',build_highres_reference_image(car_geometry,high_path)),
+        _timed('sentinel_cog_ndvi',build_sentinel_cog_property_image(car_geometry,sentinel_path)),
     )
-    if isinstance(high,Exception):high={'ok':False,'source':'Esri World Imagery','detail':f'{type(high).__name__}:{str(high)[:220]}'}
-    if isinstance(sentinel,Exception):sentinel={'ok':False,'source':'Sentinel-2','detail':f'{type(sentinel).__name__}:{str(sentinel)[:220]}'}
 
+    t0=time.monotonic()
     try:
         plate=build_property_visual_plate(
             plate_path,
@@ -34,6 +44,7 @@ async def build_hybrid_property_imagery(car_geometry:dict[str,Any],out_path:str|
         )
     except Exception as e:
         plate={'ok':False,'detail':f'{type(e).__name__}:{str(e)[:220]}'}
+    print(f'RX_VISUAL_STAGE=visual_plate:{round((time.monotonic()-t0)*1000)}ms:ok={bool(plate.get("ok"))}',flush=True)
 
     fallback=high.get('path') if high.get('ok') else (sentinel.get('path') if sentinel.get('ok') else None)
     primary=plate.get('path') if plate.get('ok') else fallback
@@ -52,7 +63,8 @@ async def build_hybrid_property_imagery(car_geometry:dict[str,Any],out_path:str|
     for k in ('scene_id','date','cloud_cover_pct','resolution_m','ndvi_mean','ndvi_median','ndvi_p10','ndvi_p90','ndvi_low_share_pct','ndvi_medium_share_pct','ndvi_high_share_pct','ndvi_pixel_count'):
         if k in sentinel:meta[k]=sentinel.get(k)
     if not primary:meta['detail']=f"highres={high.get('detail')}; sentinel={sentinel.get('detail')}; plate={plate.get('detail')}"
+    print(f'RX_VISUAL_TOTAL={round((time.monotonic()-total)*1000)}ms:ok={bool(meta.get("ok"))}',flush=True)
     return meta
 
 
-print('RX_VISUAL_HYBRID_V28=property_identity_highres_sentinel_ndvi',flush=True)
+print('RX_VISUAL_HYBRID_V30=timed_property_identity_highres_sentinel_ndvi',flush=True)
