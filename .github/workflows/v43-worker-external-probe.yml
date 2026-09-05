@@ -1,0 +1,38 @@
+name: Raio-X V43 Worker External Probe
+
+on:
+  push:
+    branches: [ v43-worker-external-probe ]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      WORKER: https://raio-x-territorial-report.onrender.com
+      CAR: MG-3120904-E0C91FE86A3646D5AFA40786D6C554A9
+    steps:
+      - name: Probe root and V41 status until reachable
+        shell: bash
+        run: |
+          set -euo pipefail
+          start=$(date +%s)
+          for i in $(seq 1 60); do
+            root=$(curl -sS -o /tmp/root -w '%{http_code}' --max-time 12 "$WORKER/" || true)
+            status=$(curl -sS -o /tmp/status -w '%{http_code}' --max-time 12 "$WORKER/v1/reports/property/$CAR/status?property_name=Fazenda%20Barrinha" || true)
+            state=$(python - <<'PY'
+          import json
+          try: print(json.load(open('/tmp/status')).get('state',''))
+          except Exception: print('')
+          PY
+          )
+            echo "ATTEMPT=$i ROOT=$root STATUS=$status STATE=$state"
+            if [ "$status" = 200 ] && [ -n "$state" ]; then
+              end=$(date +%s); echo "WORKER_EXTERNAL_READY_SECONDS=$((end-start))"; exit 0
+            fi
+            sleep 3
+          done
+          echo 'WORKER_EXTERNAL_UNREACHABLE'; exit 1
