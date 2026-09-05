@@ -17,19 +17,19 @@ jobs:
       - name: Install gate dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install fastapi httpx shapely pyproj pillow reportlab uvicorn "psycopg[binary]" "numpy>=2,<3" "rasterio>=1.4,<2" "PyJWT[crypto]>=2.10,<3"
+          pip install fastapi httpx shapely pyproj pillow reportlab uvicorn "psycopg[binary]" "redis>=5,<7" "numpy>=2,<3" "rasterio>=1.4,<2" "PyJWT[crypto]>=2.10,<3"
       - name: Compile Python modules
         run: |
           python -m py_compile \
             climate_nasa.py groundwater_siagas.py safras_ibge.py satellite_real.py soilgrids_wcs.py \
             sicar_detail_sources.py sicar_detail_sources_v2.py aerodromes_anac.py property_search.py property_identity_runtime.py map_context.py \
-            portal_property_tabs.py portal_smart_search.py portal_map_context_symbols.py \
+            portal_property_tabs.py portal_live_fix_v18.py portal_smart_search.py portal_map_context_symbols.py \
             portal_rare_earth_symbols.py portal_property_identity_v13.py report_book_style.py \
-            report_engine_v6.py report_engine_v7.py rasterio_runtime_bootstrap.py sentinel_cog.py \
+            report_engine_v6.py report_engine_v7.py rasterio_runtime_bootstrap.py redis_runtime_bootstrap.py sentinel_cog.py \
             highres_reference.py visual_hybrid.py terrain_srtm.py mapbiomas_coverage.py \
             report_truth_guard_v16.py live_report_adapter_v12.py live_report_adapter_v13.py \
             live_report_adapter_v14.py live_report_adapter_v15.py live_report_adapter_v16.py live_report_adapter_v17.py \
-            github_oidc_auth.py jwt_runtime_bootstrap.py monitoring_store.py monitoring_routes.py \
+            github_oidc_auth.py jwt_runtime_bootstrap.py monitoring_store.py monitoring_routes.py alerts_routes.py \
             report_v13_patch.py report_v14_patch.py report_v15_patch.py report_v16_patch.py report_v17_patch.py sitecustomize.py
       - name: Import standalone engines
         env:
@@ -40,6 +40,6 @@ jobs:
           import soilgrids_wcs, sicar_detail_sources_v2, aerodromes_anac, sentinel_cog, mapbiomas_coverage
           import highres_reference, visual_hybrid, terrain_srtm
           import report_truth_guard_v16, report_book_style, report_engine_v6, report_engine_v7
-          import github_oidc_auth, monitoring_store, monitoring_routes
+          import github_oidc_auth, monitoring_store, monitoring_routes, alerts_routes
           print('RX_CI_IMPORT_OK')
           PY
