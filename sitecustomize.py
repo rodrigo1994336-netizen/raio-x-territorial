@@ -105,6 +105,7 @@ def _load_portal_deferred():
                     '/v1/live/search/landuse-profiles',
                     '/v1/live/incra-certified/status/{uf}',
                     '/v1/live/incra-certified/viewport',
+                    '/v1/mobile/report/view/{car_code}',
                 ):
                     if required not in ready:
                         raise RuntimeError('missing_portal_route:' + required)
@@ -124,16 +125,21 @@ def _load_portal_deferred():
                     raise RuntimeError('v43_8_named_report_action_not_loaded')
                 if 'RX_HYBRID_BASEMAP_V43_9' not in portal_v8.PORTAL_HTML:
                     raise RuntimeError('v43_9_hybrid_basemap_not_loaded')
+                if 'RX_BROWSER_WORKER_WAKE_V43_9_3' not in portal_v8.PORTAL_HTML:
+                    raise RuntimeError('v43_9_3_browser_worker_wake_not_loaded')
                 if 'window.rxVisibleCarCountV43' not in portal_v8.PORTAL_HTML:
                     raise RuntimeError('v43_name_coverage_counter_not_loaded')
                 advanced_routes = [r for r in portal_v8.app.router.routes if getattr(r, 'path', None) == '/v1/live/search/advanced']
                 if len(advanced_routes) != 1 or getattr(advanced_routes[0].endpoint, '__name__', '') != 'advanced_property_search_v43':
                     raise RuntimeError('v43_7_resilient_search_route_not_active')
+                viewer_routes = [r for r in portal_v8.app.router.routes if getattr(r, 'path', None) == '/v1/mobile/report/view/{car_code}']
+                if len(viewer_routes) != 1 or getattr(viewer_routes[0].endpoint, '__name__', '') != 'mobile_report_view':
+                    raise RuntimeError('v43_9_3_pdf_viewer_route_not_active')
                 heavy = portal_resource_guard_v27._heavy_loaded()
                 if heavy:
                     raise RuntimeError('heavy_modules_loaded_on_portal:' + ','.join(heavy))
                 guard.mark_ready()
-                print(f'RX_PORTAL_V43_EXTENSION=loaded_deferred routes:{len(ready)} snapshot:on single_surface:on advanced_search:on search_resilient:on names:on osm_names:on coverage:on map_stability:on map_polish:on hybrid_basemap:on named_pdf:on version:{portal_v8.APP_PORTAL_VERSION}', flush=True)
+                print(f'RX_PORTAL_V43_EXTENSION=loaded_deferred routes:{len(ready)} snapshot:on single_surface:on advanced_search:on search_resilient:on names:on osm_names:on coverage:on map_stability:on map_polish:on hybrid_basemap:on named_pdf:on pdf_viewer:on browser_worker_wake:on version:{portal_v8.APP_PORTAL_VERSION}', flush=True)
             except Exception as exc:
                 if guard is not None:
                     try:
