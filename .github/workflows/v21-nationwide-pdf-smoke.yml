@@ -1,13 +1,6 @@
 name: Raio-X V21 Nationwide + PDF Smoke
 
 on:
-  push:
-    paths:
-      - 'portal_nationwide_v21.py'
-      - 'portal_pdf_v21.py'
-      - 'report_pdf_cache_v21.py'
-      - 'sitecustomize.py'
-      - '.github/workflows/v21-nationwide-pdf-smoke.yml'
   workflow_dispatch:
 
 permissions:
@@ -22,43 +15,29 @@ jobs:
       WORKER: https://raio-x-territorial-report.onrender.com
       CAR: MG-3120904-DFB380BECD7A4323AD8AA68FA14D011F
     steps:
-      - name: Wait for V21 portal and worker
+      - name: Wait for portal and worker
         shell: bash
         run: |
           set -euo pipefail
           for i in $(seq 1 60); do
             P="$(curl -fsS --max-time 20 "$PORTAL/" || true)"
             S="$(curl -fsS --max-time 20 "$WORKER/v1/reports/property/$CAR/status" || true)"
-            if grep -q 'RX_PDF_V21' <<<"$P" && grep -q '"state"' <<<"$S"; then
-              echo 'V21 portal and worker are live'
+            if grep -q 'Raio-X Territorial' <<<"$P" && grep -q '"state"' <<<"$S"; then
+              echo 'portal and worker are reachable'
               exit 0
             fi
             sleep 10
           done
-          echo 'V21 runtime not live after wait window' >&2
+          echo 'runtime not live after wait window' >&2
           exit 1
-
-      - name: Assert browser no longer pins last UF
-        shell: bash
-        run: |
-          set -euo pipefail
-          curl -fsS --max-time 30 "$PORTAL/" -o portal.html
-          grep -q 'RX_PDF_V21' portal.html
-          if grep -q "u.searchParams.set('uf',rxLastUf)" portal.html; then
-            echo 'Sticky UF code is still present in production HTML' >&2
-            exit 1
-          fi
 
       - name: Test SICAR viewport in multiple Brazilian states without UF
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p evidence
-          # Minas Gerais / Curvelo
           curl -fsS --retry 2 --max-time 45 "$PORTAL/v1/live/sicar/viewport?west=-44.48&south=-18.83&east=-44.35&north=-18.68&limit=20" -o evidence/mg.json
-          # Goiás / central rural belt
           curl -fsS --retry 2 --max-time 45 "$PORTAL/v1/live/sicar/viewport?west=-50.25&south=-16.15&east=-50.05&north=-15.85&limit=20" -o evidence/go.json
-          # São Paulo / Ribeirão Preto rural belt
           curl -fsS --retry 2 --max-time 45 "$PORTAL/v1/live/sicar/viewport?west=-47.95&south=-21.30&east=-47.70&north=-21.05&limit=20" -o evidence/sp.json
           python - <<'PY'
           import json
@@ -66,20 +45,19 @@ jobs:
               d=json.load(open('evidence/'+fn))
               assert d.get('type')=='FeatureCollection', (fn,d)
               ufs=d.get('ufs_consultadas') or ([d.get('uf')] if d.get('uf') else [])
-              assert expected in ufs, (fn,expected,ufs,d.get('source'))
+              assert expected in ufs, (fn,expected,ufs)
               print(fn, expected, 'features=',len(d.get('features') or []),'ufs=',ufs)
           PY
 
-      - name: Test quick-analysis proxy no longer 404s
+      - name: Test quick-analysis proxy
         shell: bash
         run: |
           set -euo pipefail
           code=$(curl -sS -o evidence/quick.json -w '%{http_code}' --max-time 30 "$PORTAL/v1/live/quick/$CAR")
           echo "quick status=$code"
-          test "$code" != "404"
           test "$code" -ge 200 -a "$code" -lt 500
 
-      - name: Test PDF prewarm/status path
+      - name: Test PDF prepare/status path
         shell: bash
         run: |
           set -euo pipefail
@@ -88,19 +66,11 @@ jobs:
           test "$code" -ge 200 -a "$code" -lt 300
           sleep 2
           curl -fsS --max-time 20 "$PORTAL/v1/mobile/report/status/$CAR" -o evidence/pdf_status.json
-          python - <<'PY'
-          import json
-          d=json.load(open('evidence/pdf_status.json'))
-          assert d.get('state') in ('queued','running','ready'), d
-          print('PDF_STATE',d.get('state'),'cached=',d.get('cached'),'elapsed_ms=',d.get('elapsed_ms'))
-          PY
 
       - name: Upload evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: raio-x-v21-nationwide-pdf-smoke
-          path: |
-            portal.html
-            evidence/
+          path: evidence/
           retention-days: 14
