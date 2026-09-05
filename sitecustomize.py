@@ -5,11 +5,6 @@ import threading
 import time
 
 IS_PORTAL = os.getenv('RX_RELEASE') == 'V8_OPERATIONAL_ZERO_COST'
-
-# sitecustomize is imported automatically by every Python process, including pip
-# during Render builds. Never import application modules until core dependencies are
-# already installed. This prevents build-time ModuleNotFoundError and concurrent
-# mutation of site-packages.
 CORE_RUNTIME_READY = all(importlib.util.find_spec(name) is not None for name in ('fastapi', 'httpx', 'shapely'))
 
 
@@ -39,13 +34,7 @@ def _load_report_v29_after_report_api():
         time.sleep(0.05)
 
 
-def _load_portal_v33_deferred():
-    """Load the lightweight portal only after HTTP runtime dependencies exist.
-
-    Raster/PDF engines remain exclusive to the report worker. Field-mode caching,
-    property labels and territorial context are lightweight browser/API features and
-    may never block the base map from starting.
-    """
+def _load_portal_v34_deferred():
     if not IS_PORTAL:
         return
     for _ in range(600):
@@ -54,7 +43,6 @@ def _load_portal_v33_deferred():
             guard = None
             try:
                 import portal_boot_guard_v26 as guard
-
                 import car_resilient  # noqa: F401
                 import parity_public_layers  # noqa: F401
                 import portal_v8  # noqa: F401
@@ -80,6 +68,7 @@ def _load_portal_v33_deferred():
                 import portal_map_visual_v32  # noqa: F401
                 import portal_field_mode_v31  # noqa: F401
                 import portal_territorial_production_v33  # noqa: F401
+                import portal_mining_resilience_v34  # noqa: F401
                 import portal_legacy_source_cleanup  # noqa: F401
                 import portal_mobile_dossier_v20  # noqa: F401
                 import portal_human_reading_v23  # noqa: F401
@@ -94,28 +83,26 @@ def _load_portal_v33_deferred():
                 missing = [x for x in portal_action_runtime_v25.REQUIRED_ROUTES if x not in ready]
                 if missing:
                     raise RuntimeError('missing_required_routes:' + ','.join(missing))
-                for required in ('/sw.js','/v1/live/property-names/viewport','/v1/live/territorial-production/{car_code}'):
+                for required in ('/sw.js','/v1/live/property-names/viewport','/v1/live/territorial-production/{car_code}','/v1/live/critical-minerals/{car_code}'):
                     if required not in ready:
-                        raise RuntimeError('missing_v33_route:' + required)
+                        raise RuntimeError('missing_v34_route:' + required)
                 heavy = portal_resource_guard_v27._heavy_loaded()
                 if heavy:
                     raise RuntimeError('heavy_modules_loaded_on_portal:' + ','.join(heavy))
                 guard.mark_ready()
-                print(f'RX_PORTAL_V33_EXTENSION=loaded_deferred routes:{len(ready)} field_mode:on farm_names:on territory:on', flush=True)
+                print(f'RX_PORTAL_V34_EXTENSION=loaded_deferred routes:{len(ready)} field_mode:on farm_names:on territory:on mining_fail_soft:on', flush=True)
             except Exception as exc:
                 if guard is not None:
-                    try:
-                        guard.mark_failed(exc)
-                    except Exception:
-                        pass
-                print(f'RX_PORTAL_V33_EXTENSION=failed:{type(exc).__name__}:{str(exc)[:500]}', flush=True)
+                    try: guard.mark_failed(exc)
+                    except Exception: pass
+                print(f'RX_PORTAL_V34_EXTENSION=failed:{type(exc).__name__}:{str(exc)[:500]}', flush=True)
             return
         time.sleep(0.05)
-    print('RX_PORTAL_V33_EXTENSION=timeout_waiting_portal_api', flush=True)
+    print('RX_PORTAL_V34_EXTENSION=timeout_waiting_portal_api', flush=True)
 
 
 if CORE_RUNTIME_READY:
     if IS_PORTAL:
-        threading.Thread(target=_load_portal_v33_deferred, daemon=True).start()
+        threading.Thread(target=_load_portal_v34_deferred, daemon=True).start()
     else:
         threading.Thread(target=_load_report_v29_after_report_api, daemon=True).start()
