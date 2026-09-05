@@ -13,36 +13,52 @@ jobs:
     timeout-minutes: 8
     env:
       PORTAL: https://raio-x-territorial-app.onrender.com
+      SIGEF: https://pamgia.ibama.gov.br/server/rest/services/01_Publicacoes_Bases/lim_imovel_sigef_publico_a/FeatureServer/10/query
     steps:
-      - name: Inspect unresolved Curvelo identity candidates
+      - name: Compare direct SIGEF query with resolver
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p evidence
           python - <<'PY'
-          import json, urllib.parse, urllib.request
-          portal='https://raio-x-territorial-app.onrender.com'
-          with urllib.request.urlopen(portal+'/v1/live/search/advanced?uf=MG&municipality=Curvelo&limit=10', timeout=70) as r:
-              search=json.load(r)
-          rows=[]
-          for i,item in enumerate((search.get('items') or [])[:10],1):
-              car=item['car_code']
-              with urllib.request.urlopen(portal+'/v1/live/property-identity/'+urllib.parse.quote(car,safe=''),timeout=35) as r:
-                  d=json.load(r)
-              row={
-                  'i':i,'car':car,'area_ha':item.get('area_ha'),'name':d.get('name'),
-                  'source':d.get('source'),'confidence':d.get('confidence'),'method':d.get('method'),
-                  'candidate_count':len(d.get('candidates') or []),'candidates':d.get('candidates') or []
-              }
-              rows.append(row)
-              print('IDENTITY',json.dumps(row,ensure_ascii=False))
-          open('evidence/curvelo_candidates.json','w').write(json.dumps(rows,ensure_ascii=False,indent=2))
-          print('SUMMARY',json.dumps({'checked':len(rows),'with_candidates':sum(bool(x['candidate_count']) for x in rows),'with_names':sum(bool(x['name']) for x in rows)},ensure_ascii=False))
+          import json, os, urllib.parse, urllib.request
+          portal=os.environ['PORTAL']; sigef=os.environ['SIGEF']
+          req=urllib.request.Request(portal+'/v1/live/search/advanced?uf=MG&municipality=Curvelo&limit=10',headers={'User-Agent':'Raio-X-V43.8-Diagnostic'})
+          with urllib.request.urlopen(req,timeout=70) as r: search=json.load(r)
+          item=(search.get('items') or [])[0]
+          geom=item['geometry']
+          def coords(x):
+              if isinstance(x,(list,tuple)):
+                  if len(x)>=2 and isinstance(x[0],(int,float)) and isinstance(x[1],(int,float)):
+                      yield float(x[0]),float(x[1])
+                  else:
+                      for y in x: yield from coords(y)
+          pts=list(coords(geom.get('coordinates') or [])); xs=[p[0] for p in pts]; ys=[p[1] for p in pts]
+          bbox=[min(xs),min(ys),max(xs),max(ys)]
+          envelope=','.join(map(str,bbox))
+          out=[]
+          for sr in ('4326','4674'):
+              p={'f':'geojson','where':'1=1','geometry':envelope,'geometryType':'esriGeometryEnvelope','inSR':sr,'spatialRel':'esriSpatialRelIntersects','outFields':'parcela_co,codigo_imo,nome_area,registro_m,registro_d,municipio_,uf_id,status,situacao_i','returnGeometry':'true','outSR':sr,'resultRecordCount':'80'}
+              url=sigef+'?'+urllib.parse.urlencode(p)
+              try:
+                  q=urllib.request.Request(url,headers={'User-Agent':'Raio-X-V43.8-Diagnostic'})
+                  with urllib.request.urlopen(q,timeout=45) as r: data=json.load(r)
+                  features=data.get('features') or []
+                  row={'sr':sr,'feature_count':len(features),'error':data.get('error'),'sample_names':[(f.get('properties') or {}).get('nome_area') for f in features[:10]],'url':url}
+              except Exception as e:
+                  row={'sr':sr,'error':type(e).__name__+':'+str(e)[:300],'feature_count':-1,'url':url}
+              out.append(row); print('DIRECT',json.dumps(row,ensure_ascii=False))
+          car=item['car_code']
+          req=urllib.request.Request(portal+'/v1/live/property-identity/'+urllib.parse.quote(car,safe=''),headers={'User-Agent':'Raio-X-V43.8-Diagnostic'})
+          with urllib.request.urlopen(req,timeout=45) as r: identity=json.load(r)
+          result={'car':car,'bbox':bbox,'direct':out,'identity':identity}
+          open('evidence/direct_sigef.json','w').write(json.dumps(result,ensure_ascii=False,indent=2))
+          print('IDENTITY',json.dumps(identity,ensure_ascii=False))
           PY
       - name: Upload evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: raio-x-v43-8-identity-candidates
+          name: raio-x-v43-8-direct-sigef
           path: evidence/
           retention-days: 14
