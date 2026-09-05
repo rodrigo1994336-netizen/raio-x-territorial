@@ -1,0 +1,58 @@
+name: Raio-X Mobile Map Fast Smoke
+
+on:
+  push:
+    paths:
+      - '.github/workflows/mobile-map-fast-smoke.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mobile-map:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      BASE: https://raio-x-territorial-app.onrender.com
+    steps:
+      - name: Wait for V19 marker
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 30); do
+            if curl -fsS --max-time 10 "$BASE/" | grep -q 'RX_MOBILE_V19'; then exit 0; fi
+            sleep 5
+          done
+          exit 1
+      - name: Test Curvelo viewport without UF
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p smoke
+          START=$(date +%s)
+          curl -fsS --retry 1 --connect-timeout 10 --max-time 35 \
+            "$BASE/v1/live/sicar/viewport?west=-44.48&south=-18.83&east=-44.35&north=-18.68&limit=20" \
+            -o smoke/viewport.json
+          END=$(date +%s)
+          ELAPSED=$((END-START))
+          echo "$ELAPSED" > smoke/elapsed_seconds.txt
+          python - <<'PY'
+          import json
+          d=json.load(open('smoke/viewport.json'))
+          rows=d.get('features') or []
+          ufs=d.get('ufs_consultadas') or ([d.get('uf')] if d.get('uf') else [])
+          assert rows, d
+          assert 'MG' in ufs, d
+          assert 'UF resiliente' in str(d.get('source') or ''), d
+          print('features=',len(rows),'ufs=',ufs,'source=',d.get('source'))
+          PY
+          echo "elapsed_seconds=$ELAPSED"
+          test "$ELAPSED" -le 35
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: raio-x-mobile-map-fast-smoke
+          path: smoke/
+          retention-days: 14
