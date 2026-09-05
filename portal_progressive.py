@@ -31,35 +31,35 @@ PROGRESSIVE_JS=r'''
         if(myToken!==token)return;
         if(d.state==='ready'){
           renderAnalysis({analysis:d.analysis});
-          progressBox('Raio-X aprofundado concluído',`Todas as fontes que responderam foram incorporadas em ${Math.max(0,Math.round((d.elapsed_ms||0)/1000))} s. O PDF completo já pode ser gerado.`,'ready');
+          progressBox('Raio-X aprofundado concluído',`As fontes que responderam foram incorporadas em ${Math.max(0,Math.round((d.elapsed_ms||0)/1000))} s.`,'ready');
           return;
         }
         if(d.state==='failed'){
           progressBox('Resultado inicial disponível','A etapa aprofundada encontrou uma indisponibilidade externa. O que já foi confirmado permanece visível e nenhuma falha é tratada como ausência de risco.','warn');
           return;
         }
-        progressBox('Resultado inicial pronto • aprofundando fontes',`Camadas ambientais, hídricas, produtivas, minerais e de monitoramento continuam sendo processadas sem bloquear a tela. Etapa: ${d.stage||'processando'}.`,'running');
+        progressBox('Resultado inicial pronto • aprofundando fontes',`Camadas ambientais, hídricas, produtivas e minerais estão sendo consultadas sem bloquear a tela. Etapa: ${d.stage||'processando'}.`,'running');
       }catch(e){
         progressBox('Resultado inicial pronto','O aprofundamento continua; houve uma falha temporária ao consultar o estado do processamento.','warn');
       }
     }
-    progressBox('Resultado inicial disponível','Algumas fontes profundas continuam lentas. Você pode navegar normalmente; o sistema não classifica fonte pendente como ausência de ocorrência.','warn');
+    progressBox('Resultado inicial disponível','Algumas fontes profundas continuam lentas. Você pode navegar normalmente; fonte pendente não é tratada como ausência de ocorrência.','warn');
   }
   async function progressiveAnalyze(){
     if(!current?.car_code)return;
     const myToken=++token,code=current.car_code;
     document.querySelector('#panel')?.classList.remove('hidden');
-    const pt=document.querySelector('#ptitle');if(pt)pt.textContent=code;
+    const pt=document.querySelector('#ptitle');if(pt)pt.textContent=current?.name||code;
     const body=document.querySelector('#pbody');
-    if(body)body.innerHTML='<div class="rx-quick-loader"><div class="spin"></div><h3>Montando a leitura inicial…</h3><p>Primeiro entregamos CAR e cruzamentos territoriais essenciais. As fontes pesadas entram depois, sem prender a tela.</p><div class="rx-bars"><i></i><i></i><i></i></div></div>';
+    if(body)body.innerHTML='<div class="rx-quick-loader"><div class="spin"></div><h3>Montando a leitura inicial…</h3><p>O CAR entra primeiro. O aprofundamento só começou porque você pediu a análise completa.</p><div class="rx-bars"><i></i><i></i><i></i></div></div>';
     try{
-      const r=await fetch(`/v1/live/quick/${encodeURIComponent(code)}`,{cache:'no-store'});
+      const r=await fetch(`/v1/live/quick/${encodeURIComponent(code)}?deep=1`,{cache:'no-store'});
       const d=await r.json();
       if(!r.ok)throw new Error(d.detail||'Não foi possível concluir a leitura inicial.');
       if(myToken!==token)return;
       renderAnalysis({analysis:d.analysis});
       const secs=Math.max(.1,(d.elapsed_ms||0)/1000).toFixed(1).replace('.',',');
-      progressBox('Leitura inicial pronta',`Resultado essencial entregue em ${secs} s. O Raio-X completo continua sendo enriquecido em segundo plano.`,'running');
+      progressBox('Leitura inicial pronta',`Resultado essencial em ${secs} s. O aprofundamento continua em segundo plano.`,'running');
       pollDeep(code,myToken);
     }catch(e){
       if(myToken!==token)return;
@@ -74,4 +74,4 @@ PROGRESSIVE_JS=r'''
 '''
 
 portal_v8.PORTAL_HTML=portal_v8.PORTAL_HTML.replace('</body>',PROGRESSIVE_JS+'</body>')
-print('RX_PORTAL_PROGRESSIVE=loaded',flush=True)
+print('RX_PORTAL_PROGRESSIVE_V24=deep_only_on_explicit_analysis',flush=True)
