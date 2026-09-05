@@ -6,7 +6,7 @@ import time
 
 IS_PORTAL = os.getenv('RX_RELEASE') == 'V8_OPERATIONAL_ZERO_COST'
 
-# sitecustomize is imported automatically by *every* Python process, including pip
+# sitecustomize is imported automatically by every Python process, including pip
 # during Render builds. Never import application modules until core dependencies are
 # already installed. This prevents build-time ModuleNotFoundError and concurrent
 # mutation of site-packages.
@@ -21,8 +21,7 @@ def _load_report_v24_after_report_api():
         if mod is not None and hasattr(mod, 'app') and hasattr(mod, '_analyze_with_live_addons'):
             try:
                 import car_resilient  # noqa: F401
-                # Raster dependencies belong only to the heavy report worker. The
-                # bootstrap may prepare them at runtime, but never on the portal.
+                # Raster dependencies belong only to the heavy report worker.
                 import rasterio_runtime_bootstrap
                 rasterio_runtime_bootstrap.ensure_rasterio()
                 import prodes_fast_v24  # noqa: F401
@@ -38,11 +37,12 @@ def _load_report_v24_after_report_api():
         time.sleep(0.05)
 
 
-def _load_portal_v26_deferred():
+def _load_portal_v27_deferred():
     """Keep HTTP startup independent from every optional integration.
 
-    No pip installer is called here. Missing optional drivers may degrade alerts or
-    persistence, but they can never prevent the public portal from binding its port.
+    No package installer is called here. Missing optional drivers may degrade alerts
+    or persistence, but they can never prevent the public portal from binding its
+    port. Heavy raster/report modules must remain out of the portal process.
     """
     if not IS_PORTAL:
         return
@@ -51,7 +51,6 @@ def _load_portal_v26_deferred():
         if mod is not None and hasattr(mod, 'PORTAL_HTML') and hasattr(mod, 'app'):
             guard = None
             try:
-                # Install the lightweight boot guard before importing extensions.
                 import portal_boot_guard_v26 as guard
 
                 import car_resilient  # noqa: F401
@@ -79,6 +78,7 @@ def _load_portal_v26_deferred():
                 import portal_human_reading_v23  # noqa: F401
                 import portal_pdf_v21  # noqa: F401
                 import portal_action_runtime_v25  # noqa: F401
+                import portal_resource_guard_v27  # noqa: F401
                 import portal_feature_smoke  # noqa: F401
                 import portal_map_smoke  # noqa: F401
                 import car_resolver_smoke  # noqa: F401
@@ -87,24 +87,27 @@ def _load_portal_v26_deferred():
                 missing = [x for x in portal_action_runtime_v25.REQUIRED_ROUTES if x not in ready]
                 if missing:
                     raise RuntimeError('missing_required_routes:' + ','.join(missing))
+                heavy = portal_resource_guard_v27._heavy_loaded()
+                if heavy:
+                    raise RuntimeError('heavy_modules_loaded_on_portal:' + ','.join(heavy))
                 guard.mark_ready()
-                print(f'RX_PORTAL_V26_EXTENSION=loaded_deferred routes:{len(ready)}', flush=True)
+                print(f'RX_PORTAL_V27_EXTENSION=loaded_deferred routes:{len(ready)}', flush=True)
             except Exception as exc:
                 if guard is not None:
                     try:
                         guard.mark_failed(exc)
                     except Exception:
                         pass
-                print(f'RX_PORTAL_V26_EXTENSION=failed:{type(exc).__name__}:{str(exc)[:500]}', flush=True)
+                print(f'RX_PORTAL_V27_EXTENSION=failed:{type(exc).__name__}:{str(exc)[:500]}', flush=True)
             return
         time.sleep(0.05)
-    print('RX_PORTAL_V26_EXTENSION=timeout_waiting_portal_api', flush=True)
+    print('RX_PORTAL_V27_EXTENSION=timeout_waiting_portal_api', flush=True)
 
 
 # During Render's build, core dependencies do not exist yet and this file becomes a
 # true no-op. At runtime Uvicorn starts with dependencies already installed.
 if CORE_RUNTIME_READY:
     if IS_PORTAL:
-        threading.Thread(target=_load_portal_v26_deferred, daemon=True).start()
+        threading.Thread(target=_load_portal_v27_deferred, daemon=True).start()
     else:
         threading.Thread(target=_load_report_v24_after_report_api, daemon=True).start()
