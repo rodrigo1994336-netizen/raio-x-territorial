@@ -72,8 +72,10 @@ jobs:
           )
           for path in required_routes:
               assert path in paths, f'missing V43 route: {path}'
-          assert sum(1 for r in portal_v8.app.router.routes if getattr(r,'path',None)=='/v1/live/search/advanced')==1
-          assert str(portal_v8.APP_PORTAL_VERSION)=='0.43.6-v43-snapshot-first', portal_v8.APP_PORTAL_VERSION
+          advanced_routes=[r for r in portal_v8.app.router.routes if getattr(r,'path',None)=='/v1/live/search/advanced']
+          assert len(advanced_routes)==1
+          assert getattr(advanced_routes[0].endpoint,'__name__','')=='advanced_property_search_v43'
+          assert str(portal_v8.APP_PORTAL_VERSION)=='0.43.7-v43-snapshot-first', portal_v8.APP_PORTAL_VERSION
           html=portal_v8.PORTAL_HTML
           required=(
               'RX_EXPERIENCE_V43','SNAPSHOT DO IMÓVEL','VER ANÁLISE COMPLETA',
@@ -84,7 +86,7 @@ jobs:
               'window.rxNameCoverageV43','window.rxGetNameCoverageV43',
               'Busque um município, mova o mapa ou use “Minha localização”.',
               'Mapa ajustando…','RX_MAP_STABILITY_V43_5','RX_MAP_POLISH_V43_6',
-              'RX_CONTEXT_DEFAULT_DISABLED_V43_6',"color:'#73b99a'",
+              'RX_CONTEXT_DEFAULT_DISABLED_V43_6',"color:'#73b99a'",'RX_SEARCH_AUTO_V43_7',
           )
           absent=[x for x in required if x not in html]
           assert not absent, f'missing V43 UI/action markers: {absent}'
@@ -104,6 +106,7 @@ jobs:
           release=Path('portal_release_v43.py').read_text()
           stability=Path('portal_map_stability_v43.py').read_text()
           polish=Path('portal_map_polish_v43.py').read_text()
+          search=Path('portal_search_resilient_v43.py').read_text()
           site=Path('sitecustomize.py').read_text()
           assert 'setInterval' not in prod and 'MutationObserver' not in prod
           assert 'route_only_no_legacy_tab_timer' in prod
@@ -124,7 +127,11 @@ jobs:
           assert "0.43.5-v43-snapshot-first" in stability and 'rxParcelIndex=new Map()' in stability and 'nameIndex=new Map()' in stability
           assert "0.43.6-v43-snapshot-first" in polish and 'RX_CONTEXT_DEFAULT_DISABLED_V43_6' in polish and "color:'#73b99a'" in polish
           assert '#rxMapLegend,#rxFarmNameSource,#rxContextLegend,.hint' in polish
-          assert 'portal_map_polish_v43' in site and 'v43_6_map_polish_not_loaded' in site
+          assert 'advanced_property_search_v43' in search and 'sicar._fetch_sicar_bbox' in search
+          assert 'RX_SEARCH_AUTO_V43_7' in search and 'timer=setTimeout(run,550)' in search
+          assert "portal_v8.APP_PORTAL_VERSION = '0.43.7-v43-snapshot-first'" in search
+          assert 'public_name' in search and 'nome_imovel' in search and 'denominacao' in search
+          assert 'portal_search_resilient_v43' in site and 'v43_7_search_auto_not_loaded' in site and 'v43_7_resilient_search_route_not_active' in site
           assert 'Fontes pesadas não foram disparadas' in html
           assert 'IMÓVEL RURAL — NOME NÃO CONFIRMADO' in html
           assert 'z<11' in html and 'span>1.50' in html
@@ -137,7 +144,7 @@ jobs:
           assert not heavy, f'heavy modules leaked into portal: {heavy}'
           rss=portal_resource_guard_v27._rss_bytes()/1024/1024
           assert rss < 220, f'portal RSS too high in gate: {rss:.1f} MB'
-          print('RX_CI_PORTAL_V43_READY',len(paths),'rss_mb=',round(rss,1),'mutation_observers=',observer_count,'intervals=',interval_count,'version=',portal_v8.APP_PORTAL_VERSION,'name_coverage=observable','viewport_guard=on','map_stability=on','map_polish=on','geolocation=explicit')
+          print('RX_CI_PORTAL_V43_READY',len(paths),'rss_mb=',round(rss,1),'mutation_observers=',observer_count,'intervals=',interval_count,'version=',portal_v8.APP_PORTAL_VERSION,'name_coverage=observable','viewport_guard=on','map_stability=on','map_polish=on','search_resilient=on','geolocation=explicit')
           PY
       - name: V41 report bounded-latency and CAR-composition gate
         env:
