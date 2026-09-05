@@ -44,8 +44,8 @@ async def mobile_report_open(car_code:str,property_name:str|None=None):
 
 
 @app.get('/v1/live/quick/{car_code}')
-async def portal_quick_proxy(car_code:str):
-    return await _proxy('GET',f'/v1/live/quick/{quote(car_code.upper())}',timeout=22)
+async def portal_quick_proxy(car_code:str,deep:bool=False):
+    return await _proxy('GET',f'/v1/live/quick/{quote(car_code.upper())}',params={'deep':'1' if deep else '0'},timeout=22)
 
 
 @app.get('/v1/live/progressive/status/{car_code}')
@@ -81,9 +81,6 @@ UI=r'''
  }
  function schedulePrepare(p){
    clearTimeout(prewarmTimer);const token=++selectionToken;
-   // Do not spend server CPU on every polygon the user briefly taps while browsing.
-   // A stable selection for 2.8s is enough to start background preparation; clicking
-   // the PDF button still starts it immediately.
    prewarmTimer=setTimeout(()=>{if(token===selectionToken){const cur=getCurrent()||p;if(cur?.car_code===p?.car_code)prepare(cur)}},2800);
  }
  function bindPdf(p){
@@ -115,4 +112,4 @@ UI=r'''
 if 'RX_PDF_V24' not in portal_v8.PORTAL_HTML:
     portal_v8.PORTAL_HTML=portal_v8.PORTAL_HTML.replace('</body>',UI+'<!-- RX_PDF_V24 --></body>')
 
-print('RX_PORTAL_PDF_V24=debounced_prewarm_worker_proxy',flush=True)
+print('RX_PORTAL_PDF_V24=debounced_prewarm_worker_proxy_deep_intent',flush=True)
