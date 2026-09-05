@@ -49,6 +49,7 @@ jobs:
           RX_RELEASE: V8_OPERATIONAL_ZERO_COST
         run: |
           python - <<'PY'
+          import sitecustomize
           import portal_v8, portal_action_runtime_v25
           paths={getattr(r,'path',None) for r in portal_v8.app.router.routes}
           missing=[x for x in portal_action_runtime_v25.REQUIRED_ROUTES if x not in paths]
