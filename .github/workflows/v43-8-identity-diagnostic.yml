@@ -14,39 +14,43 @@ jobs:
     env:
       SIGEF: https://pamgia.ibama.gov.br/server/rest/services/01_Publicacoes_Bases/lim_imovel_sigef_publico_a/FeatureServer/10/query
     steps:
-      - name: Measure Curvelo SIGEF coverage
+      - name: Inspect Curvelo SIGEF spatial coverage
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p evidence
           python - <<'PY'
           import json, os, urllib.parse, urllib.request
-          sigef=os.environ['SIGEF']
           headers={'User-Agent':'Raio-X-V43.8-Diagnostic'}
-          def call(params):
-              url=sigef+'?'+urllib.parse.urlencode(params)
-              req=urllib.request.Request(url,headers=headers)
-              with urllib.request.urlopen(req,timeout=45) as r:return json.load(r),url
-          tests=[]
-          for label,where in (
-              ('all_curvelo','municipio_=3120904'),
-              ('named_curvelo',"municipio_=3120904 AND nome_area IS NOT NULL AND nome_area <> ''"),
-              ('all_layer','1=1'),
-          ):
-              data,url=call({'f':'json','where':where,'returnCountOnly':'true'})
-              row={'label':label,'where':where,'count':data.get('count'),'error':data.get('error'),'url':url}
-              tests.append(row);print('COUNT',json.dumps(row,ensure_ascii=False))
-          data,url=call({'f':'json','where':"municipio_=3120904 AND nome_area IS NOT NULL AND nome_area <> ''",'outFields':'objectid,parcela_co,codigo_imo,nome_area,registro_m,municipio_,uf_id,status,situacao_i','returnGeometry':'false','resultRecordCount':'50','orderByFields':'objectid ASC'})
+          nom='https://nominatim.openstreetmap.org/search?'+urllib.parse.urlencode({'q':'Curvelo, Minas Gerais, Brasil','format':'jsonv2','countrycodes':'br','limit':'5','addressdetails':'1'})
+          with urllib.request.urlopen(urllib.request.Request(nom,headers=headers),timeout=30) as r: rows=json.load(r)
+          chosen=None
+          for x in rows:
+              a=x.get('address') or {}
+              if 'minas gerais' in str(a.get('state') or '').lower() or str(a.get('ISO3166-2-lvl4') or '').upper()=='BR-MG':
+                  chosen=x;break
+          if not chosen: raise RuntimeError('Curvelo bbox not found')
+          south,north,west,east=map(float,chosen['boundingbox'])
+          bbox=[west,south,east,north]; env=','.join(map(str,bbox))
+          params={'f':'json','where':'1=1','geometry':env,'geometryType':'esriGeometryEnvelope','inSR':'4674','spatialRel':'esriSpatialRelIntersects','outFields':'objectid,parcela_co,codigo_imo,nome_area,registro_m,municipio_,uf_id,status,situacao_i','returnGeometry':'false','outSR':'4674','resultRecordCount':'500'}
+          url=os.environ['SIGEF']+'?'+urllib.parse.urlencode(params)
+          req=urllib.request.Request(url,headers=headers)
+          with urllib.request.urlopen(req,timeout=60) as r: data=json.load(r)
           feats=data.get('features') or []
-          samples=[f.get('attributes') or {} for f in feats]
-          print('SAMPLES',json.dumps(samples[:20],ensure_ascii=False))
-          out={'tests':tests,'sample_count':len(samples),'samples':samples}
-          open('evidence/curvelo_sigef_coverage.json','w').write(json.dumps(out,ensure_ascii=False,indent=2))
+          attrs=[f.get('attributes') or {} for f in feats]
+          named=[a for a in attrs if str(a.get('nome_area') or '').strip()]
+          curvelo=[a for a in attrs if str(a.get('municipio_') or '')=='3120904']
+          curvelo_named=[a for a in curvelo if str(a.get('nome_area') or '').strip()]
+          out={'bbox':bbox,'service_error':data.get('error'),'features_in_bbox':len(attrs),'named_in_bbox':len(named),'curvelo_code_rows':len(curvelo),'curvelo_named_rows':len(curvelo_named),'sample_named':named[:30],'sample_curvelo_named':curvelo_named[:30]}
+          print('COVERAGE',json.dumps({k:v for k,v in out.items() if not k.startswith('sample_')},ensure_ascii=False))
+          print('SAMPLE_NAMED',json.dumps(named[:20],ensure_ascii=False))
+          print('SAMPLE_CURVELO',json.dumps(curvelo_named[:20],ensure_ascii=False))
+          open('evidence/curvelo_sigef_spatial.json','w').write(json.dumps(out,ensure_ascii=False,indent=2))
           PY
       - name: Upload evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: raio-x-v43-8-curvelo-sigef-coverage
+          name: raio-x-v43-8-curvelo-sigef-spatial
           path: evidence/
           retention-days: 14
