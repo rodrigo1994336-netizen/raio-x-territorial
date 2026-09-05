@@ -37,15 +37,16 @@ async def _report_name(car_code:str,property_name:str|None)->str:
 
 
 async def _wait_worker_ready(car_code:str,property_name:str='',max_wait:float=70.0)->bool:
-    """Wait for the real report status route after an on-demand wake.
+    """Wait until the real deferred V41 report route is registered.
 
-    A browser-side no-cors request wakes Render from the user's network while this
-    server-side loop checks real V41 readiness. The pair avoids a second user click.
+    The browser issues a direct no-cors wake request to Render. The portal then waits
+    on a concrete V41 status route so neither full analysis nor PDF generation races
+    the worker startup sequence.
     """
     code=str(car_code or '').upper();name=_provided_name(property_name)
     path=f'/v1/reports/property/{quote(code)}/status'
     deadline=time.monotonic()+max(5.0,float(max_wait));attempt=0
-    async with httpx.AsyncClient(timeout=httpx.Timeout(7,connect=4),follow_redirects=True,headers={'User-Agent':'Raio-X-Territorial-Portal/V43.9.3'}) as c:
+    async with httpx.AsyncClient(timeout=httpx.Timeout(7,connect=4),follow_redirects=True,headers={'User-Agent':'Raio-X-Territorial-Portal/V43.9.4'}) as c:
         while time.monotonic()<deadline:
             attempt+=1
             try:
@@ -71,7 +72,7 @@ async def _proxy(method:str,path:str,params=None,timeout=25,retries=0):
     last_error=None
     for attempt in range(max(0,int(retries))+1):
         try:
-            async with httpx.AsyncClient(timeout=timeout,follow_redirects=True,headers={'User-Agent':'Raio-X-Territorial-Portal/V43.9.3'}) as c:
+            async with httpx.AsyncClient(timeout=timeout,follow_redirects=True,headers={'User-Agent':'Raio-X-Territorial-Portal/V43.9.4'}) as c:
                 r=await c.request(method,WORKER+path,params=params)
                 try:data=r.json()
                 except Exception:data={'detail':r.text[:300]}
@@ -132,11 +133,17 @@ function returnToRaioX(){{try{{if(window.opener&&!window.opener.closed){{window.
 
 @app.get('/v1/live/quick/{car_code}')
 async def portal_quick_proxy(car_code:str,deep:bool=False):
+    # Full analysis is user-triggered. When Render suspended the report worker, wait
+    # for the same real V41 route used by PDF generation before requesting deep data.
+    if deep and not await _wait_worker_ready(car_code,'',70):
+        raise HTTPException(status_code=503,detail='Motor da análise ainda está iniciando.')
     return await _proxy('GET',f'/v1/live/quick/{quote(car_code.upper())}',params={'deep':'1' if deep else '0'},timeout=22,retries=1)
 
 
 @app.get('/v1/live/progressive/status/{car_code}')
 async def portal_progress_proxy(car_code:str):
+    if not await _wait_worker_ready(car_code,'',40):
+        raise HTTPException(status_code=503,detail='Motor da análise ainda está iniciando.')
     return await _proxy('GET',f'/v1/live/progressive/status/{quote(car_code.upper())}',timeout=10,retries=1)
 
 
@@ -196,6 +203,7 @@ UI=r'''
  }
  function install(){
    if(window.__rxPdfV25Installed)return;window.__rxPdfV25Installed=true;
+   document.addEventListener('click',e=>{const t=e.target?.closest?.('#rx43Full,#rx43Pdf');if(t)wakeWorker()},true);
    const previous=window.showProperty;
    if(previous)window.showProperty=showProperty=function(p,g){clearTimeout(pollTimer);++pollToken;const out=previous(p,g);setTimeout(()=>bindPdf(getCurrent()||p),120);return out};
    setTimeout(()=>{const cur=getCurrent();if(cur?.car_code)bindPdf(cur)},700);
@@ -206,6 +214,6 @@ UI=r'''
 '''.replace('__RX_WORKER_WAKE_URL__',WORKER+'/')
 
 if 'RX_PDF_V43_8' not in portal_v8.PORTAL_HTML:
-    portal_v8.PORTAL_HTML=portal_v8.PORTAL_HTML.replace('</body>',UI+'<!-- RX_PDF_V43_8 --><!-- RX_BROWSER_WORKER_WAKE_V43_9_3 --></body>')
+    portal_v8.PORTAL_HTML=portal_v8.PORTAL_HTML.replace('</body>',UI+'<!-- RX_PDF_V43_8 --><!-- RX_BROWSER_WORKER_WAKE_V43_9_3 --><!-- RX_DEEP_WORKER_WAKE_V43_9_4 --></body>')
 
-print('RX_PORTAL_PDF_V43_9_3=browser_wake_viewer_return_to_app',flush=True)
+print('RX_PORTAL_PDF_V43_9_4=browser_wake_deep_and_pdf_viewer_return_to_app',flush=True)
