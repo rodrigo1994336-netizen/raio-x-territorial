@@ -1,0 +1,41 @@
+name: Raio-X V43.8 Feature Validation
+
+on:
+  push:
+    branches: [ v43-8-osm-public-name-fallback ]
+
+permissions:
+  contents: read
+
+jobs:
+  identity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      RX_RELEASE: OFF
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install fastapi httpx shapely pyproj uvicorn
+      - name: Validate exact Curvelo OSM-name to CAR association
+        run: |
+          python - <<'PY'
+          from property_identity_runtime import resolve_property_identity_sync, _CACHE
+          positive='MG-3120904-E0C91FE86A3646D5AFA40786D6C554A9'
+          conflict='MG-3120904-DB15158579EB4E07A0FE7ABFD922C7D3'
+          _CACHE.clear()
+          a=resolve_property_identity_sync(positive)
+          print('POSITIVE',a)
+          assert a.get('name')=='Fazenda Barrinha',a
+          assert a.get('method')=='osm_named_farm_point_inside_car',a
+          assert a.get('confidence')=='medium',a
+          assert 'OpenStreetMap' in str(a.get('source')),a
+          _CACHE.clear()
+          b=resolve_property_identity_sync(conflict)
+          print('CONFLICT',b)
+          assert b.get('name') is None,b
+          assert b.get('osm_conflict') is True,b
+          print('RX_V43_8_REAL_IDENTITY_OK')
+          PY
