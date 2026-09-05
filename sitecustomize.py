@@ -61,7 +61,7 @@ def _load_portal_deferred():
                 import portal_rare_earth_symbols  # noqa: F401
 
                 # Route-bearing legacy modules remain registered. Their historical
-                # presentation layers are superseded by portal_experience_v43.
+                # presentation layers are superseded by the V43 canonical layers.
                 import portal_property_tabs  # noqa: F401
                 import portal_live_fix_v18  # noqa: F401
                 import portal_smart_search  # noqa: F401
@@ -81,11 +81,11 @@ def _load_portal_deferred():
                 import portal_advanced_name_v40  # noqa: F401
                 import portal_incra_certified_v42  # noqa: F401
 
-                # V43 is the single canonical experience layer. V43.5 stabilizes
-                # the map lifecycle and V43.6 defines the quiet default visual.
+                # V43 canonical experience: stable map, quiet visual and resilient city search.
                 import portal_experience_v43  # noqa: F401
                 import portal_map_stability_v43  # noqa: F401
                 import portal_map_polish_v43  # noqa: F401
+                import portal_search_resilient_v43  # noqa: F401
 
                 import portal_resource_guard_v27  # noqa: F401
                 import portal_feature_smoke  # noqa: F401
@@ -112,25 +112,32 @@ def _load_portal_deferred():
                         raise RuntimeError('missing_portal_route:' + required)
                 if 'RX_EXPERIENCE_V43' not in portal_v8.PORTAL_HTML:
                     raise RuntimeError('v43_experience_not_loaded')
-                if str(portal_v8.APP_PORTAL_VERSION) != '0.43.6-v43-snapshot-first':
-                    raise RuntimeError('v43_6_release_identity_not_loaded')
+                if str(portal_v8.APP_PORTAL_VERSION) != '0.43.7-v43-snapshot-first':
+                    raise RuntimeError('v43_7_release_identity_not_loaded')
                 if 'RX_MAP_STABILITY_V43_5' not in portal_v8.PORTAL_HTML:
                     raise RuntimeError('v43_5_map_stability_not_loaded')
                 if 'RX_MAP_POLISH_V43_6' not in portal_v8.PORTAL_HTML:
                     raise RuntimeError('v43_6_map_polish_not_loaded')
                 if 'RX_CONTEXT_DEFAULT_DISABLED_V43_6' not in portal_v8.PORTAL_HTML:
                     raise RuntimeError('v43_6_context_default_not_disabled')
+                if 'RX_SEARCH_AUTO_V43_7' not in portal_v8.PORTAL_HTML:
+                    raise RuntimeError('v43_7_search_auto_not_loaded')
                 if 'window.rxVisibleCarCountV43' not in portal_v8.PORTAL_HTML:
                     raise RuntimeError('v43_name_coverage_counter_not_loaded')
+                advanced_routes = [r for r in portal_v8.app.router.routes if getattr(r, 'path', None) == '/v1/live/search/advanced']
+                if len(advanced_routes) != 1 or getattr(advanced_routes[0].endpoint, '__name__', '') != 'advanced_property_search_v43':
+                    raise RuntimeError('v43_7_resilient_search_route_not_active')
                 heavy = portal_resource_guard_v27._heavy_loaded()
                 if heavy:
                     raise RuntimeError('heavy_modules_loaded_on_portal:' + ','.join(heavy))
                 guard.mark_ready()
-                print(f'RX_PORTAL_V43_EXTENSION=loaded_deferred routes:{len(ready)} snapshot:on single_surface:on advanced_search:on names:on coverage:on map_stability:on map_polish:on version:{portal_v8.APP_PORTAL_VERSION}', flush=True)
+                print(f'RX_PORTAL_V43_EXTENSION=loaded_deferred routes:{len(ready)} snapshot:on single_surface:on advanced_search:on search_resilient:on names:on coverage:on map_stability:on map_polish:on version:{portal_v8.APP_PORTAL_VERSION}', flush=True)
             except Exception as exc:
                 if guard is not None:
-                    try: guard.mark_failed(exc)
-                    except Exception: pass
+                    try:
+                        guard.mark_failed(exc)
+                    except Exception:
+                        pass
                 print(f'RX_PORTAL_V43_EXTENSION=failed:{type(exc).__name__}:{str(exc)[:500]}', flush=True)
             return
         time.sleep(0.05)
