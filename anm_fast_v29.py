@@ -21,24 +21,27 @@ def _curl_anm_bbox(bbox):
     url=ANM_QUERY+'?'+urlencode(params)
     t0=time.monotonic()
     try:
+        # ANM is valuable, but a slow provider must not block the whole dossier.
+        # One bounded attempt is enough in the synchronous report path. The mining
+        # tab can refresh independently later when the provider recovers.
         p=subprocess.run([
-            'curl','-sS','--retry','1','--retry-delay','1',
-            '--connect-timeout','5','--max-time','12',
-            '-A','Raio-X-Territorial/0.29-ANM-fast',url
-        ],capture_output=True,timeout=16)
+            'curl','-sS','--retry','0',
+            '--connect-timeout','3','--max-time','7',
+            '-A','Raio-X-Territorial/0.30-ANM-bounded',url
+        ],capture_output=True,timeout=9)
         ms=round((time.monotonic()-t0)*1000)
         if p.returncode:
-            return {'ok':False,'source':'ANM/SIGMINE','error':'timeout_or_transport','detail':p.stderr.decode('utf-8','ignore')[:240],'elapsed_ms':ms}
+            return {'ok':False,'source':'ANM/SIGMINE','error':'timeout_or_transport','detail':p.stderr.decode('utf-8','ignore')[:240],'elapsed_ms':ms,'state':'temporarily_unavailable'}
         data=json.loads(p.stdout.decode('utf-8'))
         if data.get('error'):
-            return {'ok':False,'source':'ANM/SIGMINE','error':'arcgis','detail':str(data.get('error'))[:300],'elapsed_ms':ms}
+            return {'ok':False,'source':'ANM/SIGMINE','error':'arcgis','detail':str(data.get('error'))[:300],'elapsed_ms':ms,'state':'temporarily_unavailable'}
         fs=data.get('features') or []
         print(f'RX_ANM_FAST={ms}ms:features={len(fs)}',flush=True)
-        return {'ok':True,'status':200,'feature_count':len(fs),'features':fs,'source':'ANM/SIGMINE','transport':'curl-fast','elapsed_ms':ms}
+        return {'ok':True,'status':200,'feature_count':len(fs),'features':fs,'source':'ANM/SIGMINE','transport':'curl-bounded','elapsed_ms':ms}
     except Exception as e:
         ms=round((time.monotonic()-t0)*1000)
         print(f'RX_ANM_FAST_FAIL={ms}ms:{type(e).__name__}',flush=True)
-        return {'ok':False,'source':'ANM/SIGMINE','error':type(e).__name__,'detail':str(e)[:240],'elapsed_ms':ms}
+        return {'ok':False,'source':'ANM/SIGMINE','error':type(e).__name__,'detail':str(e)[:240],'elapsed_ms':ms,'state':'temporarily_unavailable'}
 
 
 async def query_anm_fast(bbox):
@@ -53,4 +56,4 @@ try:
 except Exception:
     pass
 
-print('RX_ANM_V29=fast_bounded_latency',flush=True)
+print('RX_ANM_V30=single_bounded_7s_no_retry',flush=True)
