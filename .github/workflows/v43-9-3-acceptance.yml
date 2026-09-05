@@ -36,15 +36,33 @@ jobs:
               if not a or not b:return False
               return not (a['x']+a['width']<=b['x'] or b['x']+b['width']<=a['x'] or a['y']+a['height']<=b['y'] or b['y']+b['height']<=a['y'])
 
-          async def open_property_full(page):
-              await page.goto(PORTAL,wait_until='domcontentloaded',timeout=60000)
-              await page.wait_for_function("typeof window.showProperty==='function'",timeout=30000)
-              response=await page.request.get(PORTAL+'/v1/live/snapshot/'+CAR,timeout=60000)
+          async def settle(page):
+              for _ in range(5):
+                  try:
+                      await page.wait_for_load_state('domcontentloaded',timeout=10000)
+                      await page.wait_for_timeout(1200)
+                      await page.wait_for_function("typeof window.showProperty==='function'",timeout=10000)
+                      return
+                  except Exception:
+                      await page.wait_for_timeout(700)
+              raise RuntimeError('portal did not settle')
+
+          async def open_property_full(page,request):
+              response=await request.get(PORTAL+'/v1/live/snapshot/'+CAR,timeout=60000)
               assert response.ok,(response.status,await response.text())
               snap=await response.json()
               prop={'car_code':CAR,'public_name':'Fazenda Barrinha','name':'Fazenda Barrinha','municipality':snap.get('municipality'),'uf':snap.get('uf'),'area_ha':snap.get('area_ha'),'status':snap.get('car_status'),'condition':snap.get('condition'),'type':snap.get('property_type')}
-              await page.evaluate("x=>window.showProperty(x.p,x.g)",{'p':prop,'g':snap.get('geometry')})
-              await page.wait_for_selector('#rx43Full',state='visible',timeout=20000)
+              await page.goto(PORTAL,wait_until='domcontentloaded',timeout=60000)
+              payload={'p':prop,'g':snap.get('geometry')}
+              for attempt in range(5):
+                  await settle(page)
+                  try:
+                      await page.evaluate("x=>window.showProperty(x.p,x.g)",payload)
+                      await page.wait_for_selector('#rx43Full',state='visible',timeout=10000)
+                      break
+                  except Exception:
+                      if attempt==4:raise
+                      await page.wait_for_timeout(800)
               await page.click('#rx43Full')
               await page.wait_for_selector('#rxMobilePdf',state='visible',timeout=180000)
               return prop
@@ -53,7 +71,7 @@ jobs:
               ctx=await browser.new_context(viewport={'width':1440,'height':900},service_workers='block')
               page=await ctx.new_page();errors=[]
               page.on('pageerror',lambda e: errors.append(str(e)[:250]))
-              await open_property_full(page)
+              await open_property_full(page,ctx.request)
               b=page.locator('#rxMobilePdf')
               before=(await b.inner_text()).strip();assert before in ('GERAR PDF','ABRIR PDF'),before
               started=time.monotonic()
@@ -82,7 +100,7 @@ jobs:
 
           async def mobile(browser):
               ctx=await browser.new_context(viewport={'width':390,'height':844},is_mobile=True,service_workers='block')
-              page=await ctx.new_page();await page.goto(PORTAL,wait_until='domcontentloaded',timeout=60000)
+              page=await ctx.new_page();await page.goto(PORTAL,wait_until='domcontentloaded',timeout=60000);await page.wait_for_timeout(1500)
               await page.wait_for_selector('.rx-basemap-switch',state='visible',timeout=30000)
               sels=['.rx-basemap-switch','#rxLocateBtn','#rxFilterBtn'];boxes=[]
               for s in sels:
