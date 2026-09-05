@@ -90,19 +90,25 @@ jobs:
           )
           leaked=[x for x in retired if x in html]
           assert not leaked, f'retired UI leaked into V43: {leaked}'
-          assert 'setInterval(install,500);' not in html
           prod=Path('portal_territorial_production_v33.py').read_text()
+          alerts=Path('portal_alerts.py').read_text()
           assert 'setInterval' not in prod and 'MutationObserver' not in prod
           assert 'route_only_no_legacy_tab_timer' in prod
+          assert 'setInterval' not in alerts and 'MutationObserver' not in alerts
+          assert 'registered_ui_dormant_until_durable_persistence' in alerts
           assert 'Fontes pesadas não foram disparadas' in html
           assert 'IMÓVEL RURAL — NOME NÃO CONFIRMADO' in html
           assert 'z<11' in html and 'span>1.50' in html
           assert all(uf in html for uf in ('AC','AM','BA','DF','GO','MG','MT','PA','PR','RS','SC','SP','TO'))
+          observer_count=html.count('MutationObserver')
+          interval_count=html.count('setInterval(')
+          assert observer_count==0, f'global DOM observers remain: {observer_count}'
+          assert interval_count==0, f'global polling intervals remain: {interval_count}'
           heavy=portal_resource_guard_v27._heavy_loaded()
           assert not heavy, f'heavy modules leaked into portal: {heavy}'
           rss=portal_resource_guard_v27._rss_bytes()/1024/1024
           assert rss < 220, f'portal RSS too high in gate: {rss:.1f} MB'
-          print('RX_CI_PORTAL_V43_READY',len(paths),'rss_mb=',round(rss,1),'mutation_observers=',html.count('MutationObserver'),'intervals=',html.count('setInterval('))
+          print('RX_CI_PORTAL_V43_READY',len(paths),'rss_mb=',round(rss,1),'mutation_observers=',observer_count,'intervals=',interval_count)
           PY
       - name: V41 report bounded-latency and CAR-composition gate
         env:
