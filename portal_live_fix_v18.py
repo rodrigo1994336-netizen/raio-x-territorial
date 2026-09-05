@@ -7,8 +7,6 @@ import portal_v8
 import report_api
 from critical_minerals import query_critical_minerals
 from agropecuaria import build_agro_profile
-from mapbiomas_coverage import query_mapbiomas_coverage
-from terrain_srtm import query_terrain_srtm
 
 app=portal_v8.app
 
@@ -29,7 +27,6 @@ async def critical_minerals_v18(car_code:str):
     result=await _result(car_code);car=result.get('car') or {}
     if not car.get('ok'):raise HTTPException(status_code=404,detail='CAR não localizado')
     current=result.get('critical_minerals') or {}
-    # Re-run only when the cached addon did not return a usable object.
     if not current or (not current.get('anm') and not current.get('sgb')):
         try:current=await query_critical_minerals(car.get('geometry'),result.get('anm'))
         except Exception as e:current={'ok':False,'detail':f'{type(e).__name__}:{str(e)[:220]}'}
@@ -37,7 +34,6 @@ async def critical_minerals_v18(car_code:str):
     anm_exact=((result.get('anm') or {}).get('exact') or {})
     anm_available=bool((result.get('anm') or {}).get('ok') or anm_exact.get('available'))
     sgb_available=bool(sgb.get('capabilities_ok'))
-    # A partial SGB outage must not make the whole mining tab unavailable when ANM responded.
     return {
         **current,
         'ok':bool(anm_available or sgb_available),
@@ -49,13 +45,31 @@ async def critical_minerals_v18(car_code:str):
     }
 
 
+def _run_mapbiomas(geom):
+    # Raster engines are intentionally imported only inside the request worker.
+    # A native GDAL mismatch can degrade this one metric, never the portal boot.
+    try:
+        from mapbiomas_coverage import query_mapbiomas_coverage
+        return query_mapbiomas_coverage(geom,2025)
+    except Exception as e:
+        return {'ok':False,'source':'MapBiomas Brasil — Coleção 11','detail':f'raster_runtime:{type(e).__name__}:{str(e)[:220]}'}
+
+
+def _run_terrain(geom):
+    try:
+        from terrain_srtm import query_terrain_srtm
+        return query_terrain_srtm(geom)
+    except Exception as e:
+        return {'ok':False,'source':'SRTM ~30 m','detail':f'raster_runtime:{type(e).__name__}:{str(e)[:220]}'}
+
+
 @app.get('/v1/live/agropecuaria/{car_code}')
 async def agropecuaria_v18(car_code:str):
     code=car_code.upper();result=await _result(code);car=result.get('car') or {};geom=car.get('geometry')
     if not car.get('ok'):raise HTTPException(status_code=404,detail='CAR não localizado')
     profile_task=build_agro_profile(result,code,True)
-    mb_task=asyncio.to_thread(query_mapbiomas_coverage,geom,2025)
-    terrain_task=asyncio.to_thread(query_terrain_srtm,geom)
+    mb_task=asyncio.to_thread(_run_mapbiomas,geom)
+    terrain_task=asyncio.to_thread(_run_terrain,geom)
     profile,mb,terrain=await asyncio.gather(profile_task,mb_task,terrain_task,return_exceptions=True)
     if isinstance(profile,Exception):profile={'ok':False,'detail':f'{type(profile).__name__}:{str(profile)[:200]}'}
     if isinstance(mb,Exception):mb={'ok':False,'detail':f'{type(mb).__name__}:{str(mb)[:200]}'}
@@ -89,10 +103,9 @@ def install_ui_fixes():
     html=html.replace("const active=d.persistence==='durable'","const active=['durable','operational_nonpersistent'].includes(d.persistence)")
     html=html.replace("${active?'PERSISTENTE — PRONTO':'AGUARDANDO VÍNCULO DO BANCO'}","${d.persistence==='durable'?'PERSISTENTE — PRONTO':(active?'OPERACIONAL — FREE':'BACKEND DE ALERTAS INDISPONÍVEL')}")
     html=html.replace("Pastagem/vigor MapBiomas só exibirá percentuais quando o worker raster devolver métricas reais do polígono.","${d.pasture?.state==='ready'?`Pastagem MapBiomas ${d.pasture.year||''}: <b>${fmt(d.pasture.pasture_area_ha,2)} ha</b> (${fmt(d.pasture.pasture_share_pct,1)}% do CAR). Vegetação nativa: ${fmt(d.pasture.native_vegetation_share_pct,1)}%.`:'MapBiomas não respondeu nesta consulta; isso não significa ausência de pastagem.'}")
-    # Premium/restricted integrations should not look like broken public sources.
     html=html.replace("Fontes restritas permanecem preparadas — OFF até habilitação.","Fontes públicas são consultadas automaticamente. Serviços cadastrais/registrários pagos aparecem abaixo apenas como integrações opcionais que exigem credencial ou contratação.")
     html=html.replace("<span class=\"rx-pill\">${x.ready?'ATIVO':'PREPARADO — OFF'}</span>","<span class=\"rx-pill\">${x.ready?'ATIVO':'OPCIONAL / REQUER HABILITAÇÃO'}</span>")
     portal_v8.PORTAL_HTML=html
 
 install_ui_fixes()
-print('RX_PORTAL_LIVE_FIX=V18_MINING_AGRO_MONITORING',flush=True)
+print('RX_PORTAL_LIVE_FIX=V18_LAZY_RASTER_MINING_AGRO_MONITORING',flush=True)
