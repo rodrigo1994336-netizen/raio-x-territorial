@@ -27,7 +27,7 @@ jobs:
             portal_rare_earth_symbols.py portal_property_identity_v13.py report_book_style.py \
             report_engine_v6.py report_engine_v7.py report_engine_v8.py rasterio_runtime_bootstrap.py redis_runtime_bootstrap.py sentinel_cog.py \
             highres_reference.py street_level_access.py visual_hybrid.py terrain_srtm.py mapbiomas_coverage.py heavy_live_api_v20.py \
-            report_truth_guard_v16.py report_pdf_cache_v21.py report_quick_v22.py live_report_adapter_v12.py live_report_adapter_v13.py \
+            prodes_fast_v24.py report_perf_v24.py report_truth_guard_v16.py report_pdf_cache_v21.py report_quick_v22.py live_report_adapter_v12.py live_report_adapter_v13.py \
             live_report_adapter_v14.py live_report_adapter_v15.py live_report_adapter_v16.py live_report_adapter_v17.py live_report_adapter_v18.py \
             github_oidc_auth.py jwt_runtime_bootstrap.py monitoring_store.py monitoring_routes.py alerts_routes.py \
             report_v13_patch.py report_v14_patch.py report_v15_patch.py report_v16_patch.py report_v17_patch.py report_v18_patch.py sitecustomize.py
@@ -39,6 +39,7 @@ jobs:
           import climate_nasa, groundwater_siagas, safras_ibge, satellite_real
           import soilgrids_wcs, sicar_detail_sources_v2, aerodromes_anac, sentinel_cog, mapbiomas_coverage
           import highres_reference, street_level_access, visual_hybrid, terrain_srtm
+          import prodes_fast_v24
           import report_truth_guard_v16, report_book_style, report_engine_v6, report_engine_v7, report_engine_v8
           import live_report_adapter_v18, heavy_live_api_v20, report_pdf_cache_v21, report_quick_v22, github_oidc_auth, monitoring_store, monitoring_routes, alerts_routes
           print('RX_CI_IMPORT_OK')
