@@ -66,6 +66,7 @@ def _load_portal_v27_deferred():
                 import portal_car_resilient  # noqa: F401
                 import property_search  # noqa: F401
                 import property_identity_runtime  # noqa: F401
+                import property_names_viewport_v30  # noqa: F401
                 import map_context  # noqa: F401
                 import portal_progressive  # noqa: F401
                 import portal_alerts  # noqa: F401
@@ -79,6 +80,7 @@ def _load_portal_v27_deferred():
                 import portal_property_identity_v13  # noqa: F401
                 import portal_mobile_v19  # noqa: F401
                 import portal_nationwide_v21  # noqa: F401
+                import portal_property_names_v30  # noqa: F401
                 import portal_legacy_source_cleanup  # noqa: F401
                 import portal_mobile_dossier_v20  # noqa: F401
                 import portal_human_reading_v23  # noqa: F401
@@ -97,17 +99,17 @@ def _load_portal_v27_deferred():
                 if heavy:
                     raise RuntimeError('heavy_modules_loaded_on_portal:' + ','.join(heavy))
                 guard.mark_ready()
-                print(f'RX_PORTAL_V27_EXTENSION=loaded_deferred routes:{len(ready)}', flush=True)
+                print(f'RX_PORTAL_V30_EXTENSION=loaded_deferred routes:{len(ready)} farm_names:on', flush=True)
             except Exception as exc:
                 if guard is not None:
                     try:
                         guard.mark_failed(exc)
                     except Exception:
                         pass
-                print(f'RX_PORTAL_V27_EXTENSION=failed:{type(exc).__name__}:{str(exc)[:500]}', flush=True)
+                print(f'RX_PORTAL_V30_EXTENSION=failed:{type(exc).__name__}:{str(exc)[:500]}', flush=True)
             return
         time.sleep(0.05)
-    print('RX_PORTAL_V27_EXTENSION=timeout_waiting_portal_api', flush=True)
+    print('RX_PORTAL_V30_EXTENSION=timeout_waiting_portal_api', flush=True)
 
 
 # During Render's build, core dependencies do not exist yet and this file becomes a
