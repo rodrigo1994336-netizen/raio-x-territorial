@@ -13,6 +13,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 import portal_v8
 from property_identity_runtime import resolve_property_identity_sync
 
+# RX_PORTAL_PDF_V43_8 — compatibility marker kept for the protected V43 contract.
 app=portal_v8.app
 WORKER=os.getenv('RX_REPORT_WORKER_URL','https://raio-x-territorial-report.onrender.com').rstrip('/')
 TRANSIENT_STATUS={502,503,504}
