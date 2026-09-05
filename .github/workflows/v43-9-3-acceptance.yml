@@ -19,7 +19,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p evidence
-          curl -fsS --max-time 30 "$PORTAL/v1/live/property-names/viewport?west=-44.60&south=-18.90&east=-44.20&north=-18.55&limit=35&diagnostic=true&car_visible=35" -o evidence/names_coverage.json
+          curl -fsS --max-time 30 "$PORTAL/v1/live/property-names/viewport?west=-44.75&south=-19.25&east=-44.35&north=-19.00&limit=35&diagnostic=true&car_visible=35" -o evidence/names_coverage.json
           python - <<'PY'
           import json
           d=json.load(open('evidence/names_coverage.json'))
@@ -27,6 +27,8 @@ jobs:
           assert d.get('ok') is True,d
           assert isinstance(d.get('coverage'),dict),d
           assert isinstance(d.get('items'),list),d
+          assert d.get('count',0)>0,d
+          assert d.get('coverage',{}).get('names_returned',0)>0,d
           PY
       - name: Upload evidence
         if: always()
