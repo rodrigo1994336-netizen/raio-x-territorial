@@ -19,15 +19,16 @@ html = html.replace(
     1,
 )
 
-# A hidden/zero-sized Leaflet map can temporarily collapse getBounds() to one
-# point while the V43 dossier owns the screen. Never send a zero-area viewport
-# to SICAR during that transition; wait until the map is visible again.
-_viewport_loader = "async function loadVisibleParcels(force){const m=rxMap();if(!m||rxLoading)return;const z=m.getZoom();"
+# V21 already rewrites the base loader to re-run the newest viewport after an
+# in-flight request. V43 acts on that consolidated signature rather than the
+# historical V8 source. A hidden/zero-sized Leaflet map must never create a
+# zero-area SICAR request while the dossier owns the screen.
+_viewport_loader = "async function loadVisibleParcels(force){const m=rxMap();if(!m)return;if(rxLoading){clearTimeout(rxTimer);rxTimer=setTimeout(()=>loadVisibleParcels(force),280);return;}"
 if _viewport_loader not in html:
     raise RuntimeError('v43_viewport_loader_guard_injection_point_missing')
 html = html.replace(
     _viewport_loader,
-    "async function loadVisibleParcels(force){const m=rxMap();if(!m||rxLoading||document.body.classList.contains('rx43-dossier-open'))return;const z=m.getZoom();",
+    "async function loadVisibleParcels(force){const m=rxMap();if(!m||document.body.classList.contains('rx43-dossier-open'))return;if(rxLoading){clearTimeout(rxTimer);rxTimer=setTimeout(()=>loadVisibleParcels(force),280);return;}",
     1,
 )
 _viewport_bounds = "const b=m.getBounds();const span=Math.max(b.getEast()-b.getWest(),b.getNorth()-b.getSouth());"
