@@ -9,11 +9,11 @@ from sentinel_cog import build_sentinel_cog_property_image
 from property_visual_plate_v25 import build_property_visual_plate
 
 
-async def build_hybrid_property_imagery(car_geometry:dict[str,Any],out_path:str|Path):
+async def build_hybrid_property_imagery(car_geometry:dict[str,Any],out_path:str|Path,property_meta:dict[str,Any]|None=None):
     out_path=Path(out_path);out_path.parent.mkdir(parents=True,exist_ok=True)
     high_path=out_path.with_name('property_highres_reference.jpg')
     sentinel_path=out_path.with_name('property_sentinel2_10m.jpg')
-    plate_path=out_path.with_name('property_visual_plate_v25.jpg')
+    plate_path=out_path.with_name('property_visual_plate_v28.jpg')
     high,sentinel=await asyncio.gather(
         build_highres_reference_image(car_geometry,high_path),
         build_sentinel_cog_property_image(car_geometry,sentinel_path),
@@ -30,6 +30,7 @@ async def build_hybrid_property_imagery(car_geometry:dict[str,Any],out_path:str|
             sentinel.get('path') if sentinel.get('ok') else None,
             sentinel.get('ndvi_image_path') if sentinel.get('ok') else None,
             sentinel,
+            property_meta or {},
         )
     except Exception as e:
         plate={'ok':False,'detail':f'{type(e).__name__}:{str(e)[:220]}'}
@@ -45,8 +46,8 @@ async def build_hybrid_property_imagery(car_geometry:dict[str,Any],out_path:str|
         'visual_reference_path':high.get('path') if high.get('ok') else None,
         'sentinel_image_path':sentinel.get('path') if sentinel.get('ok') else None,
         'ndvi_image_path':sentinel.get('ndvi_image_path') if sentinel.get('ok') else None,
-        'source':'Prancha V25: Esri World Imagery + Copernicus Sentinel-2 + NDVI' if plate.get('ok') else ('Esri World Imagery + Copernicus Sentinel-2' if high.get('ok') and sentinel.get('ok') else (high.get('source') if high.get('ok') else sentinel.get('source'))),
-        'note':'A capa usa uma prancha comparativa do mesmo CAR. A alta resolução serve ao reconhecimento visual; a cena Sentinel-2 datada sustenta a evidência temporal e o NDVI.'
+        'source':'Prancha V28: Esri World Imagery + Copernicus Sentinel-2 + NDVI' if plate.get('ok') else ('Esri World Imagery + Copernicus Sentinel-2' if high.get('ok') and sentinel.get('ok') else (high.get('source') if high.get('ok') else sentinel.get('source'))),
+        'note':'A capa identifica a fazenda e compara o mesmo CAR em alta resolução, Sentinel-2 datado e NDVI. Cada lente tem função própria e origem explicitada.'
     }
     for k in ('scene_id','date','cloud_cover_pct','resolution_m','ndvi_mean','ndvi_median','ndvi_p10','ndvi_p90','ndvi_low_share_pct','ndvi_medium_share_pct','ndvi_high_share_pct','ndvi_pixel_count'):
         if k in sentinel:meta[k]=sentinel.get(k)
@@ -54,4 +55,4 @@ async def build_hybrid_property_imagery(car_geometry:dict[str,Any],out_path:str|
     return meta
 
 
-print('RX_VISUAL_HYBRID_V25=highres_sentinel_ndvi_visual_plate',flush=True)
+print('RX_VISUAL_HYBRID_V28=property_identity_highres_sentinel_ndvi',flush=True)
