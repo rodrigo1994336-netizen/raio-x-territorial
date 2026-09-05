@@ -34,7 +34,7 @@ def _load_report_v29_after_report_api():
         time.sleep(0.05)
 
 
-def _load_portal_v37_deferred():
+def _load_portal_v38_deferred():
     if not IS_PORTAL:
         return
     for _ in range(600):
@@ -77,6 +77,7 @@ def _load_portal_v37_deferred():
                 import portal_premium_ux_v35  # noqa: F401
                 import portal_premium_interactions_v36  # noqa: F401
                 import portal_layout_guard_v37  # noqa: F401
+                import portal_premium_copy_v38  # noqa: F401
                 import portal_resource_guard_v27  # noqa: F401
                 import portal_feature_smoke  # noqa: F401
                 import portal_map_smoke  # noqa: F401
@@ -88,28 +89,30 @@ def _load_portal_v37_deferred():
                     raise RuntimeError('missing_required_routes:' + ','.join(missing))
                 for required in ('/sw.js','/v1/live/property-names/viewport','/v1/live/territorial-production/{car_code}','/v1/live/critical-minerals/{car_code}'):
                     if required not in ready:
-                        raise RuntimeError('missing_v37_route:' + required)
+                        raise RuntimeError('missing_v38_route:' + required)
                 html = portal_v8.PORTAL_HTML
                 for marker in ('RX_PREMIUM_UX_V35','RX_PREMIUM_INTERACTIONS_V36','RX_LAYOUT_GUARD_V37'):
                     if marker not in html:
                         raise RuntimeError('missing_premium_ui_marker:' + marker)
+                if 'Produção rural' not in html:
+                    raise RuntimeError('missing_v38_rural_production_label')
                 heavy = portal_resource_guard_v27._heavy_loaded()
                 if heavy:
                     raise RuntimeError('heavy_modules_loaded_on_portal:' + ','.join(heavy))
                 guard.mark_ready()
-                print(f'RX_PORTAL_V37_EXTENSION=loaded_deferred routes:{len(ready)} field_mode:on farm_names:on premium_ux:on split_layout:on', flush=True)
+                print(f'RX_PORTAL_V38_EXTENSION=loaded_deferred routes:{len(ready)} field_mode:on farm_names:on premium_ux:on split_layout:on copy:on', flush=True)
             except Exception as exc:
                 if guard is not None:
                     try: guard.mark_failed(exc)
                     except Exception: pass
-                print(f'RX_PORTAL_V37_EXTENSION=failed:{type(exc).__name__}:{str(exc)[:500]}', flush=True)
+                print(f'RX_PORTAL_V38_EXTENSION=failed:{type(exc).__name__}:{str(exc)[:500]}', flush=True)
             return
         time.sleep(0.05)
-    print('RX_PORTAL_V37_EXTENSION=timeout_waiting_portal_api', flush=True)
+    print('RX_PORTAL_V38_EXTENSION=timeout_waiting_portal_api', flush=True)
 
 
 if CORE_RUNTIME_READY:
     if IS_PORTAL:
-        threading.Thread(target=_load_portal_v37_deferred, daemon=True).start()
+        threading.Thread(target=_load_portal_v38_deferred, daemon=True).start()
     else:
         threading.Thread(target=_load_report_v29_after_report_api, daemon=True).start()
