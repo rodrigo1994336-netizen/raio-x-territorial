@@ -57,3 +57,7 @@ def _timed_terrain(geom):
 v17.query_terrain_srtm=_timed_terrain
 
 print('RX_REPORT_EXTRAS_V41=bounded_parallel_partial_safe',flush=True)
+
+# Must load after the final V41 extras hooks above so V42 prefetch captures the
+# exact same eight public-source tasks that the canonical report would run.
+import report_prefetch_v42  # noqa: F401,E402
