@@ -47,6 +47,7 @@ def _load_v8_after_portal():
                 import portal_rare_earth_locator_upgrade  # noqa: F401
                 import portal_rare_earth_symbols  # noqa: F401
                 import portal_property_tabs  # noqa: F401
+                import portal_live_fix_v18  # noqa: F401
                 import portal_smart_search  # noqa: F401
                 import portal_map_context_symbols  # noqa: F401
                 import portal_property_identity_v13  # noqa: F401
