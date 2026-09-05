@@ -146,6 +146,28 @@ AUTO_UI = r'''
 if 'RX_SEARCH_AUTO_V43_7' not in portal_v8.PORTAL_HTML:
     portal_v8.PORTAL_HTML = portal_v8.PORTAL_HTML.replace('</body>', AUTO_UI + '</body>')
 
-portal_v8.APP_PORTAL_VERSION = '0.43.7-v43-snapshot-first'
+# Imported after the canonical V43 experience. Override only the PDF action so the
+# dossier always delegates generation to the V41 report worker and carries a
+# defensible public property name when identity resolution has already succeeded.
+REPORT_UI = r'''
+<script id="rxReportIdentityV438">
+(function(){
+  const enc=s=>encodeURIComponent(String(s||''));
+  const generic=v=>!v||/^im[oó]vel rural/i.test(String(v).trim())||/nome n[aã]o confirmado/i.test(String(v));
+  window.downloadPDF=function(){
+    let p=null;try{p=(typeof current!=='undefined'&&current)?current:window.current}catch(e){p=window.current}
+    if(!p?.car_code)return;
+    const raw=p.public_name||p.name||'',name=generic(raw)?'':String(raw).trim();
+    window.open(`/v1/mobile/report/open/${enc(p.car_code)}?property_name=${enc(name)}`,'_blank');
+  };
+})();
+</script>
+<!-- RX_REPORT_IDENTITY_V43_8 -->
+'''
+if 'RX_REPORT_IDENTITY_V43_8' not in portal_v8.PORTAL_HTML:
+    portal_v8.PORTAL_HTML = portal_v8.PORTAL_HTML.replace('</body>', REPORT_UI + '</body>')
+
+portal_v8.APP_PORTAL_VERSION = '0.43.8-v43-snapshot-first'
 print('RX_SEARCH_V43=resilient_city_auto_list', flush=True)
 print('RX_SEARCH_CITY_TRIGGER_V43=uf_plus_municipality_auto', flush=True)
+print('RX_REPORT_IDENTITY_V43_8=canonical_dossier_to_named_worker_pdf', flush=True)

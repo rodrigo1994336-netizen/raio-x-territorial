@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 from urllib.parse import quote
 
@@ -8,14 +9,32 @@ from fastapi import HTTPException
 from fastapi.responses import RedirectResponse
 
 import portal_v8
+from property_identity_runtime import resolve_property_identity_sync
 
 app=portal_v8.app
 WORKER=os.getenv('RX_REPORT_WORKER_URL','https://raio-x-territorial-report.onrender.com').rstrip('/')
 
 
+def _provided_name(value:str|None)->str:
+    name=' '.join(str(value or '').strip().split())[:180]
+    if not name:return ''
+    if name.casefold().startswith(('imóvel rural','imovel rural')):return ''
+    return name
+
+
+async def _report_name(car_code:str,property_name:str|None)->str:
+    supplied=_provided_name(property_name)
+    if supplied:return supplied
+    try:
+        identity=await asyncio.to_thread(resolve_property_identity_sync,str(car_code or '').upper())
+        return _provided_name(identity.get('name')) if identity.get('ok') else ''
+    except Exception:
+        return ''
+
+
 async def _proxy(method:str,path:str,params=None,timeout=25):
     try:
-        async with httpx.AsyncClient(timeout=timeout,follow_redirects=True,headers={'User-Agent':'Raio-X-Territorial-Portal/V25'}) as c:
+        async with httpx.AsyncClient(timeout=timeout,follow_redirects=True,headers={'User-Agent':'Raio-X-Territorial-Portal/V43.8'}) as c:
             r=await c.request(method,WORKER+path,params=params)
             try:data=r.json()
             except Exception:data={'detail':r.text[:300]}
@@ -28,18 +47,21 @@ async def _proxy(method:str,path:str,params=None,timeout=25):
 @app.post('/v1/mobile/report/prepare/{car_code}')
 @app.get('/v1/mobile/report/prepare/{car_code}')
 async def mobile_report_prepare(car_code:str,property_name:str|None=None):
-    return await _proxy('POST',f'/v1/reports/property/{quote(car_code.upper())}/prepare',{'property_name':property_name or ''},12)
+    name=await _report_name(car_code,property_name)
+    return await _proxy('POST',f'/v1/reports/property/{quote(car_code.upper())}/prepare',{'property_name':name},12)
 
 
 @app.get('/v1/mobile/report/status/{car_code}')
 async def mobile_report_status(car_code:str,property_name:str|None=None):
-    return await _proxy('GET',f'/v1/reports/property/{quote(car_code.upper())}/status',{'property_name':property_name or ''},10)
+    name=await _report_name(car_code,property_name)
+    return await _proxy('GET',f'/v1/reports/property/{quote(car_code.upper())}/status',{'property_name':name},10)
 
 
 @app.get('/v1/mobile/report/open/{car_code}')
 async def mobile_report_open(car_code:str,property_name:str|None=None):
+    name=await _report_name(car_code,property_name)
     url=f'{WORKER}/v1/reports/property/{quote(car_code.upper())}'
-    if property_name:url+='?property_name='+quote(property_name)
+    if name:url+='?property_name='+quote(name)
     return RedirectResponse(url=url,status_code=307)
 
 
@@ -62,7 +84,7 @@ UI=r'''
 (function(){
  const enc=s=>encodeURIComponent(String(s||''));
  const getCurrent=()=>{try{return (typeof current!=='undefined'&&current)?current:window.current}catch(e){return window.current}};
- const goodName=p=>{const n=String(p?.name||'').trim();return n&&!/^im[oó]vel rural/i.test(n)?n:''};
+ const goodName=p=>{const n=String(p?.public_name||p?.name||'').trim();return n&&!/^im[oó]vel rural/i.test(n)?n:''};
  let pollTimer=null,pollToken=0,startedAt=0;
  function btn(){return document.querySelector('#rxMobilePdf')}
  function setBtn(text,state){const b=btn();if(!b)return;b.textContent=text;b.dataset.pdfState=state||'';b.disabled=false}
@@ -114,7 +136,7 @@ UI=r'''
 </script>
 '''
 
-if 'RX_PDF_V25' not in portal_v8.PORTAL_HTML:
-    portal_v8.PORTAL_HTML=portal_v8.PORTAL_HTML.replace('</body>',UI+'<!-- RX_PDF_V25 --></body>')
+if 'RX_PDF_V43_8' not in portal_v8.PORTAL_HTML:
+    portal_v8.PORTAL_HTML=portal_v8.PORTAL_HTML.replace('</body>',UI+'<!-- RX_PDF_V43_8 --></body>')
 
-print('RX_PORTAL_PDF_V25=explicit_generation_visible_progress_no_hidden_prewarm',flush=True)
+print('RX_PORTAL_PDF_V43_8=identity_resolved_worker_delegation',flush=True)
