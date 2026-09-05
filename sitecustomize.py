@@ -60,8 +60,6 @@ def _load_portal_deferred():
                 import portal_rare_earth_locator_upgrade  # noqa: F401
                 import portal_rare_earth_symbols  # noqa: F401
 
-                # Route-bearing legacy modules remain registered. Their historical
-                # presentation layers are superseded by the V43 canonical layers.
                 import portal_property_tabs  # noqa: F401
                 import portal_live_fix_v18  # noqa: F401
                 import portal_smart_search  # noqa: F401
@@ -81,8 +79,6 @@ def _load_portal_deferred():
                 import portal_advanced_name_v40  # noqa: F401
                 import portal_incra_certified_v42  # noqa: F401
 
-                # V43 canonical experience: stable map, quiet visual, resilient search
-                # and a satellite-first hybrid basemap with an explicit street toggle.
                 import portal_experience_v43  # noqa: F401
                 import portal_map_stability_v43  # noqa: F401
                 import portal_map_polish_v43  # noqa: F401
@@ -114,8 +110,8 @@ def _load_portal_deferred():
                         raise RuntimeError('missing_portal_route:' + required)
                 if 'RX_EXPERIENCE_V43' not in portal_v8.PORTAL_HTML:
                     raise RuntimeError('v43_experience_not_loaded')
-                if str(portal_v8.APP_PORTAL_VERSION) != '0.43.9-v43-snapshot-first':
-                    raise RuntimeError('v43_9_release_identity_not_loaded')
+                if str(portal_v8.APP_PORTAL_VERSION) != '0.43.8-v43-snapshot-first':
+                    raise RuntimeError('v43_8_release_identity_not_loaded')
                 if 'RX_MAP_STABILITY_V43_5' not in portal_v8.PORTAL_HTML:
                     raise RuntimeError('v43_5_map_stability_not_loaded')
                 if 'RX_MAP_POLISH_V43_6' not in portal_v8.PORTAL_HTML:
