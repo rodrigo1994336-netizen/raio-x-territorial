@@ -1,0 +1,146 @@
+name: Raio-X V17 Handoff Package
+
+on:
+  push:
+    paths:
+      - '.github/workflows/package-v17.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  package:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout current repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Download validated V17 public-report audit
+        uses: actions/download-artifact@v4
+        with:
+          name: raio-x-public-report-audit
+          path: handoff/audit
+          github-token: ${{ github.token }}
+          run-id: 33931360986
+
+      - name: Assemble source snapshot and checkpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p handoff/source handoff/docs
+          rsync -a \
+            --exclude '.git' \
+            --exclude 'handoff' \
+            ./ handoff/source/
+
+          cat > handoff/START_HERE_V17.md <<EOF
+          # RAIO-X TERRITORIAL — CHECKPOINT V17
+
+          Data do pacote: 2026-09-05
+          Repositório: rodrigo1994336-netizen/raio-x-territorial
+          Snapshot do pacote: ${GITHUB_SHA}
+          Runtime V17 validado no Render a partir do commit: 31152acd867452cd613173bddf679c0b2f505471
+          Audit GitHub Actions: run 33931360986
+          CAR benchmark: MG-3120904-DFB380BECD7A4323AD8AA68FA14D011F
+          Nome benchmark: Fazenda Benchmark Curvelo
+
+          ## Estado real
+
+          - V17 carregada em produção no serviço de relatórios.
+          - Imagem principal de referência em alta resolução com CAR contornado.
+          - Sentinel-2 separado como evidência científica datada e fonte do NDVI.
+          - SRTM ~30 m ativo para altitude e declividade.
+          - Quality Gate concluído com sucesso.
+          - Auditoria pública gerou PDF de 19 páginas e pass_v17_core=true.
+          - Auditoria não encontrou frases obsoletas: pass_no_stale_claims=true.
+          - SICAR interno explícito ainda NÃO passou: pass_sicar_explicit=false.
+          - O relatório ainda contém 11 ocorrências textuais de NÃO CONSULTADO e 1 de NÃO EXECUTADO.
+          - O monitoramento persistente continua dependendo do vínculo DATABASE_URL do Postgres existente no Render.
+
+          ## Defeito prioritário — não ignorar
+
+          O conector sicar_detail_sources_v2.py consultou 0/4 camadas explícitas no benchmark. Portanto APP e Reserva Legal ainda não aparecem como dados internos efetivamente consultados. Não tratar isso como resolvido só porque o módulo V17 está carregado.
+
+          Há ainda duplicidade semântica no relatório: a fonte legada "SICAR - composição ambiental interna" aparece como NÃO CONSULTADA e a fonte V17 aparece como INDISPONÍVEL. Ao corrigir o conector, remover/substituir a entrada legada para existir uma única verdade no PDF.
+
+          ## Ordem de execução recomendada
+
+          1. Corrigir SICAR interno consultando o GetCapabilities real e mapeando os nomes efetivamente anunciados pelo servidor, sem hard-code não validado.
+          2. Fazer o gate falhar se APP/Reserva Legal estiverem ausentes quando a fonte deveria estar disponível.
+          3. Remover a duplicidade de fonte SICAR antiga/nova no relatório.
+          4. Regerar o benchmark e exigir pass_sicar_explicit=true.
+          5. Ajustar paginação editorial: eliminar páginas quase vazias e redistribuir blocos sem esmagar tabelas.
+          6. Vincular DATABASE_URL do Postgres do Render ao serviço do portal e validar monitoramento 24/7 persistente.
+          7. Só então declarar o pacote de produção fechado.
+
+          ## Arquivos V17 centrais
+
+          - highres_reference.py
+          - visual_hybrid.py
+          - terrain_srtm.py
+          - sicar_detail_sources_v2.py
+          - live_report_adapter_v17.py
+          - report_engine_v7.py
+          - report_v17_patch.py
+          - sitecustomize.py
+          - .github/workflows/quality-gate.yml
+          - .github/workflows/public-report-smoke.yml
+
+          ## Monitoramento incluído no snapshot
+
+          - monitoring_store.py
+          - monitoring_routes.py
+          - github_oidc_auth.py
+          - jwt_runtime_bootstrap.py
+          - postgres_runtime_bootstrap.py
+          - .github/workflows/monitoring-15min.yml
+          - docs/RENDER_DB_BINDING.md
+
+          ## Auditoria incluída
+
+          A pasta audit/ contém o PDF público benchmark, meta.json, summary.json, texto extraído, pdfinfo e PNGs de todas as 19 páginas. Esse material deve ser usado como evidência do estado real, não apenas o código.
+          EOF
+
+          cat > handoff/AUDIT_RESULT.txt <<'EOF'
+          V17 PUBLIC AUDIT
+          run_id=33931360986
+          report_id=RX-20260904T235819Z-A14D011F
+          report_sha256=8fe68c8b60d8038a7653819a5d76e4082bc9c449101898f33d5dc4d65d5e858e
+          pdf_bytes=1306711
+          pages=19
+          pass_v17_core=true
+          pass_sicar_explicit=false
+          pass_no_stale_claims=true
+          not_consulted_count=11
+          not_executed_count=1
+          integration_off_count=2
+          EOF
+
+          cat > handoff/COMANDO_CONTINUAR.txt <<'EOF'
+          Abra START_HERE_V17.md e trate este pacote como checkpoint canônico. Não recomece o projeto e não substitua dados reais por suposições. Primeiro reproduza o benchmark já incluído em audit/. Corrija o SICAR interno até APP e Reserva Legal serem efetivamente consultadas e o gate pass_sicar_explicit ficar true. Remova a duplicidade da fonte SICAR no PDF. Em seguida corrija a paginação editorial e só depois feche o vínculo DATABASE_URL/monitoramento. Preserve todas as integrações V17 que já passaram no audit. Faça mudanças cumulativas, com teste antes de promover para produção.
+          EOF
+
+      - name: Build integrity manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          (
+            cd handoff
+            find . -type f ! -name 'MANIFEST_SHA256.txt' -print0 | sort -z | xargs -0 sha256sum > MANIFEST_SHA256.txt
+          )
+          echo "package_snapshot=${GITHUB_SHA}" > handoff/PACKAGE_META.txt
+          echo "audit_run=33931360986" >> handoff/PACKAGE_META.txt
+          echo "runtime_v17_commit=31152acd867452cd613173bddf679c0b2f505471" >> handoff/PACKAGE_META.txt
+
+      - name: Upload complete handoff package
+        uses: actions/upload-artifact@v4
+        with:
+          name: RAIO_X_TERRITORIAL_V17_HANDOFF_2026-09-05
+          path: handoff/
+          retention-days: 30
+          compression-level: 6
