@@ -1,5 +1,6 @@
 name: Stage 2 Production Curvelo Audit
 
+# rerun after production PRODES display fix 7838e9c
 on:
   push:
     branches: [ v44-step2-finalize ]
@@ -43,7 +44,7 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
-          import json,re
+          import json
           text=Path('audit/report.txt').read_text(encoding='utf-8',errors='ignore')
           low=' '.join(text.lower().split())
           checks={
