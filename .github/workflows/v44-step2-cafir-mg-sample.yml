@@ -1,0 +1,31 @@
+name: V44 Step 2 CAFIR MG Sample
+on:
+  push:
+    branches: [ v44-step2-cafir-mg-sample ]
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Sample MG files
+        run: |
+          set -euo pipefail
+          B='https://arquivos.receitafederal.gov.br/public.php/dav/files/RRmcpB2tf5cXskz'
+          : > proof.txt
+          for P in MG01 MG02 MG03; do
+            U="$B/K34313UF.D60901.$P.csv"
+            echo "=== $P ===" >> proof.txt
+            curl -sS -D "$P.h" -o "$P.bin" -r 0-1475 "$U"
+            cat "$P.h" >> proof.txt
+            echo '--- FIRST BYTES ---' >> proof.txt
+            cat "$P.bin" >> proof.txt
+            echo >> proof.txt
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: v44-step2-cafir-mg-sample
+          path: proof.txt
+          retention-days: 3
