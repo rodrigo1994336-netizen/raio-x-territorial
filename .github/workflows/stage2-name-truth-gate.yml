@@ -56,8 +56,8 @@ jobs:
           # UI has two visual languages and explicit disclaimer.
           assert 'rx-name-validated' in ui
           assert 'rx-name-reference' in ui
-          assert 'Referências do OpenStreetMap — não confirmada' in ui
-          assert 'Referências SIGEF/INCRA — não vinculada' in ui
+          assert 'referência(s) do OpenStreetMap — não confirmada(s) para o imóvel' in ui
+          assert 'referência(s) SIGEF/INCRA — não vinculada(s) ao CAR' in ui
           assert "validated?openValidatedProperty(x):openReference(x)" in ui
 
           # Reference click cannot mutate or open the property panel.
