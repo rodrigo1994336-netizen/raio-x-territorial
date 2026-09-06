@@ -15,28 +15,33 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - name: Probe Curvelo public theme downloads
+      - name: Inspect GeoServices public SPA and endpoints
         shell: bash
         run: |
-          set -u
-          BASE='https://consulta.car.gov.br/geoservices/estadosCSV/MG?municipio=3120904&servico=SHP&tema='
-          themes=(
-            PERIMETRO_IMOVEL AREA_IMOVEL IMOVEL
-            AREA_CONSOLIDADA CONSOLIDADA
-            VEGETACAO_NATIVA REMANESCENTE_VEGETACAO_NATIVA
-            RESERVA_LEGAL APP APPS
-            AREA_POUSIO POUSIO
-            REGENERACAO AREA_REGENERACAO
-            HIDROGRAFIA USO_RESTRITO SERVIDAO_ADMINISTRATIVA
-          )
+          set -euo pipefail
           mkdir -p probe
-          for t in "${themes[@]}"; do
-            url="${BASE}${t}"
-            code=$(curl -k -L -sS --connect-timeout 12 --max-time 60 -o "probe/${t}.bin" -w '%{http_code}' "$url" || true)
-            size=$(wc -c < "probe/${t}.bin" 2>/dev/null || echo 0)
-            kind=$(file -b "probe/${t}.bin" 2>/dev/null || true)
-            printf '%-34s http=%s bytes=%s type=%s\n' "$t" "$code" "$size" "$kind"
-            if [ "$size" -gt 0 ] && [ "$size" -lt 1000 ]; then
-              head -c 300 "probe/${t}.bin" | tr '\n' ' ' | sed 's/[^[:print:]]/./g'; echo
-            fi
-          done
+          ROOT='https://consulta.car.gov.br/geoservices/'
+          curl -k -L -sS --connect-timeout 12 --max-time 60 "$ROOT" -o probe/index.html
+          echo '=== HTML ==='
+          cat probe/index.html
+          echo
+          echo '=== script/assets ==='
+          grep -Eo '(src|href)="[^"]+"' probe/index.html || true
+          python - <<'PY'
+          from pathlib import Path
+          import re, subprocess
+          html=Path('probe/index.html').read_text(encoding='utf-8',errors='ignore')
+          refs=[]
+          for x in re.findall(r'(?:src|href)="([^"]+)"',html):
+              if x.endswith('.js') or '.js?' in x:
+                  refs.append(x)
+          root='https://consulta.car.gov.br'
+          for i,ref in enumerate(refs):
+              url=ref if ref.startswith('http') else root+(ref if ref.startswith('/') else '/geoservices/'+ref)
+              out=Path(f'probe/app_{i}.js')
+              subprocess.run(['curl','-k','-L','-sS','--connect-timeout','12','--max-time','90',url,'-o',str(out)],check=False)
+              print('JS',i,url,'bytes',out.stat().st_size if out.exists() else 0)
+          PY
+          echo '=== endpoint-like strings ==='
+          grep -RhoE 'https?://[^"'"'"' )]+' probe/*.js | sort -u | head -200 || true
+          grep -RhoE '/[A-Za-z0-9_.?=&{}:/-]*(download|Download|SHP|shape|municip|tema|estado)[A-Za-z0-9_.?=&{}:/-]*' probe/*.js | sort -u | head -300 || true
