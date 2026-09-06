@@ -1,0 +1,31 @@
+name: V44 Step 2 CAFIR MG Parallel
+on:
+  push:
+    branches: [ v44-step2-cafir-mg-parallel ]
+permissions:
+  contents: read
+jobs:
+  extract:
+    strategy:
+      matrix:
+        part: [MG01, MG02, MG03]
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Extract Curvelo
+        run: |
+          set -euo pipefail
+          P='${{ matrix.part }}'
+          U="https://arquivos.receitafederal.gov.br/public.php/dav/files/RRmcpB2tf5cXskz/K34313UF.D60901.$P.csv"
+          T0=$(date +%s)
+          curl -sS --fail "$U" | LC_ALL=C grep -a 'CURVELO' > "curvelo-$P.txt"
+          T1=$(date +%s)
+          printf 'PART=%s\nSECONDS=%s\nLINES=%s\nBYTES=%s\n' "$P" "$((T1-T0))" "$(wc -l < "curvelo-$P.txt")" "$(wc -c < "curvelo-$P.txt")" > "proof-$P.txt"
+          grep -a -i 'LAGOA BONITA' "curvelo-$P.txt" | head -50 >> "proof-$P.txt" || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cafir-curvelo-${{ matrix.part }}
+          path: |
+            curvelo-${{ matrix.part }}.txt
+            proof-${{ matrix.part }}.txt
+          retention-days: 3
