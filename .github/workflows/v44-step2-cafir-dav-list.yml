@@ -1,0 +1,51 @@
+name: V44 Step 2 CAFIR DAV List
+on:
+  push:
+    branches: [ v44-step2-cafir-dav-list ]
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Probe public DAV listings
+        shell: bash
+        run: |
+          set -u
+          TOKEN='RRmcpB2tf5cXskz'
+          BASE='https://arquivos.receitafederal.gov.br'
+          BODY='<?xml version="1.0" encoding="utf-8"?><d:propfind xmlns:d="DAV:"><d:prop><d:displayname/><d:getcontentlength/><d:getcontenttype/><d:resourcetype/></d:prop></d:propfind>'
+          : > proof.txt
+          probe() {
+            name="$1"; shift
+            echo "=== $name ===" | tee -a proof.txt
+            curl -sS -D "${name}.headers" -o "${name}.xml" -X PROPFIND -H 'Depth: 1' -H 'Content-Type: application/xml' --data "$BODY" "$@"
+            code=$(awk 'toupper($1) ~ /^HTTP\// {c=$2} END{print c}' "${name}.headers")
+            echo "HTTP=$code bytes=$(wc -c < "${name}.xml")" | tee -a proof.txt
+            cat "${name}.headers" >> proof.txt
+            head -c 20000 "${name}.xml" >> proof.txt
+            echo >> proof.txt
+          }
+          probe dav_noauth "$BASE/public.php/dav/files/$TOKEN/"
+          probe dav_basicauth -u "$TOKEN:" "$BASE/public.php/dav/files/$TOKEN/"
+          probe webdav_basicauth -u "$TOKEN:" "$BASE/public.php/webdav/"
+          python - <<'PY' | tee -a proof.txt
+          from pathlib import Path
+          import re, html
+          for p in Path('.').glob('*.xml'):
+              s=p.read_text(errors='replace')
+              hrefs=[html.unescape(x) for x in re.findall(r'<(?:d:)?href>(.*?)</(?:d:)?href>',s,re.I|re.S)]
+              names=[html.unescape(x) for x in re.findall(r'<(?:d:)?displayname>(.*?)</(?:d:)?displayname>',s,re.I|re.S)]
+              sizes=re.findall(r'<(?:d:)?getcontentlength>(.*?)</(?:d:)?getcontentlength>',s,re.I|re.S)
+              print('PARSED',p.name,'HREFS',hrefs,'NAMES',names,'SIZES',sizes)
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: v44-step2-cafir-dav-list
+          path: |
+            proof.txt
+            *.headers
+            *.xml
+          retention-days: 3
