@@ -59,4 +59,9 @@ html = html.replace('</body>', POLISH + '</body>')
 portal_v8.PORTAL_HTML = html
 portal_v8.APP_PORTAL_VERSION = '0.43.8-v43-snapshot-first'
 
+# V44 keeps map discovery and list discovery synchronized without changing the
+# V43 release identity or loading any heavy backend module on the portal.
+import portal_property_browser_v44  # noqa: F401,E402
+
 print('RX_HYBRID_BASEMAP_V43=V43_9_2_satellite_default_mobile_controls_clear', flush=True)
+print('RX_PROPERTY_BROWSER_V44_LOAD=on', flush=True)
