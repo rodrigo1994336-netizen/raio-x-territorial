@@ -9,57 +9,39 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Discover official Dados.gov resources for SNCR and CAFIR
+      - name: Inspect official nationwide CAFIR bulk source
         shell: bash
         run: |
           set -euo pipefail
           python - <<'PY'
-          import json, requests
-          s=requests.Session(); s.headers.update({'User-Agent':'Raio-X-Territorial/official-open-data-audit','Accept':'application/json'})
-          base='https://dados.gov.br'
-          specs=s.get(base+'/v3/api-docs',timeout=30)
-          print('OPENAPI',specs.status_code,specs.headers.get('content-type'),len(specs.content))
-          if specs.ok:
-              doc=specs.json()
-              p=doc.get('paths',{}).get('/dados/api/publico/conjuntos-dados',{}).get('get',{})
-              print('LIST_PARAMS',[(x.get('name'),x.get('schema',{}).get('type')) for x in p.get('parameters',[])])
-          queries=['Cadastro de Imóveis Rurais - CAFIR','Sistema Nacional de Cadastro Rural - SNCR/Incra','CAFIR','SNCR']
-          for q in queries:
-              print('\nQUERY',q)
-              found=[]
-              for params in [
-                  {'isPrivado':'false','pagina':1,'nomeConjuntoDados':q},
-                  {'pagina':1,'nomeConjuntoDados':q},
-                  {'pagina':1,'termo':q},
-              ]:
-                  try:
-                      r=s.get(base+'/dados/api/publico/conjuntos-dados',params=params,timeout=30)
-                      print('LIST',r.status_code,r.url,'bytes',len(r.content),'type',r.headers.get('content-type'))
-                      if not r.ok: continue
-                      data=r.json(); print('ROOT_TYPE',type(data).__name__,'KEYS',list(data)[:30] if isinstance(data,dict) else '')
-                      print('BODY_SAMPLE',json.dumps(data,ensure_ascii=False)[:2500])
-                      def walk(x):
-                          if isinstance(x,dict):
-                              if any(k in x for k in ('titulo','nome','title','name')) and any(k in x for k in ('id','identificador','slug')): found.append(x)
-                              for v in x.values(): walk(v)
-                          elif isinstance(x,list):
-                              for v in x: walk(v)
-                      walk(data)
-                      if found: break
-                  except Exception as e: print('ERR',type(e).__name__,str(e)[:200])
-              uniq=[]; seen=set()
-              for x in found:
-                  key=json.dumps(x,sort_keys=True,ensure_ascii=False)
-                  if key not in seen: seen.add(key); uniq.append(x)
-              print('CANDIDATES',len(uniq))
-              for x in uniq[:20]:
-                  print('ITEM',json.dumps(x,ensure_ascii=False)[:3000])
-                  for ident in [x.get('id'),x.get('identificador'),x.get('slug')]:
-                      if not ident: continue
-                      try:
-                          d=s.get(base+'/dados/api/publico/conjuntos-dados/'+str(ident),timeout=30)
-                          print('DETAIL',ident,d.status_code,d.url,'bytes',len(d.content))
-                          if d.ok: print('DETAIL_JSON',json.dumps(d.json(),ensure_ascii=False)[:12000])
-                      except Exception as e: print('DETAIL_ERR',type(e).__name__,str(e)[:180])
-                      break
+          import requests,re,html
+          from urllib.parse import urljoin
+          s=requests.Session();s.headers.update({'User-Agent':'Raio-X-Territorial/official-open-data-audit','Accept':'text/html,*/*'})
+          root='https://dadosabertos.rfb.gov.br/CAFIR/'
+          r=s.get(root,timeout=30,allow_redirects=True)
+          print('DIR',r.status_code,r.url,'bytes',len(r.content),'type',r.headers.get('content-type'))
+          print('LAST_MODIFIED',r.headers.get('last-modified'))
+          print('HEAD',r.text[:2500].replace('\n',' '))
+          links=[]
+          for href in re.findall(r'href=["\']([^"\']+)["\']',r.text,re.I):
+              if href.startswith('?') or href.startswith('../'):continue
+              u=urljoin(r.url,html.unescape(href));
+              if u not in links:links.append(u)
+          print('LINK_COUNT',len(links))
+          for u in links[:100]:print('LINK',u)
+          files=[u for u in links if 'PARTE' in u.upper() or u.upper().endswith(('.CSV','.ZIP','.TXT')) or 'K3243' in u.upper()]
+          print('DATA_FILES',len(files))
+          for u in files[:30]:
+              try:
+                  h=s.head(u,timeout=30,allow_redirects=True)
+                  print('FILE',u,'status',h.status_code,'len',h.headers.get('content-length'),'type',h.headers.get('content-type'),'modified',h.headers.get('last-modified'))
+              except Exception as e:print('FILE_ERR',u,type(e).__name__,str(e)[:120])
+          # Legacy public path sanity check without downloading the bulk file.
+          legacy='https://dadosabertos.rfb.gov.br/CAFIR/K3243.K34313DP.D21223.PARTE01'
+          try:
+              q=s.get(legacy,headers={'Range':'bytes=0-4095'},timeout=30,stream=True)
+              chunk=next(q.iter_content(4096),b'')
+              print('LEGACY_SAMPLE',q.status_code,'lenhdr',q.headers.get('content-length'),'range',q.headers.get('content-range'),'modified',q.headers.get('last-modified'),'bytes',len(chunk))
+              print('LEGACY_TEXT',chunk.decode('latin1','replace')[:1200].replace('\n',' | '))
+          except Exception as e:print('LEGACY_ERR',type(e).__name__,str(e)[:180])
           PY
