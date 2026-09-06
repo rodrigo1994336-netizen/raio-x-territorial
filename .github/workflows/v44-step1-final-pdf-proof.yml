@@ -46,26 +46,28 @@ jobs:
           set -euo pipefail
           python -m pip install --quiet pypdf
           python - <<'PY'
-          import os
+          import os,re
           from pypdf import PdfReader
           r=PdfReader('benchmark.pdf')
           text='\n'.join((p.extract_text() or '') for p in r.pages)
           open('benchmark.txt','w',encoding='utf-8').write(text)
           normalized=text.replace(',','.')
+          flat=re.sub(r'\s+',' ',normalized)
           for required in ('Histórico PRODES completo','Recorte pós-31/07/2019','14.496704','97.98%','0.027909','0.19%'):
               assert required in normalized, required
           assert 'soma aproximada' not in text.lower(), 'stale approximate summary remains'
           assert 'area_sum_ha' not in text
-          # Executive narrative must itself carry exact values, not only the technical table.
-          assert 'PRODES histórico: 4 ocorrência(s), 14.496704 ha de interseção única (97.98% do CAR)' in normalized
-          assert 'Recorte pós-31/07/2019: 1 ocorrência(s), 0.027909 ha de interseção única (0.19% do CAR)' in normalized
+          assert re.search(r'PRODES histórico:\s*4 ocorrência\(s\),\s*14\.496704 ha de interseção única\s*\(97\.98% do CAR\)',flat), flat
+          assert re.search(r'Recorte pós-31/07/2019:\s*1 ocorrência\(s\),\s*0\.027909 ha de interseção única\s*\(0\.19% do CAR\)',flat), flat
           print('PRODES_FINAL_PDF_PROOF_OK pages=',len(r.pages),'bytes=',os.path.getsize('benchmark.pdf'))
           PY
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: v44-step1-final-benchmark-pdf
           path: |
             benchmark.pdf
             benchmark.txt
             status.json
+          if-no-files-found: warn
           retention-days: 14
