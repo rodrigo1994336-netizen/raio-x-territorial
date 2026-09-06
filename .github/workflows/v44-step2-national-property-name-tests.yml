@@ -25,8 +25,10 @@ jobs:
           3100000000005;Fazenda Conflito B;1501402;BELÉM;PA;30,0000;IGNORAR B
           CSV
           cat > /tmp/rxnames/cafir.csv <<'CSV'
-          CIB;ÁREA TOTAL;CÓDIGO DO IMÓVEL NO INCRA;NOME DO IMÓVEL RURAL;SITUAÇÃO;UF;MUNICÍPIO;CPF/CNPJ Contribuinte;Nome do contribuinte
-          AB12345678;41,2500;3100000000006;Fazenda CAFIR CSV;ATIVA;RS;BAGÉ;00000000000;TITULAR CSV PROIBIDO
+          CIB;ÁREA TOTAL;CÓDIGO DO IMÓVEL NO INCRA;NOME DO IMÓVEL RURAL;SITUAÇÃO;UF;MUNICÍPIO;ID_MUNICIPIO;DISTRITO;ENDERECO;CPF/CNPJ Contribuinte;Nome do contribuinte
+          AB12345678;41,2500;3100000000006;Fazenda CAFIR CSV;ATIVA;RS;BAGÉ;RSBAGE;RURAL;ESTRADA A;00000000000;TITULAR CSV PROIBIDO
+          AB12345679;100,4000;3100000000007;Fazenda Janela A;ATIVA;MG;TESTE;MGTST;NORTE;ESTRADA NORTE;11111111111;PESSOA A
+          AB12345680;99,7000;3100000000008;Fazenda Janela B;ATIVA;MG;TESTE;MGTST;SUL;ESTRADA SUL;22222222222;PESSOA B
           CSV
           python - <<'PY'
           from pathlib import Path
@@ -35,7 +37,7 @@ jobs:
           Path('/tmp/rxnames/cafir.part').write_bytes((''.join(str(v)[:w].ljust(w) for v,w in zip(vals,widths))+'\n').encode('iso-8859-1'))
           PY
           python scripts/build_national_property_name_db.py --db /tmp/rxnames/names.sqlite3 --sncr-csv /tmp/rxnames/sncr.csv --cafir-file /tmp/rxnames/cafir.part --cafir-csv /tmp/rxnames/cafir.csv --source-date 2026-09-01
-      - name: Validate safe resolution and privacy minimization
+      - name: Validate tolerance ambiguity disambiguation and absence
         shell: bash
         run: |
           set -euo pipefail
@@ -43,22 +45,43 @@ jobs:
           import os,sqlite3
           os.environ['RX_PROPERTY_NAMES_DB']='/tmp/rxnames/names.sqlite3'
           import national_property_name_registry_v44 as n
+          assert abs(n.area_tolerance_ha(14.795)-0.073975)<1e-12
+          assert abs(n.area_tolerance_ha(1)-0.01)<1e-12
           assert n.lookup_by_sncr('3100000000001')['chosen']['name']=='Fazenda Brasil'
           assert n.lookup_by_sncr('3100000000002')['chosen']['name']=='Fazenda CAFIR Brasil'
           assert n.lookup_by_sncr('3100000000006')['chosen']['name']=='Fazenda CAFIR CSV'
-          go=n.lookup_unique_by_location_area(ibge_code='5208707',uf='GO',municipality='GOIÂNIA',area_ha='25.1234')
+
+          go=n.lookup_unique_by_location_area(ibge_code='5208707',uf='GO',municipality='GOIÂNIA',area_ha='25.20')
           assert go['chosen']['name']=='Fazenda Única Nacional' and go['match_basis']=='ibge_area',go
+          assert go['area_tolerance_rule']=='max(0.5% da área CAR, 0.01 ha)',go
+
           pa=n.lookup_unique_by_location_area(ibge_code='1501402',uf='PA',municipality='BELÉM',area_ha='30.0000')
-          assert pa['chosen'] is None and pa['conflict'] is True,pa
+          assert pa['chosen'] is None and pa['resolution_status']=='ambiguous',pa
+
+          mg=n.lookup_unique_by_location_area(uf='MG',municipality='TESTE',area_ha='100.0')
+          assert mg['chosen'] is None and mg['resolution_status']=='ambiguous' and mg['count']==2,mg
+          mg2=n.lookup_unique_by_location_area(uf='MG',municipality='TESTE',area_ha='100.0',district='NORTE')
+          assert mg2['chosen']['name']=='Fazenda Janela A' and mg2['resolution_status']=='matched',mg2
+          assert mg2['disambiguation_used']==['distrito'],mg2
+          mg3=n.lookup_unique_by_location_area(uf='MG',municipality='TESTE',area_ha='100.0',municipality_id='MGTST',address='ESTRADA SUL')
+          assert mg3['chosen']['name']=='Fazenda Janela B' and mg3['resolution_status']=='matched',mg3
+          assert 'id_municipio' in mg3['disambiguation_used'] and 'endereco' in mg3['disambiguation_used'],mg3
+
+          absent=n.lookup_unique_by_location_area(uf='MG',municipality='TESTE',area_ha='777.0')
+          assert absent['chosen'] is None and absent['resolution_status']=='absent' and absent['count']==0,absent
+
           ba=n.lookup_unique_by_location_area(ibge_code='2903201',uf='BA',municipality='BARREIRAS',area_ha='25.1234')
           assert ba['chosen']['name']=='Fazenda CAFIR Brasil' and ba['match_basis']=='uf_municipality_area',ba
+
           con=sqlite3.connect('/tmp/rxnames/names.sqlite3')
           cols={r[1].lower() for r in con.execute('pragma table_info(property_names)')}
+          assert {'municipality_id','district','address'} <= cols,cols
           assert not ({'titular','cpf','cnpj','nome_titular','detentor'} & cols),cols
           all_text=' '.join(str(v) for row in con.execute('select * from property_names') for v in row if v is not None)
-          for forbidden in ('PESSOA PROIBIDA','OUTRO TITULAR','TITULAR CSV PROIBIDO','00000000000'): assert forbidden not in all_text
+          for forbidden in ('PESSOA PROIBIDA','OUTRO TITULAR','TITULAR CSV PROIBIDO','00000000000','11111111111','22222222222','PESSOA A','PESSOA B'):
+              assert forbidden not in all_text,forbidden
           con.close()
-          print('NATIONAL_NAME_REGISTRY_SAFE_OK')
+          print('NATIONAL_NAME_MATCH_POLICY_OK')
           PY
       - name: Validate resolver priority and syntax
         shell: bash
