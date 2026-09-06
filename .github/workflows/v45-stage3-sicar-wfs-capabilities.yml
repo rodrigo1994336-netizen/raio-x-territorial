@@ -20,7 +20,7 @@ jobs:
         run: |
           set -euo pipefail
           curl -k -sS --connect-timeout 12 --max-time 90 \
-            'https://geoserver.car.gov.br/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities' -o caps.xml
+            'https://geoserver.car.gov.br/geoserver/sicar/ows?service=WFS&version=1.0.0&request=GetCapabilities' -o caps.xml
           python - <<'PY'
           import xml.etree.ElementTree as ET
           root=ET.parse('caps.xml').getroot()
