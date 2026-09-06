@@ -47,10 +47,18 @@ jobs:
           assert d['stop_decision']==expected
           print('RX_STAGE2_HIGH_CONFIDENCE_MEASURE=PASS',d['cascade_after_high_confidence']['total_automatic_name_pct'],d['stop_decision'])
           PY
-      - name: Commit measured proof and validated runtime index
+      - name: Commit measured proof and validated runtime index without losing concurrent work
         run: |
+          set -euo pipefail
+          mkdir -p /tmp/rx-high-confidence/data/cafir /tmp/rx-high-confidence/benchmark
+          cp benchmark/car_name_high_confidence_mg_2026-09-06.json /tmp/rx-high-confidence/benchmark/
+          cp data/cafir/mg_high_confidence_car_names.json.gz /tmp/rx-high-confidence/data/cafir/
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git fetch origin v44-step2-finalize
+          git reset --hard origin/v44-step2-finalize
+          cp /tmp/rx-high-confidence/benchmark/car_name_high_confidence_mg_2026-09-06.json benchmark/
+          cp /tmp/rx-high-confidence/data/cafir/mg_high_confidence_car_names.json.gz data/cafir/
           git add benchmark/car_name_high_confidence_mg_2026-09-06.json data/cafir/mg_high_confidence_car_names.json.gz
           git commit -m 'audit(stage2): record frozen high-confidence MG coverage' || exit 0
-          git push
+          git push origin HEAD:v44-step2-finalize
