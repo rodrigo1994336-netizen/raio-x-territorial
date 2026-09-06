@@ -14,7 +14,7 @@ import measure_stage2_high_confidence as measurement
 def curl_get(url: str, timeout: int = 120, retries: int = 7) -> bytes:
     """Transport-only replacement for urllib on public sources with flaky TLS.
 
-    It intentionally changes no query, threshold, geometry or accounting rule from
+    It intentionally changes no query threshold, geometry or accounting rule from
     CAR_NAME_HIGH_CONFIDENCE_PROTOCOL_V1. curl is already available on GitHub runners.
     """
     last: Exception | None = None
@@ -41,7 +41,34 @@ def curl_get(url: str, timeout: int = 120, retries: int = 7) -> bytes:
     raise last or RuntimeError('curl transport failed')
 
 
+def wfs1_page(bbox: tuple[float, float, float, float], start: int, count: int = 5000) -> list[dict]:
+    """Use the already-proven SICAR WFS 1.0 transport for statewide CAR enumeration.
+
+    This deliberately replaces only the SICAR page transport used by the frozen
+    Stage-2 measurement. The 98% geometry rule, SIGEF bridge, CAFIR resolution,
+    denominator/accounting and the frozen 25% stop threshold remain untouched.
+    GeoServer supports startIndex as a paging extension on this WFS 1.0 endpoint.
+    """
+    west, south, east, north = bbox
+    params = {
+        'service': 'WFS',
+        'version': '1.0.0',
+        'request': 'GetFeature',
+        'typeName': measurement.TYPENAME,
+        'outputFormat': 'application/json',
+        'srsName': 'EPSG:4674',
+        'bbox': f'{west},{south},{east},{north},EPSG:4674',
+        'CQL_FILTER': "status_imovel IN ('AT','PE','SU')",
+        'maxFeatures': str(count),
+        'startIndex': str(start),
+    }
+    data = measurement.jget(measurement.WFS, params, timeout=180)
+    return data.get('features') or []
+
+
+# Transport-only substitutions. Do not relax the frozen Stage-2 protocol here.
 measurement.get = curl_get
+measurement.wfs_page = wfs1_page
 
 if __name__ == '__main__':
     raise SystemExit(measurement.main())
