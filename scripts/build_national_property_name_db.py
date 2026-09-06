@@ -28,8 +28,6 @@ from national_property_name_registry_v44 import (  # noqa: E402
     parse_area,
 )
 
-# Official CAFIR flat-file layout used by RFB public data. The area field is 8,1:
-# nine digits with ONE implicit decimal and no comma in the raw fixed-width file.
 CAFIR_WIDTHS = (8, 9, 13, 55, 2, 56, 40, 2, 40, 8, 1, 8, 1)
 CAFIR_FIELDS = (
     "cib", "area", "sncr", "name", "status", "address", "district", "uf",
@@ -79,8 +77,6 @@ def parse_cafir_fixed_area(value: object) -> float | None:
     s = str(value or "").strip()
     if not s:
         return None
-    # RFB's fixed-width CAFIR layout defines AREA_TOTAL as 8,1 and stores the decimal
-    # implicitly. Example raw 000000350 means 35.0 ha, not 350 ha.
     if re.fullmatch(r"\d{1,9}", s):
         x = int(s) / 10.0
         return x if x > 0 else None
@@ -124,8 +120,6 @@ def split_fixed(line: str) -> dict[str, str]:
 
 
 def iter_cafir_fixed_rows(path: Path) -> Iterator[dict[str, object]]:
-    # Since July/2024 RFB has published CAFIR public files separated by UF. The parser
-    # streams each part and therefore scales to the entire country without holding it in RAM.
     with path.open("r", encoding="iso-8859-1", errors="replace", newline="") as fh:
         for raw in fh:
             line = raw.rstrip("\r\n")
@@ -150,7 +144,6 @@ def iter_cafir_fixed_rows(path: Path) -> Iterator[dict[str, object]]:
 
 
 def iter_cafir_csv_rows(path: Path) -> Iterator[dict[str, object]]:
-    """Import current/converted CAFIR CSV while discarding all person-related columns."""
     for row in iter_delimited(path):
         cib = clean_cib(pick(row, "CIB", "NIRF", "NR-IMOVEL", "NR IMOVEL", "CÓDIGO CIB", "CODIGO CIB"))
         sncr = clean_sncr(pick(row, "CÓDIGO DO IMÓVEL NO INCRA", "CODIGO DO IMOVEL NO INCRA", "NR-INCRA", "NR INCRA", "CÓDIGO INCRA", "CODIGO INCRA"))
@@ -168,6 +161,31 @@ def iter_cafir_csv_rows(path: Path) -> Iterator[dict[str, object]]:
             "municipality": municipality, "ibge_code": ibge, "area_ha": parse_area(raw_area),
             "status": pick(row, "SITUAÇÃO", "SITUACAO", "SIT-IMOVEL", "STATUS"),
         }
+
+
+def collect_files(values: list[str], directories: list[str], *, csv_only: bool = False) -> list[Path]:
+    out: list[Path] = []
+    seen: set[str] = set()
+    for value in values:
+        p = Path(value)
+        if p.is_file():
+            key = str(p.resolve())
+            if key not in seen:
+                seen.add(key); out.append(p)
+    for value in directories:
+        root = Path(value)
+        if not root.is_dir():
+            raise SystemExit(f"input directory not found: {root}")
+        for p in sorted(x for x in root.rglob("*") if x.is_file()):
+            low = p.name.lower()
+            if low.endswith((".md", ".pdf", ".json", ".xml", ".html", ".htm", ".zip", ".gz", ".sha256")):
+                continue
+            if csv_only and p.suffix.lower() not in {".csv", ".txt", ".tsv"}:
+                continue
+            key = str(p.resolve())
+            if key not in seen:
+                seen.add(key); out.append(p)
+    return out
 
 
 def insert_rows(
@@ -216,12 +234,21 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="Build minimal nationwide rural-property name registry for Raio-X Territorial")
     ap.add_argument("--db", default="data/rx_property_names.sqlite3")
     ap.add_argument("--sncr-csv", action="append", default=[], help="SNCR public CSV (repeatable)")
+    ap.add_argument("--sncr-dir", action="append", default=[], help="Directory of SNCR CSV/TXT files (recursive)")
     ap.add_argument("--cafir-file", action="append", default=[], help="Official CAFIR fixed-width UF/part file (repeatable)")
+    ap.add_argument("--cafir-dir", action="append", default=[], help="Directory containing CAFIR fixed-width UF files (recursive)")
     ap.add_argument("--cafir-csv", action="append", default=[], help="Official/converted CAFIR delimited CSV (repeatable)")
+    ap.add_argument("--cafir-csv-dir", action="append", default=[], help="Directory of CAFIR CSV/TXT files (recursive)")
     ap.add_argument("--source-date", default=None, help="Source extraction/publication date, e.g. 2026-09-01")
     ap.add_argument("--sncr-origin", default="https://sncr.serpro.gov.br/sncr-web/consultaPublica.jsf")
     ap.add_argument("--cafir-origin", default="https://dados.gov.br/dados/conjuntos-dados/cadastro-de-imoveis-rurais---cafir")
     args = ap.parse_args()
+
+    sncr_files = collect_files(args.sncr_csv, args.sncr_dir, csv_only=True)
+    cafir_fixed = collect_files(args.cafir_file, args.cafir_dir, csv_only=False)
+    cafir_csv = collect_files(args.cafir_csv, args.cafir_csv_dir, csv_only=True)
+    if not (sncr_files or cafir_fixed or cafir_csv):
+        raise SystemExit("no input files found")
 
     db = Path(args.db); db.parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(str(db), timeout=60)
@@ -229,24 +256,25 @@ def main() -> int:
         init_schema(con)
         stats: dict[str, dict[str, int]] = {}
         jobs = [
-            (args.sncr_csv, iter_sncr_rows, args.sncr_origin),
-            (args.cafir_file, iter_cafir_fixed_rows, args.cafir_origin),
-            (args.cafir_csv, iter_cafir_csv_rows, args.cafir_origin),
+            (sncr_files, iter_sncr_rows, args.sncr_origin),
+            (cafir_fixed, iter_cafir_fixed_rows, args.cafir_origin),
+            (cafir_csv, iter_cafir_csv_rows, args.cafir_origin),
         ]
         for paths, parser, origin in jobs:
-            for value in paths:
-                path = Path(value)
+            for path in paths:
                 added, skipped = insert_rows(con, parser(path), source_date=args.source_date, origin_url=origin)
                 stats[str(path)] = {"added": added, "skipped": skipped}
-        con.execute("INSERT OR REPLACE INTO registry_meta(key,value) VALUES('builder_version','v44-national-minimal-v2')")
+        con.execute("INSERT OR REPLACE INTO registry_meta(key,value) VALUES('builder_version','v44-national-minimal-v3')")
+        con.execute("INSERT OR REPLACE INTO registry_meta(key,value) VALUES('input_file_count',?)", (str(len(stats)),))
         if args.source_date:
             con.execute("INSERT OR REPLACE INTO registry_meta(key,value) VALUES('last_source_date',?)", (args.source_date,))
         con.commit()
         total = int(con.execute("SELECT COUNT(*) FROM property_names").fetchone()[0])
         sources = {r[0]: int(r[1]) for r in con.execute("SELECT source,COUNT(*) FROM property_names GROUP BY source")}
+        by_uf = {r[0]: int(r[1]) for r in con.execute("SELECT uf,COUNT(*) FROM property_names WHERE uf IS NOT NULL GROUP BY uf ORDER BY uf")}
     finally:
         con.close()
-    print(json.dumps({"ok": True, "db": str(db), "records": total, "sources": sources, "files": stats}, ensure_ascii=False))
+    print(json.dumps({"ok": True, "db": str(db), "records": total, "sources": sources, "by_uf": by_uf, "files": stats}, ensure_ascii=False))
     return 0
 
 
