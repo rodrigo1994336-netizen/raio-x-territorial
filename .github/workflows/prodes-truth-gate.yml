@@ -1,0 +1,47 @@
+name: PRODES Truth Gate
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+jobs:
+  narrative-truth:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify executive narrative uses exact PRODES union
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          from report_narrative import build_narrative
+
+          src=Path('report_narrative.py').read_text(encoding='utf-8')
+          assert 'area_sum_ha' not in src
+          assert 'soma aproximada' not in src.lower()
+          payload={
+            'property':{'area_ha':14.795,'municipality':'Curvelo','uf':'MG'},
+            'environment':{'prodes':{'lens':{
+              'historical':{'occurrence_count':4,'area_unique_ha':14.496704,'pct_car':97.9838,'years':[2004,2006,2014,2021]},
+              'post_2019_07_31':{'occurrence_count':1,'area_unique_ha':0.027909,'pct_car':0.1886,'years':[2021]},
+              'credit_screening':{}
+            }}},
+            'enforcement':{'embargo_count':0},'mining':{},'water':{},'conclusion':{},'sources':[],
+          }
+          n=build_narrative(payload)
+          text='\n'.join(n['what_we_found'])
+          for required in ('14.496704','97.98%','0.027909','0.19%','união das interseções exatas'):
+              assert required in text, (required,text)
+          assert 'soma aproximada' not in text.lower(), text
+          print('PRODES_EXECUTIVE_NARRATIVE_TRUTH_OK')
+          PY
