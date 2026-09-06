@@ -1,0 +1,38 @@
+name: V44 SNCR Public Name Audit
+on:
+  push:
+    branches: [ v44-property-sidebar ]
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Inspect SNCR public consultation and Curvelo target
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import requests,re,json,html
+          from bs4 import BeautifulSoup
+          url='https://sncr.serpro.gov.br/sncr-web/consultaPublica.jsf'
+          s=requests.Session();s.headers.update({'User-Agent':'Mozilla/5.0 (Raio-X Territorial public-source audit)'})
+          r=s.get(url,timeout=30,allow_redirects=True)
+          print('GET',r.status_code,r.url,'bytes',len(r.content),'type',r.headers.get('content-type'))
+          print('COOKIES',s.cookies.get_dict())
+          soup=BeautifulSoup(r.text,'html.parser')
+          forms=soup.find_all('form')
+          print('FORMS',len(forms))
+          for fi,f in enumerate(forms):
+              print('FORM',fi,'id',f.get('id'),'name',f.get('name'),'action',f.get('action'),'method',f.get('method'))
+              for x in f.find_all(['input','select','button','a']):
+                  name=x.get('name'); xid=x.get('id'); typ=x.get('type'); val=x.get('value'); txt=' '.join(x.stripped_strings)
+                  if name or xid or txt:
+                      print('FIELD',x.name,'id=',xid,'name=',name,'type=',typ,'value=',val,'text=',txt[:180])
+          # print lines that hint municipality/UF/export/csv
+          for i,line in enumerate(r.text.splitlines(),1):
+              l=line.lower()
+              if any(k in l for k in ['municip','estado','uf','csv','export','consultar','pesquisar','download','arquivo']):
+                  print('HIT',i,re.sub(r'\s+',' ',html.unescape(line))[:1200])
+          PY
