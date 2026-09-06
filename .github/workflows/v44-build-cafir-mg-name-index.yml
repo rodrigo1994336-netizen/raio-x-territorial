@@ -34,9 +34,10 @@ jobs:
           n=0
           for p in root.glob('*.jsonl.gz'):
               with gzip.open(p,'rt',encoding='utf-8') as f:n+=sum(1 for _ in f)
-          assert n==meta['active_named_records'],(n,meta['active_named_records'])
+          assert n==meta['indexed_named_records'],(n,meta['indexed_named_records'])
+          assert meta['indexed_named_records']+meta['unsearchable_normalized_names']==meta['active_named_records'],meta
           assert meta['personal_data_fields_in_index'] is False
-          print('RX_CAFIR_MG_NAME_INDEX=PASS',n,'records',sum(x['bytes'] for x in meta['shards'].values()),'bytes')
+          print('RX_CAFIR_MG_NAME_INDEX=PASS',n,'searchable_records','unsearchable=',meta['unsearchable_normalized_names'],'bytes=',sum(x['bytes'] for x in meta['shards'].values()))
           PY
       - name: Commit shards
         run: |
