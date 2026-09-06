@@ -1,0 +1,40 @@
+name: V44 Step 2 Consulta Endpoints
+on:
+  push:
+    branches: [ v44-step2-consulta-endpoints ]
+permissions:
+  contents: read
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Capture frontend asset and endpoint strings
+        shell: bash
+        run: |
+          set -euo pipefail
+          U='https://consulta.car.gov.br/assets/index-DEyWcQqf.js'
+          curl -sSL --fail --connect-timeout 10 --max-time 40 "$U" -o asset.js
+          python - <<'PY'
+          import re
+          s=open('asset.js',encoding='utf-8',errors='ignore').read()
+          with open('clues.txt','w',encoding='utf-8') as o:
+              o.write(f'BYTES={len(s)}\n')
+              for pat in ['baseURL','config.json','cod_imovel','Ver Detalhes do Imóvel','detalhes','detail','consult','imovel','car','reserva_legal','area_consolidada','axios.create','d3.create']:
+                  o.write('\n=== '+pat+' ===\n')
+                  for m in list(re.finditer(re.escape(pat),s,re.I))[-30:]:
+                      o.write(s[max(0,m.start()-900):min(len(s),m.end()+1400)]+'\n---\n')
+              o.write('\n=== URL LIKE STRINGS ===\n')
+              vals=[]
+              for q,x in re.findall(r'(["\'])(.{1,220}?)\1',s):
+                  if any(k in x.lower() for k in ('/api','api/','http','imovel','car','detail','consult','config')):
+                      if x not in vals: vals.append(x)
+              for x in vals[-1000:]: o.write(x+'\n')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: v44-step2-consulta-endpoints
+          path: |
+            asset.js
+            clues.txt
+          retention-days: 3
