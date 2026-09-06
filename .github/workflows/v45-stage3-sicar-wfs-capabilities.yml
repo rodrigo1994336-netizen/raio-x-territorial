@@ -30,9 +30,6 @@ jobs:
                   for ch in e:
                       if ch.tag.rsplit('}',1)[-1]=='Name' and ch.text:
                           names.append(ch.text.strip()); break
-          keys=('app','preserv','consolid','veget','nativ','remanesc','regener','recom','reserva','legal','pousio','imovel','hidrog','restrito')
           print('TOTAL_FEATURE_TYPES',len(names))
-          for n in names:
-              s=n.lower()
-              if any(k in s for k in keys): print(n)
+          for n in names: print(n)
           PY
