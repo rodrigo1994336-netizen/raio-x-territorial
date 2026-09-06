@@ -83,6 +83,7 @@ def _load_portal_deferred():
                 import portal_map_stability_v43  # noqa: F401
                 import portal_map_polish_v43  # noqa: F401
                 import portal_search_resilient_v43  # noqa: F401
+                import portal_cafir_inverse_v44  # noqa: F401
                 import portal_hybrid_basemap_v43  # noqa: F401
 
                 import portal_resource_guard_v27  # noqa: F401
@@ -103,6 +104,8 @@ def _load_portal_deferred():
                     '/v1/live/critical-minerals/{car_code}',
                     '/v1/live/search/advanced',
                     '/v1/live/search/landuse-profiles',
+                    '/v1/live/search/cafir-name',
+                    '/v1/live/search/cafir-name/locate',
                     '/v1/live/incra-certified/status/{uf}',
                     '/v1/live/incra-certified/viewport',
                     '/v1/mobile/report/view/{car_code}',
@@ -123,6 +126,8 @@ def _load_portal_deferred():
                     raise RuntimeError('v43_7_search_auto_not_loaded')
                 if 'RX_REPORT_IDENTITY_V43_8' not in portal_v8.PORTAL_HTML:
                     raise RuntimeError('v43_8_named_report_action_not_loaded')
+                if 'RX_CAFIR_INVERSE_V44' not in portal_v8.PORTAL_HTML:
+                    raise RuntimeError('v44_cafir_inverse_not_loaded')
                 if 'RX_HYBRID_BASEMAP_V43_9' not in portal_v8.PORTAL_HTML:
                     raise RuntimeError('v43_9_hybrid_basemap_not_loaded')
                 if 'RX_BROWSER_WORKER_WAKE_V43_9_3' not in portal_v8.PORTAL_HTML:
@@ -130,8 +135,8 @@ def _load_portal_deferred():
                 if 'window.rxVisibleCarCountV43' not in portal_v8.PORTAL_HTML:
                     raise RuntimeError('v43_name_coverage_counter_not_loaded')
                 advanced_routes = [r for r in portal_v8.app.router.routes if getattr(r, 'path', None) == '/v1/live/search/advanced']
-                if len(advanced_routes) != 1 or getattr(advanced_routes[0].endpoint, '__name__', '') != 'advanced_property_search_v43':
-                    raise RuntimeError('v43_7_resilient_search_route_not_active')
+                if len(advanced_routes) != 1 or getattr(advanced_routes[0].endpoint, '__name__', '') != 'advanced_search_v44':
+                    raise RuntimeError('v44_cafir_inverse_search_route_not_active')
                 viewer_routes = [r for r in portal_v8.app.router.routes if getattr(r, 'path', None) == '/v1/mobile/report/view/{car_code}']
                 if len(viewer_routes) != 1 or getattr(viewer_routes[0].endpoint, '__name__', '') != 'mobile_report_view':
                     raise RuntimeError('v43_9_3_pdf_viewer_route_not_active')
@@ -139,17 +144,17 @@ def _load_portal_deferred():
                 if heavy:
                     raise RuntimeError('heavy_modules_loaded_on_portal:' + ','.join(heavy))
                 guard.mark_ready()
-                print(f'RX_PORTAL_V43_EXTENSION=loaded_deferred routes:{len(ready)} snapshot:on single_surface:on advanced_search:on search_resilient:on names:on osm_names:on coverage:on map_stability:on map_polish:on hybrid_basemap:on named_pdf:on pdf_viewer:on browser_worker_wake:on version:{portal_v8.APP_PORTAL_VERSION}', flush=True)
+                print(f'RX_PORTAL_V44_EXTENSION=loaded_deferred routes:{len(ready)} snapshot:on single_surface:on advanced_search:on cafir_inverse:on search_resilient:on names:on osm_names:on coverage:on map_stability:on map_polish:on hybrid_basemap:on named_pdf:on pdf_viewer:on browser_worker_wake:on version:{portal_v8.APP_PORTAL_VERSION}', flush=True)
             except Exception as exc:
                 if guard is not None:
                     try:
                         guard.mark_failed(exc)
                     except Exception:
                         pass
-                print(f'RX_PORTAL_V43_EXTENSION=failed:{type(exc).__name__}:{str(exc)[:500]}', flush=True)
+                print(f'RX_PORTAL_V44_EXTENSION=failed:{type(exc).__name__}:{str(exc)[:500]}', flush=True)
             return
         time.sleep(0.05)
-    print('RX_PORTAL_V43_EXTENSION=timeout_waiting_portal_api', flush=True)
+    print('RX_PORTAL_V44_EXTENSION=timeout_waiting_portal_api', flush=True)
 
 
 if CORE_RUNTIME_READY:
