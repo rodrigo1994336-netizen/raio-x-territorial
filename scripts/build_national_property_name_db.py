@@ -16,16 +16,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from national_property_name_registry_v44 import (  # noqa: E402
-    LICENSE_CAFIR,
-    LICENSE_SNCR,
-    SOURCE_CAFIR,
-    SOURCE_SNCR,
-    clean_cib,
-    clean_ibge,
-    clean_name,
-    clean_sncr,
-    init_schema,
-    parse_area,
+    LICENSE_CAFIR, LICENSE_SNCR, SOURCE_CAFIR, SOURCE_SNCR,
+    clean_cib, clean_ibge, clean_municipality_id, clean_name, clean_sncr, init_schema, parse_area,
 )
 
 CAFIR_WIDTHS = (8, 9, 13, 55, 2, 56, 40, 2, 40, 8, 1, 8, 1)
@@ -106,7 +98,8 @@ def iter_sncr_rows(path: Path) -> Iterator[dict[str, object]]:
             "source": SOURCE_SNCR, "license": LICENSE_SNCR, "source_record_id": code,
             "sncr_code": code, "cib": None, "name": name,
             "uf": (uf or "").strip().upper()[:2] or None, "municipality": municipality,
-            "ibge_code": ibge, "area_ha": area, "status": None,
+            "municipality_id": None, "ibge_code": ibge, "area_ha": area,
+            "district": None, "address": None, "status": None,
         }
 
 
@@ -138,7 +131,10 @@ def iter_cafir_fixed_rows(path: Path) -> Iterator[dict[str, object]]:
                 "sncr_code": sncr, "cib": cib, "name": name,
                 "uf": f["uf"].strip().upper()[:2] or None,
                 "municipality": f["municipality"].strip() or None,
+                "municipality_id": None,
                 "ibge_code": None, "area_ha": parse_cafir_fixed_area(f["area"]),
+                "district": f["district"].strip() or None,
+                "address": f["address"].strip() or None,
                 "status": f["status"].strip() or None,
             }
 
@@ -151,14 +147,18 @@ def iter_cafir_csv_rows(path: Path) -> Iterator[dict[str, object]]:
         if not name or (not cib and not sncr):
             continue
         uf = pick(row, "UF")
-        municipality = pick(row, "MUNICÍPIO", "MUNICIPIO")
-        ibge = clean_ibge(pick(row, "CÓDIGO DO MUNICÍPIO (IBGE)", "CODIGO DO MUNICIPIO (IBGE)", "CÓDIGO IBGE", "CODIGO IBGE"))
-        raw_area = pick(row, "ÁREA TOTAL", "AREA TOTAL", "AREA_TOTAL", "AREA-TOTAL")
+        municipality = pick(row, "MUNICÍPIO", "MUNICIPIO", "NOME_MUNICIPIO", "NOME MUNICIPIO")
+        municipality_id = clean_municipality_id(pick(row, "ID_MUNICIPIO", "ID MUNICIPIO", "ID-MUNICIPIO", "IDMUNICIPIO"))
+        ibge = clean_ibge(pick(row, "CÓDIGO DO MUNICÍPIO (IBGE)", "CODIGO DO MUNICIPIO (IBGE)", "CÓDIGO IBGE", "CODIGO IBGE", "ID_MUNICIPIO_IBGE"))
+        raw_area = pick(row, "ÁREA TOTAL", "AREA TOTAL", "AREA_TOTAL", "AREA-TOTAL", "AREA")
         yield {
             "source": SOURCE_CAFIR, "license": LICENSE_CAFIR, "source_record_id": cib or sncr,
             "sncr_code": sncr, "cib": cib, "name": name,
             "uf": (uf or "").strip().upper()[:2] or None,
-            "municipality": municipality, "ibge_code": ibge, "area_ha": parse_area(raw_area),
+            "municipality": municipality, "municipality_id": municipality_id,
+            "ibge_code": ibge, "area_ha": parse_area(raw_area),
+            "district": pick(row, "DISTRITO", "DISTRITO_IMOVEL", "DISTRITO IMOVEL"),
+            "address": pick(row, "ENDERECO", "ENDEREÇO", "ENDERECO_IMOVEL", "ENDEREÇO DO IMÓVEL", "ENDERECO DO IMOVEL"),
             "status": pick(row, "SITUAÇÃO", "SITUACAO", "SIT-IMOVEL", "STATUS"),
         }
 
@@ -188,19 +188,14 @@ def collect_files(values: list[str], directories: list[str], *, csv_only: bool =
     return out
 
 
-def insert_rows(
-    con: sqlite3.Connection,
-    rows: Iterable[dict[str, object]],
-    *, source_date: str | None,
-    origin_url: str | None,
-    batch_size: int = 5000,
-) -> tuple[int, int]:
+def insert_rows(con: sqlite3.Connection, rows: Iterable[dict[str, object]], *, source_date: str | None, origin_url: str | None, batch_size: int = 5000) -> tuple[int, int]:
     added = skipped = 0
     sql = """
       INSERT OR IGNORE INTO property_names(
         source,license,source_record_id,sncr_code,cib,name,name_norm,uf,municipality,
-        municipality_norm,ibge_code,area_ha,status,source_date,origin_url,fingerprint
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        municipality_norm,municipality_id,ibge_code,area_ha,district,district_norm,address,address_norm,
+        status,source_date,origin_url,fingerprint
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     """
     pending: list[tuple[object, ...]] = []
     for row in rows:
@@ -209,13 +204,16 @@ def insert_rows(
             skipped += 1
             continue
         fp = fingerprint(
-            row.get("source"), row.get("source_record_id"), row.get("sncr_code"), row.get("cib"),
-            name, row.get("uf"), row.get("municipality"), row.get("ibge_code"), row.get("area_ha"),
+            row.get("source"), row.get("source_record_id"), row.get("sncr_code"), row.get("cib"), name,
+            row.get("uf"), row.get("municipality"), row.get("municipality_id"), row.get("ibge_code"),
+            row.get("area_ha"), row.get("district"), row.get("address"),
         )
         pending.append((
             row.get("source"), row.get("license"), row.get("source_record_id"), row.get("sncr_code"), row.get("cib"),
-            name, norm(name), row.get("uf"), row.get("municipality"), norm(row.get("municipality")), row.get("ibge_code"),
-            row.get("area_ha"), row.get("status"), source_date, origin_url, fp,
+            name, norm(name), row.get("uf"), row.get("municipality"), norm(row.get("municipality")),
+            clean_municipality_id(row.get("municipality_id")), row.get("ibge_code"), row.get("area_ha"),
+            row.get("district"), norm(row.get("district")), row.get("address"), norm(row.get("address")),
+            row.get("status"), source_date, origin_url, fp,
         ))
         if len(pending) >= batch_size:
             before = con.total_changes
@@ -233,13 +231,13 @@ def insert_rows(
 def main() -> int:
     ap = argparse.ArgumentParser(description="Build minimal nationwide rural-property name registry for Raio-X Territorial")
     ap.add_argument("--db", default="data/rx_property_names.sqlite3")
-    ap.add_argument("--sncr-csv", action="append", default=[], help="SNCR public CSV (repeatable)")
-    ap.add_argument("--sncr-dir", action="append", default=[], help="Directory of SNCR CSV/TXT files (recursive)")
-    ap.add_argument("--cafir-file", action="append", default=[], help="Official CAFIR fixed-width UF/part file (repeatable)")
-    ap.add_argument("--cafir-dir", action="append", default=[], help="Directory containing CAFIR fixed-width UF files (recursive)")
-    ap.add_argument("--cafir-csv", action="append", default=[], help="Official/converted CAFIR delimited CSV (repeatable)")
-    ap.add_argument("--cafir-csv-dir", action="append", default=[], help="Directory of CAFIR CSV/TXT files (recursive)")
-    ap.add_argument("--source-date", default=None, help="Source extraction/publication date, e.g. 2026-09-01")
+    ap.add_argument("--sncr-csv", action="append", default=[])
+    ap.add_argument("--sncr-dir", action="append", default=[])
+    ap.add_argument("--cafir-file", action="append", default=[])
+    ap.add_argument("--cafir-dir", action="append", default=[])
+    ap.add_argument("--cafir-csv", action="append", default=[])
+    ap.add_argument("--cafir-csv-dir", action="append", default=[])
+    ap.add_argument("--source-date", default=None)
     ap.add_argument("--sncr-origin", default="https://sncr.serpro.gov.br/sncr-web/consultaPublica.jsf")
     ap.add_argument("--cafir-origin", default="https://dados.gov.br/dados/conjuntos-dados/cadastro-de-imoveis-rurais---cafir")
     args = ap.parse_args()
@@ -255,16 +253,12 @@ def main() -> int:
     try:
         init_schema(con)
         stats: dict[str, dict[str, int]] = {}
-        jobs = [
-            (sncr_files, iter_sncr_rows, args.sncr_origin),
-            (cafir_fixed, iter_cafir_fixed_rows, args.cafir_origin),
-            (cafir_csv, iter_cafir_csv_rows, args.cafir_origin),
-        ]
+        jobs = [(sncr_files, iter_sncr_rows, args.sncr_origin), (cafir_fixed, iter_cafir_fixed_rows, args.cafir_origin), (cafir_csv, iter_cafir_csv_rows, args.cafir_origin)]
         for paths, parser, origin in jobs:
             for path in paths:
                 added, skipped = insert_rows(con, parser(path), source_date=args.source_date, origin_url=origin)
                 stats[str(path)] = {"added": added, "skipped": skipped}
-        con.execute("INSERT OR REPLACE INTO registry_meta(key,value) VALUES('builder_version','v44-national-minimal-v3')")
+        con.execute("INSERT OR REPLACE INTO registry_meta(key,value) VALUES('builder_version','v44-step2-cafir-locality-v4')")
         con.execute("INSERT OR REPLACE INTO registry_meta(key,value) VALUES('input_file_count',?)", (str(len(stats)),))
         if args.source_date:
             con.execute("INSERT OR REPLACE INTO registry_meta(key,value) VALUES('last_source_date',?)", (args.source_date,))
