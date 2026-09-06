@@ -7,21 +7,17 @@ permissions:
 jobs:
   probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 6
     steps:
-      - name: Probe MG SICAR count and attributes-only paging
+      - name: Probe MG SICAR CSV export
         run: |
           set -euo pipefail
           B='https://geoserver.car.gov.br/geoserver/sicar/ows'
-          : > proof.txt
-          curl -sS --fail --get "$B" --data-urlencode 'service=WFS' --data-urlencode 'version=2.0.0' --data-urlencode 'request=GetFeature' --data-urlencode 'typeNames=sicar:sicar_imoveis_mg' --data-urlencode 'resultType=hits' -o hits.xml
-          echo '=== HITS ===' >> proof.txt
-          cat hits.xml >> proof.txt
-          echo >> proof.txt
-          curl -sS --fail --get "$B" --data-urlencode 'service=WFS' --data-urlencode 'version=2.0.0' --data-urlencode 'request=GetFeature' --data-urlencode 'typeNames=sicar:sicar_imoveis_mg' --data-urlencode 'outputFormat=application/json' --data-urlencode 'propertyName=cod_imovel,area,municipio,uf,status_imovel,condicao' --data-urlencode 'count=5' --data-urlencode 'startIndex=0' -o sample0.json
-          curl -sS --fail --get "$B" --data-urlencode 'service=WFS' --data-urlencode 'version=2.0.0' --data-urlencode 'request=GetFeature' --data-urlencode 'typeNames=sicar:sicar_imoveis_mg' --data-urlencode 'outputFormat=application/json' --data-urlencode 'propertyName=cod_imovel,area,municipio,uf,status_imovel,condicao' --data-urlencode 'count=5' --data-urlencode 'startIndex=5' -o sample5.json
-          echo '=== SAMPLE0 ===' >> proof.txt; head -c 12000 sample0.json >> proof.txt; echo >> proof.txt
-          echo '=== SAMPLE5 ===' >> proof.txt; head -c 12000 sample5.json >> proof.txt; echo >> proof.txt
+          T0=$(date +%s)
+          curl -sS --fail --get "$B" --data-urlencode 'service=WFS' --data-urlencode 'version=2.0.0' --data-urlencode 'request=GetFeature' --data-urlencode 'typeNames=sicar:sicar_imoveis_mg' --data-urlencode 'outputFormat=csv' --data-urlencode 'propertyName=cod_imovel,area,municipio,uf,status_imovel,condicao' --data-urlencode 'count=10000' --data-urlencode 'startIndex=0' -o sample.csv
+          T1=$(date +%s)
+          printf 'SECONDS=%s\nBYTES=%s\nLINES=%s\n' "$((T1-T0))" "$(wc -c < sample.csv)" "$(wc -l < sample.csv)" > proof.txt
+          head -20 sample.csv >> proof.txt
       - uses: actions/upload-artifact@v4
         with:
           name: v44-step2-car-mg-count
