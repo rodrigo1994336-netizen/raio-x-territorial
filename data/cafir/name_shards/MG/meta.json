@@ -1,0 +1,219 @@
+{
+  "source": "Receita Federal / CAFIR - compartilhamento público oficial",
+  "dav_root": "https://arquivos.receitafederal.gov.br/public.php/dav/files/RRmcpB2tf5cXskz",
+  "snapshot": "D60901",
+  "uf": "MG",
+  "generated_at_utc": "2026-09-06T04:43:43.501321+00:00",
+  "record_contract": "[normalized_alias,display_name,municipality_normalized,area_tenths_ha,incra_code,nirf]",
+  "active_records": 1281097,
+  "active_named_records": 1280741,
+  "indexed_named_records": 1280710,
+  "unsearchable_normalized_names": 31,
+  "files": [
+    {
+      "part": "MG01",
+      "total": 486394,
+      "active": 427024,
+      "named": 426903,
+      "bad": 0
+    },
+    {
+      "part": "MG02",
+      "total": 486393,
+      "active": 427246,
+      "named": 427138,
+      "bad": 0
+    },
+    {
+      "part": "MG03",
+      "total": 486393,
+      "active": 426827,
+      "named": 426700,
+      "bad": 0
+    }
+  ],
+  "shards": {
+    "0": {
+      "records": 942,
+      "bytes": 23942,
+      "file": "0.jsonl.gz"
+    },
+    "1": {
+      "records": 513,
+      "bytes": 13141,
+      "file": "1.jsonl.gz"
+    },
+    "2": {
+      "records": 551,
+      "bytes": 13987,
+      "file": "2.jsonl.gz"
+    },
+    "3": {
+      "records": 580,
+      "bytes": 13946,
+      "file": "3.jsonl.gz"
+    },
+    "4": {
+      "records": 283,
+      "bytes": 7718,
+      "file": "4.jsonl.gz"
+    },
+    "5": {
+      "records": 164,
+      "bytes": 4566,
+      "file": "5.jsonl.gz"
+    },
+    "6": {
+      "records": 80,
+      "bytes": 2335,
+      "file": "6.jsonl.gz"
+    },
+    "7": {
+      "records": 80,
+      "bytes": 2439,
+      "file": "7.jsonl.gz"
+    },
+    "8": {
+      "records": 44,
+      "bytes": 1482,
+      "file": "8.jsonl.gz"
+    },
+    "9": {
+      "records": 60,
+      "bytes": 1894,
+      "file": "9.jsonl.gz"
+    },
+    "A": {
+      "records": 59668,
+      "bytes": 1035808,
+      "file": "A.jsonl.gz"
+    },
+    "B": {
+      "records": 140415,
+      "bytes": 2266525,
+      "file": "B.jsonl.gz"
+    },
+    "C": {
+      "records": 224014,
+      "bytes": 3750647,
+      "file": "C.jsonl.gz"
+    },
+    "D": {
+      "records": 77295,
+      "bytes": 1453143,
+      "file": "D.jsonl.gz"
+    },
+    "E": {
+      "records": 22786,
+      "bytes": 407148,
+      "file": "E.jsonl.gz"
+    },
+    "F": {
+      "records": 69660,
+      "bytes": 1420497,
+      "file": "F.jsonl.gz"
+    },
+    "G": {
+      "records": 32218,
+      "bytes": 570957,
+      "file": "G.jsonl.gz"
+    },
+    "H": {
+      "records": 2071,
+      "bytes": 45884,
+      "file": "H.jsonl.gz"
+    },
+    "I": {
+      "records": 13214,
+      "bytes": 241158,
+      "file": "I.jsonl.gz"
+    },
+    "J": {
+      "records": 21206,
+      "bytes": 380461,
+      "file": "J.jsonl.gz"
+    },
+    "K": {
+      "records": 604,
+      "bytes": 14689,
+      "file": "K.jsonl.gz"
+    },
+    "L": {
+      "records": 39071,
+      "bytes": 685413,
+      "file": "L.jsonl.gz"
+    },
+    "M": {
+      "records": 79922,
+      "bytes": 1368815,
+      "file": "M.jsonl.gz"
+    },
+    "N": {
+      "records": 21608,
+      "bytes": 397549,
+      "file": "N.jsonl.gz"
+    },
+    "O": {
+      "records": 13395,
+      "bytes": 235974,
+      "file": "O.jsonl.gz"
+    },
+    "P": {
+      "records": 111164,
+      "bytes": 1899872,
+      "file": "P.jsonl.gz"
+    },
+    "Q": {
+      "records": 8516,
+      "bytes": 149279,
+      "file": "Q.jsonl.gz"
+    },
+    "R": {
+      "records": 58774,
+      "bytes": 1044881,
+      "file": "R.jsonl.gz"
+    },
+    "S": {
+      "records": 196882,
+      "bytes": 3292965,
+      "file": "S.jsonl.gz"
+    },
+    "T": {
+      "records": 37129,
+      "bytes": 646002,
+      "file": "T.jsonl.gz"
+    },
+    "U": {
+      "records": 2981,
+      "bytes": 55532,
+      "file": "U.jsonl.gz"
+    },
+    "V": {
+      "records": 42615,
+      "bytes": 739946,
+      "file": "V.jsonl.gz"
+    },
+    "W": {
+      "records": 351,
+      "bytes": 9080,
+      "file": "W.jsonl.gz"
+    },
+    "X": {
+      "records": 658,
+      "bytes": 13315,
+      "file": "X.jsonl.gz"
+    },
+    "Y": {
+      "records": 267,
+      "bytes": 6577,
+      "file": "Y.jsonl.gz"
+    },
+    "Z": {
+      "records": 929,
+      "bytes": 19688,
+      "file": "Z.jsonl.gz"
+    }
+  },
+  "coverage_statement": "Every active MG CAFIR row with a usable alphanumeric denomination in snapshot D60901 is represented in exactly one alias shard. Rows whose display name normalizes to no searchable alphanumeric text are counted separately. This is CAFIR-record coverage, not CAR->name coverage.",
+  "personal_data_fields_in_index": false
+}
