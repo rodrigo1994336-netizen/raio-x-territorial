@@ -46,3 +46,34 @@ Headline totals after the cascade must still sum to the eligible denominator:
 ## Reference CAR acceptance
 
 The Curvelo benchmark CAR must be evaluated blind by this route. Its known denomination must not appear anywhere in the matching inputs or matching code. If the bridge does not independently resolve it, the result remains unresolved/ambiguous; no special case is permitted.
+
+## Post-measurement audit note — denominator provenance
+
+This note documents provenance only. It does not change the frozen protocol, eligibility criteria, thresholds, source selection, measurement result, or stop decision.
+
+The previously cited figure of 1,175,979 MG CAR records was the SICAR `number_matched_all_statuses` count, not the eligible denominator. Its status composition in the measurement baseline was:
+
+- AT: 1,010,686
+- PE: 155,732
+- SU: 879
+- CA: 8,682
+- RE: 0
+- OTHER_OR_EMPTY: 0
+
+The frozen eligible denominator is therefore:
+
+`1,010,686 + 155,732 + 879 = 1,167,297`
+
+The exact difference is:
+
+`1,175,979 - 1,167,297 = 8,682`
+
+Those 8,682 records are exactly the `CA` (Cancelado) records. `CA` and `RE` were already excluded by CAR_NAME_COVERAGE_PROTOCOL_V1 before the statewide high-confidence measurement. There was no post-result refinement of eligibility, no new structural-data exclusion, no source change, and no denominator optimization. The apparent denominator change came only from comparing the SICAR all-status count with the protocol-defined eligible AT+PE+SU count.
+
+## Post-measurement audit note — Curvelo acceptance is partial, not a full parity win
+
+The original practical acceptance target for the reference CAR in Curvelo was to click the property and display the denomination `SÍTIO LAGOA BONITA`, matching the competitor's practical output. That target was not achieved.
+
+The accepted Stage 2 result is narrower and deliberately truth-preserving: the system did not promote a denomination that the frozen public-source protocol could not resolve uniquely. The reference CAR remained unresolved/ambiguous and therefore displayed the generic rural-property fallback instead of inventing or force-matching `SÍTIO LAGOA BONITA`.
+
+Accordingly, Stage 2 is considered successful for source truth, provenance, non-invention, and frozen-protocol compliance, but not a full product-parity victory on the Curvelo denomination example. This distinction must remain visible in future audits and product comparisons.
