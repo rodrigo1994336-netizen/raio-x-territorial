@@ -8,17 +8,37 @@ jobs:
   extract:
     strategy:
       matrix:
-        part: [MG01, MG02, MG03]
+        include:
+          - part: MG01
+            records: 486394
+          - part: MG02
+            records: 486393
+          - part: MG03
+            records: 486393
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 6
     steps:
-      - name: Extract Curvelo
+      - name: Extract Curvelo by aligned ranges
         run: |
           set -euo pipefail
-          P='${{ matrix.part }}'
+          P='${{ matrix.part }}'; N='${{ matrix.records }}'
           U="https://arquivos.receitafederal.gov.br/public.php/dav/files/RRmcpB2tf5cXskz/K34313UF.D60901.$P.csv"
+          mkdir chunks hits
+          STEP=32768
           T0=$(date +%s)
-          curl -sS --fail "$U" | LC_ALL=C grep -a 'CURVELO' > "curvelo-$P.txt"
+          i=0
+          for ((r=0; r<N; r+=STEP)); do
+            start=$((r*246)); last=$((r+STEP)); if ((last>N)); then last=$N; fi; end=$((last*246-1))
+            (
+              curl -sS --fail -r "$start-$end" "$U" -o "chunks/$i.bin"
+              LC_ALL=C grep -a 'CURVELO' "chunks/$i.bin" > "hits/$i.txt" || true
+              rm -f "chunks/$i.bin"
+            ) &
+            i=$((i+1))
+            if (( i % 4 == 0 )); then wait; fi
+          done
+          wait
+          cat hits/*.txt > "curvelo-$P.txt"
           T1=$(date +%s)
           printf 'PART=%s\nSECONDS=%s\nLINES=%s\nBYTES=%s\n' "$P" "$((T1-T0))" "$(wc -l < "curvelo-$P.txt")" "$(wc -c < "curvelo-$P.txt")" > "proof-$P.txt"
           grep -a -i 'LAGOA BONITA' "curvelo-$P.txt" | head -50 >> "proof-$P.txt" || true
