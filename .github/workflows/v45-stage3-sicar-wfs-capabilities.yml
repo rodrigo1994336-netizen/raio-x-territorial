@@ -1,0 +1,38 @@
+name: V45 Stage 3 SICAR WFS capability inventory
+
+on:
+  push:
+    branches: [ v45-stage3-car-composition ]
+    paths:
+      - '.github/workflows/v45-stage3-sicar-wfs-capabilities.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inventory:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Inventory environmental layers
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -k -sS --connect-timeout 12 --max-time 90 \
+            'https://geoserver.car.gov.br/geoserver/ows?service=WFS&version=1.0.0&request=GetCapabilities' -o caps.xml
+          python - <<'PY'
+          import xml.etree.ElementTree as ET
+          root=ET.parse('caps.xml').getroot()
+          names=[]
+          for e in root.iter():
+              if e.tag.rsplit('}',1)[-1]=='FeatureType':
+                  for ch in e:
+                      if ch.tag.rsplit('}',1)[-1]=='Name' and ch.text:
+                          names.append(ch.text.strip()); break
+          keys=('app','preserv','consolid','veget','nativ','remanesc','regener','recom','reserva','legal','pousio','imovel','hidrog','restrito')
+          print('TOTAL_FEATURE_TYPES',len(names))
+          for n in names:
+              s=n.lower()
+              if any(k in s for k in keys): print(n)
+          PY
