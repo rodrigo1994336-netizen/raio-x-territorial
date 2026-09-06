@@ -1,0 +1,86 @@
+name: V44 Stage 2 High Confidence Final
+
+on:
+  push:
+    branches: [ v44-step2-finalize ]
+    paths:
+      - scripts/measure_stage2_high_confidence.py
+      - scripts/run_stage2_high_confidence_with_curl.py
+      - benchmark/CAR_NAME_HIGH_CONFIDENCE_PROTOCOL_V1.md
+      - .github/workflows/v44-step2-high-confidence-final.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install spatial dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install 'shapely>=2.1,<3' 'pyproj>=3.7,<4'
+      - name: Compile measurement and transport wrapper
+        run: python -m py_compile scripts/measure_stage2_high_confidence.py scripts/run_stage2_high_confidence_with_curl.py
+      - name: Verify frozen protocol was not relaxed
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          src=Path('scripts/measure_stage2_high_confidence.py').read_text()
+          protocol=Path('benchmark/CAR_NAME_HIGH_CONFIDENCE_PROTOCOL_V1.md').read_text()
+          assert 'OVERLAP_THRESHOLD = 0.98' in src
+          assert '>= 25.00000%' in protocol
+          assert 'optimization_after_result_allowed' in src and 'False' in src
+          print('RX_STAGE2_FROZEN_PROTOCOL=UNCHANGED')
+          PY
+      - name: Preflight SICAR WFS 1.0 transport
+        run: |
+          python - <<'PY'
+          import sys
+          sys.path.insert(0, 'scripts')
+          import run_stage2_high_confidence_with_curl as transport
+          rows = transport.wfs1_page((-45.0, -19.0, -44.0, -18.0), 0, 1)
+          assert isinstance(rows, list)
+          print('RX_STAGE2_SICAR_WFS1_PREFLIGHT=PASS', 'rows=', len(rows), 'geometry=', transport.wfs_geometry_attr())
+          PY
+      - name: Run frozen statewide high-confidence protocol
+        run: python scripts/run_stage2_high_confidence_with_curl.py
+      - name: Verify frozen stop decision and accounting
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          p=Path('benchmark/car_name_high_confidence_mg_2026-09-06.json')
+          d=json.loads(p.read_text())
+          assert d['method']['car_overlap_min']==0.98
+          assert d['method']['sigef_overlap_min']==0.98
+          assert d['method']['personal_data_used'] is False
+          assert d['frozen_stop_threshold_total_coverage_pct']==25.0
+          assert d['optimization_after_result_allowed'] is False
+          counts=d['cascade_after_high_confidence']['counts']
+          assert sum(counts.values())==d['scan']['frozen_eligible_denominator'], (counts,d['scan'])
+          expected='IMPLEMENT_AND_CLOSE_STAGE_2' if d['cascade_after_high_confidence']['total_automatic_name_pct']>=25 else 'ACCEPT_RESULT_CLOSE_STAGE_2_NO_OPTIMIZATION'
+          assert d['stop_decision']==expected
+          print('RX_STAGE2_HIGH_CONFIDENCE_MEASURE=PASS',d['cascade_after_high_confidence']['total_automatic_name_pct'],d['stop_decision'])
+          PY
+      - name: Commit measured proof and validated runtime index without losing concurrent work
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/rx-high-confidence/data/cafir /tmp/rx-high-confidence/benchmark
+          cp benchmark/car_name_high_confidence_mg_2026-09-06.json /tmp/rx-high-confidence/benchmark/
+          cp data/cafir/mg_high_confidence_car_names.json.gz /tmp/rx-high-confidence/data/cafir/
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git fetch origin v44-step2-finalize
+          git reset --hard origin/v44-step2-finalize
+          cp /tmp/rx-high-confidence/benchmark/car_name_high_confidence_mg_2026-09-06.json benchmark/
+          cp /tmp/rx-high-confidence/data/cafir/mg_high_confidence_car_names.json.gz data/cafir/
+          git add benchmark/car_name_high_confidence_mg_2026-09-06.json data/cafir/mg_high_confidence_car_names.json.gz
+          git commit -m 'audit(stage2): record frozen high-confidence MG coverage' || exit 0
+          git push origin HEAD:v44-step2-finalize

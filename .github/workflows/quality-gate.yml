@@ -39,7 +39,7 @@ jobs:
           assert 'livestock_pasture' in p['profile_codes'] and 'soy' in p['profile_codes'] and 'mixed_agro' in p['profile_codes']
           print('RX_CI_IMPORT_OK')
           PY
-      - name: V43 portal simplification and reliability gate
+      - name: V44 portal name-truth, inverse-search and reliability gate
         env:
           RX_RELEASE: V8_OPERATIONAL_ZERO_COST
           RX_PORTAL_RSS_BUDGET_MB: '220'
@@ -56,6 +56,7 @@ jobs:
           assert portal_boot_guard_v26.STATE.get('ready'), portal_boot_guard_v26.STATE
           import portal_v8, portal_action_runtime_v25, portal_resource_guard_v27
           import property_identity_runtime as identity
+          import cafir_name_search_v44 as cafir_search
           from shapely.geometry import box, mapping
           paths={getattr(r,'path',None) for r in portal_v8.app.router.routes}
           missing=[x for x in portal_action_runtime_v25.REQUIRED_ROUTES if x not in paths]
@@ -71,42 +72,48 @@ jobs:
               '/v1/live/critical-minerals/{car_code}',
               '/v1/live/search/advanced',
               '/v1/live/search/landuse-profiles',
+              '/v1/live/search/cafir-name',
+              '/v1/live/search/cafir-name/locate',
           )
           for path in required_routes:
-              assert path in paths, f'missing V43 route: {path}'
+              assert path in paths, f'missing V44 route: {path}'
           advanced_routes=[r for r in portal_v8.app.router.routes if getattr(r,'path',None)=='/v1/live/search/advanced']
           assert len(advanced_routes)==1
-          assert getattr(advanced_routes[0].endpoint,'__name__','')=='advanced_property_search_v43'
+          assert getattr(advanced_routes[0].endpoint,'__name__','')=='advanced_search_v44'
           assert str(portal_v8.APP_PORTAL_VERSION)=='0.43.8-v43-snapshot-first', portal_v8.APP_PORTAL_VERSION
           html=portal_v8.PORTAL_HTML
           required=(
               'RX_EXPERIENCE_V43','SNAPSHOT DO IMÓVEL','VER ANÁLISE COMPLETA',
               'body.rx43-dossier-open #map','rx43-dossier-open','rx43-full-requested',
               'RX_ACTION_RUNTIME_V25','RX_FIELD_MODE_V43','RX_MAP_VISUAL_V32',
-              'RX_PROPERTY_NAMES_V40','RX_ADVANCED_SEARCH_V39','rxAdvTrigger',
-              'serviceWorker.register','rxParcelStyle','window.rxVisibleCarCountV43',
+              'RX_PROPERTY_NAMES_V44_TRUTH_UI','RX_ADVANCED_SEARCH_V39','rxAdvTrigger',
+              'RX_CAFIR_INVERSE_V44','serviceWorker.register','rxParcelStyle','window.rxVisibleCarCountV43',
               'window.rxNameCoverageV43','window.rxGetNameCoverageV43',
               'Busque um município, mova o mapa ou use “Minha localização”.',
               'Mapa ajustando…','RX_MAP_STABILITY_V43_5','RX_MAP_POLISH_V43_6',
               'RX_CONTEXT_DEFAULT_DISABLED_V43_6',"color:'#73b99a'",'RX_SEARCH_AUTO_V43_7',
               'RX_REPORT_IDENTITY_V43_8','/v1/mobile/report/open/',
+              'referência(s) do OpenStreetMap','denominação(ões) validada(s)',
           )
           absent=[x for x in required if x not in html]
-          assert not absent, f'missing V43 UI/action markers: {absent}'
+          assert not absent, f'missing V44 UI/action markers: {absent}'
           retired=(
               'RX_PORTAL_IDENTITY_V18','RX_MOBILE_DOSSIER_V20','RX_HUMAN_READING_V23',
               'RX_PREMIUM_UX_V35','RX_PREMIUM_INTERACTIONS_V36','RX_LAYOUT_GUARD_V37',
               'RX_PREMIUM_COPY_V38','RX_RELIABILITY_V40','rxPrefetchV40','loadingV40',
           )
           leaked=[x for x in retired if x in html]
-          assert not leaked, f'retired UI leaked into V43: {leaked}'
-          assert 'setTimeout(locateUser,350)' not in html, 'automatic geolocation prompt leaked into V43 startup'
+          assert not leaked, f'retired UI leaked into V44: {leaked}'
+          assert 'setTimeout(locateUser,350)' not in html, 'automatic geolocation prompt leaked into V44 startup'
           prod=Path('portal_territorial_production_v33.py').read_text()
           alerts=Path('portal_alerts.py').read_text()
           field=Path('portal_field_mode_v31.py').read_text()
           names=Path('portal_property_names_v30.py').read_text()
           names_backend=Path('property_names_viewport_v30.py').read_text()
           identity_src=Path('property_identity_runtime.py').read_text()
+          inverse=Path('portal_cafir_inverse_v44.py').read_text()
+          inverse_runtime=Path('cafir_name_search_v44.py').read_text()
+          legacy_name=Path('portal_advanced_name_v40.py').read_text()
           pdf_proxy=Path('portal_pdf_v21.py').read_text()
           release=Path('portal_release_v43.py').read_text()
           stability=Path('portal_map_stability_v43.py').read_text()
@@ -121,15 +128,20 @@ jobs:
           assert "/v1/live/snapshot/" in field and "/v1/live/property-identity/" in field and "'/v1/live/resolve'" in field
           assert "function schedule(){clearTimeout(timer);timer=setTimeout(refresh,420)}" not in field
           assert "u.searchParams.set('limit',z>=15?'60':'35');" not in field
-          assert 'window.rxFieldMode' in names and 'limitFor(z)' in names and 'Nomes já carregados · atualização pendente' in names
+          assert 'window.rxFieldMode' in names and 'limitFor(z)' in names and 'Referências já carregadas · atualização pendente' in names
           assert 'window.rxNameCoverageV43' in names and "u.searchParams.set('car_visible'" in names and "u.searchParams.set('diagnostic','true')" in names and 'names_rendered' in names
+          assert 'rx-name-validated' in names and 'rx-name-reference' in names and 'openReference(x)' in names
+          reference_body=names.split('function openReference(x){',1)[1].split('function render(items,z){',1)[0]
+          assert 'showProperty' not in reference_body and '/v1/live/resolve' not in reference_body and 'property.name' not in reference_body
           assert 'dossierOpen()' in names and 'east>west&&north>south' in names
           assert "'sigef_candidates'" in names_backend and "'sigef_with_valid_name'" in names_backend and "'sigef_named_with_valid_geometry'" in names_backend
           assert "'osm_candidates'" in names_backend and "'osm_names_returned'" in names_backend and '_osm_named_farms_bbox' in names_backend
           assert "'car_visible'" in names_backend and 'RX_PROPERTY_NAMES_COVERAGE=' in names_backend and 'diagnostic:bool=False' in names_backend
           assert '_OSM_ENDPOINTS' in identity_src and '_OSM_SOURCE' in identity_src and 'OpenStreetMap contributors' in identity_src
-          assert 'car.covers(Point' in identity_src and 'len(by_name)==1' in identity_src and "'osm_conflict':bool(osm.get('conflict'))" in identity_src
-          assert "'method':'osm_named_farm_point_inside_car'" in identity_src and "'confidence':'medium'" in identity_src
+          assert 'car.covers(Point' in identity_src and "'chosen':None" in identity_src
+          assert "'method':'osm_named_farm_point_inside_car'" not in identity_src
+          assert "'method':'strong_sigef_overlap'" not in identity_src
+          assert "'panel_name_eligible':False" in identity_src and 'nunca são promovidas automaticamente a denominação do CAR' in identity_src
           assert 'resolve_property_identity_sync' in pdf_proxy and 'name=await _report_name' in pdf_proxy and 'RX_PORTAL_PDF_V43_8' in pdf_proxy
           assert "0.43.4-v43-snapshot-first" in release and 'window.rxVisibleCarCountV43' in release
           assert 'RX_GEOLOCATION_V43=explicit_user_action_only' in release and '_auto_locate' in release
@@ -141,24 +153,37 @@ jobs:
           assert 'RX_SEARCH_AUTO_V43_7' in search and 'timer=setTimeout(run,550)' in search
           assert "portal_v8.APP_PORTAL_VERSION = '0.43.8-v43-snapshot-first'" in search
           assert 'RX_REPORT_IDENTITY_V43_8' in search and '/v1/mobile/report/open/' in search
-          assert 'public_name' in search and 'nome_imovel' in search and 'denominacao' in search
-          assert 'portal_search_resilient_v43' in site and 'v43_8_release_identity_not_loaded' in site and 'v43_8_named_report_action_not_loaded' in site
+          assert 'portal_cafir_inverse_v44' in site and 'v44_cafir_inverse_search_route_not_active' in site
+          assert 'advanced_search_v44' in inverse and '/v1/live/search/cafir-name/locate' in inverse
+          assert "x?.type==='cafir'" in inverse and 'CAR não vinculado automaticamente' in inverse
+          assert "'panel_name_eligible':False" in inverse_runtime and "'car_code':None" in inverse_runtime
+          assert 'REFERENCE_ONLY_CENTROID' in legacy_name and 'd.property.name=x.name' not in legacy_name
           assert 'Fontes pesadas não foram disparadas' in html
-          assert 'IMÓVEL RURAL — NOME NÃO CONFIRMADO' in html
+          assert 'Imóvel rural —' in html
           assert 'z<11' in html and 'span>1.50' in html
           assert all(uf in html for uf in ('AC','AM','BA','DF','GO','MG','MT','PA','PR','RS','SC','SP','TO'))
 
+          # OSM live remains geographic context even with exactly one point inside CAR.
           geom=mapping(box(-44.67,-19.18,-44.65,-19.16));bbox=[-44.67,-19.18,-44.65,-19.16]
           original_osm=identity._osm_named_farms_bbox
           try:
               identity._osm_named_farms_bbox=lambda *a,**k:{'ok':True,'items':[{'name':'Fazenda Teste','lat':-19.17,'lon':-44.66,'osm_id':1}],'count':1}
               one=identity._osm_identity_candidate(geom,bbox)
-              assert one.get('chosen',{}).get('name')=='Fazenda Teste' and not one.get('conflict'),one
+              assert one.get('chosen') is None and one.get('names')==['Fazenda Teste'],one
               identity._osm_named_farms_bbox=lambda *a,**k:{'ok':True,'items':[{'name':'Fazenda A','lat':-19.17,'lon':-44.66,'osm_id':1},{'name':'Fazenda B','lat':-19.171,'lon':-44.661,'osm_id':2}],'count':2}
               two=identity._osm_identity_candidate(geom,bbox)
               assert two.get('chosen') is None and two.get('conflict') is True,two
           finally:
               identity._osm_named_farms_bbox=original_osm
+
+          # Primary Stage-2 delivery: direct inverse CAFIR name lookup, independent of CAR-name bridge.
+          exact=cafir_search.search_sync('SÍTIO LAGOA BONITA','MG','CURVELO',30)
+          matches=[x for x in exact.get('items',[]) if x.get('nirf')=='72558199' and x.get('incra_code')=='0000192269636']
+          assert matches, exact
+          m=matches[0]
+          assert abs(float(m['area_ha'])-11.9)<1e-9 and m['panel_name_eligible'] is False and m['car_code'] is None,m
+          outside=cafir_search.search_sync('QUALQUER NOME','SP','CAMPINAS',5)
+          assert outside.get('indexed') is False and outside.get('items')==[],outside
 
           observer_count=html.count('MutationObserver')
           interval_count=html.count('setInterval(')
@@ -168,7 +193,7 @@ jobs:
           assert not heavy, f'heavy modules leaked into portal: {heavy}'
           rss=portal_resource_guard_v27._rss_bytes()/1024/1024
           assert rss < 220, f'portal RSS too high in gate: {rss:.1f} MB'
-          print('RX_CI_PORTAL_V43_READY',len(paths),'rss_mb=',round(rss,1),'mutation_observers=',observer_count,'intervals=',interval_count,'version=',portal_v8.APP_PORTAL_VERSION,'name_coverage=observable','osm_names=on','named_pdf=on','viewport_guard=on','map_stability=on','map_polish=on','search_resilient=on','geolocation=explicit')
+          print('RX_CI_PORTAL_V44_READY',len(paths),'rss_mb=',round(rss,1),'mutation_observers=',observer_count,'intervals=',interval_count,'version=',portal_v8.APP_PORTAL_VERSION,'name_truth=on','cafir_inverse=on','osm_reference_only=on','geolocation=explicit')
           PY
       - name: V41 report bounded-latency, CAR-composition and PRODES truth gate
         env:
@@ -189,8 +214,10 @@ jobs:
           assert 'anm_retry=skipped' in r and "query_anm_fast" not in r
           assert 'report_extras_perf_v30' in s
           assert 'landuse_profile_v39' in s and 'portal_advanced_search_v39' in s and 'portal_advanced_name_v40' in s and 'portal_experience_v43' in s
+          assert 'portal_cafir_inverse_v44' in s
           assert 'portal_reliability_v40' not in s
-          assert 'SIGEF/INCRA + SICAR spatial match' in Path('portal_advanced_name_v40.py').read_text()
+          legacy=Path('portal_advanced_name_v40.py').read_text()
+          assert 'REFERENCE_ONLY_CENTROID' in legacy and 'd.property.name=x.name' not in legacy
           assert 'async def _read4' in sent and 'items[:2]' in sent and "'GDAL_HTTP_TIMEOUT':'9'" in sent
           assert 'httpx.Timeout(12,connect=5)' in hi
           assert 'ThreadPoolExecutor' in car and 'CAP_TTL=21600' in car and "'share_pct'" in car
@@ -220,5 +247,5 @@ jobs:
           geod=Geod(ellps='GRS80')
           def area(x):return abs(geod.geometry_area_perimeter(shape(x))[0])/10000.0
           assert post['area_unique_ha'] < area(r1)+area(r2), (post,area(r1),area(r2))
-          print('RX_CI_REPORT_V41_READY PRODES_TWO_LENS_EXACT_UNION_OK')
+          print('RX_CI_REPORT_V41_READY PRODES_TWO_LENSES_EXACT_UNION_OK')
           PY

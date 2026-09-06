@@ -1,0 +1,275 @@
+name: V44 Step 2 CAFIR MG Metrics
+
+on:
+  push:
+    branches: [ v44-step2-cafir-mg-metrics ]
+    paths-ignore:
+      - 'benchmark/cafir_mg_real_coverage_2026-09-01.json'
+      - 'benchmark/cafir_national_inventory_D60901.json'
+
+permissions:
+  contents: write
+
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Inventory official CAFIR DAV snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p benchmark
+          curl -sS --fail --connect-timeout 15 --max-time 90 \
+            -X PROPFIND -H 'Depth: 1' \
+            'https://arquivos.receitafederal.gov.br/public.php/dav/files/RRmcpB2tf5cXskz/' \
+            -o /tmp/cafir_dav.xml
+          python - <<'PY'
+          import json,re,xml.etree.ElementTree as ET
+          from pathlib import Path
+          root=ET.parse('/tmp/cafir_dav.xml').getroot()
+          hrefs=[]
+          for x in root.iter():
+              if x.tag.endswith('href') and x.text: hrefs.append(x.text)
+          rx=re.compile(r'K34313UF\.D60901\.([A-Z]{2})(\d{2})\.csv$',re.I)
+          parts={}
+          for h in hrefs:
+              name=h.rsplit('/',1)[-1]
+              m=rx.search(name)
+              if m: parts.setdefault(m.group(1).upper(),[]).append(name)
+          for uf in parts: parts[uf].sort()
+          expected=['AC','AL','AP','AM','BA','CE','DF','ES','GO','MA','MT','MS','MG','PA','PB','PR','PE','PI','RJ','RN','RS','RO','RR','SC','SP','SE','TO']
+          missing=[x for x in expected if x not in parts]
+          result={
+            'snapshot':'D60901',
+            'dav_root':'https://arquivos.receitafederal.gov.br/public.php/dav/files/RRmcpB2tf5cXskz/',
+            'uf_count':len(parts),
+            'file_count':sum(len(v) for v in parts.values()),
+            'ufs':parts,
+            'expected_27_ufs':expected,
+            'missing_ufs':missing,
+            'national_snapshot_complete_27_ufs':not missing,
+            'note':'The legacy /download endpoint redirects to this DAV root with ?accept=zip, so CAFIR.zip is an archive of the shared national folder, not an MG-only file.'
+          }
+          Path('benchmark/cafir_national_inventory_D60901.json').write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')
+          print(json.dumps(result,ensure_ascii=False,indent=2))
+          if missing: raise SystemExit('CAFIR snapshot D60901 missing UFs: '+','.join(missing))
+          PY
+
+      - name: Measure frozen MG CAR naming protocol
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import csv,gzip,io,json,math,re,sqlite3,time,unicodedata,urllib.parse,urllib.request
+          from concurrent.futures import ThreadPoolExecutor
+          from collections import Counter,defaultdict
+          from datetime import datetime,timezone
+          from pathlib import Path
+
+          WFS='https://geoserver.car.gov.br/geoserver/sicar/ows'
+          TYPENAME='sicar:sicar_imoveis_mg'
+          INCLUDED={'AT','PE','SU'}
+          PAGE=10000
+          WORKERS=4
+          REF='MG-3120904-DFB380BECD7A4323AD8AA68FA14D011F'
+          SNAPSHOT='D60901'
+          CAFIR_PARTS=['MG01','MG02','MG03']
+          CODE_RE=re.compile(r'^MG-\d{7}-[A-F0-9]{32}$',re.I)
+
+          def norm(s):
+              s=''.join(c for c in unicodedata.normalize('NFKD',str(s or '')) if not unicodedata.combining(c))
+              return ' '.join(s.upper().split())
+
+          def get(url,timeout=75,retries=8):
+              last=None
+              for i in range(retries):
+                  try:
+                      req=urllib.request.Request(url,headers={'User-Agent':'Raio-X-Territorial/Etapa2-ProtocolV1'})
+                      with urllib.request.urlopen(req,timeout=timeout) as r: return r.read()
+                  except Exception as e:
+                      last=e
+                      time.sleep(min(12,1.5*(i+1)))
+              raise last
+
+          def wfs_url(params): return WFS+'?'+urllib.parse.urlencode(params)
+
+          def hits(cql=None):
+              p={'service':'WFS','version':'2.0.0','request':'GetFeature','typeNames':TYPENAME,'resultType':'hits'}
+              if cql: p['CQL_FILTER']=cql
+              text=get(wfs_url(p)).decode('utf-8','replace')
+              m=re.search(r'numberMatched=["\'](\d+)',text)
+              if not m: raise RuntimeError('numberMatched not found: '+text[:800])
+              return int(m.group(1))
+
+          total_all=hits()
+          status_counts={s:hits(f"status_imovel='{s}'") for s in ['AT','PE','SU','CA','RE']}
+          known=sum(status_counts.values())
+          status_counts['OTHER_OR_EMPTY']=max(0,total_all-known)
+
+          with gzip.open('data/cafir/mg_unique_area_index.json.gz','rt',encoding='utf-8') as f:
+              idx_payload=json.load(f)
+          named_idx=idx_payload['keys']
+          cafir_meta=idx_payload['meta']
+
+          blank_idx=Counter()
+          blank_records=0
+          def dec(b):
+              for enc in ('utf-8','cp1252','latin1'):
+                  try: return b.decode(enc).strip()
+                  except UnicodeDecodeError: pass
+              return b.decode('latin1','replace').strip()
+          for part in CAFIR_PARTS:
+              url=f'https://arquivos.receitafederal.gov.br/public.php/dav/files/RRmcpB2tf5cXskz/K34313UF.{SNAPSHOT}.{part}.csv'
+              raw=get(url,timeout=180,retries=6)
+              for line in raw.splitlines():
+                  r=line.rstrip(b'\r\n')
+                  if len(r)!=245 or r[85:87]!=b'02': continue
+                  name=dec(r[30:85])
+                  if name: continue
+                  area_raw=r[8:17].decode('ascii','ignore')
+                  mun=norm(dec(r[185:225]))
+                  if area_raw.isdigit() and mun:
+                      blank_idx[mun+'|'+area_raw]+=1
+                      blank_records+=1
+
+          eligible_filter="status_imovel IN ('AT','PE','SU')"
+          matched_eligible_status=hits(eligible_filter)
+
+          def page_url(start):
+              return wfs_url({
+                'service':'WFS','version':'2.0.0','request':'GetFeature','typeNames':TYPENAME,
+                'outputFormat':'csv','count':PAGE,'startIndex':start,
+                'propertyName':'cod_imovel,area,municipio,status_imovel,tipo_imovel',
+                'sortBy':'cod_imovel','CQL_FILTER':eligible_filter
+              })
+
+          starts=list(range(0,matched_eligible_status,PAGE))
+          db=sqlite3.connect('/tmp/car_mg.sqlite')
+          db.execute('PRAGMA journal_mode=OFF')
+          db.execute('PRAGMA synchronous=OFF')
+          db.execute('CREATE TABLE car(code TEXT PRIMARY KEY, area TEXT, municipio TEXT, status TEXT, tipo TEXT, conflict INTEGER DEFAULT 0)')
+          invalid_code_rows=0; identical_duplicate_rows=0; conflict_duplicate_rows=0; rows_read=0
+
+          def fetch_page(start):
+              raw=get(page_url(start),timeout=120,retries=8)
+              return start,raw
+
+          with ThreadPoolExecutor(max_workers=WORKERS) as ex:
+              futs={s:ex.submit(fetch_page,s) for s in starts}
+              for n,start in enumerate(starts,1):
+                  _,raw=futs[start].result()
+                  rows=list(csv.DictReader(io.StringIO(raw.decode('utf-8-sig','replace'))))
+                  rows_read+=len(rows)
+                  for row in rows:
+                      code=(row.get('cod_imovel') or '').strip().upper()
+                      if not CODE_RE.match(code):
+                          invalid_code_rows+=1; continue
+                      val=(str(row.get('area') or '').strip(), norm(row.get('municipio')), (row.get('status_imovel') or '').strip().upper(), (row.get('tipo_imovel') or '').strip().upper())
+                      try:
+                          db.execute('INSERT INTO car(code,area,municipio,status,tipo) VALUES(?,?,?,?,?)',(code,*val))
+                      except sqlite3.IntegrityError:
+                          old=db.execute('SELECT area,municipio,status,tipo,conflict FROM car WHERE code=?',(code,)).fetchone()
+                          if tuple(old[:4])==val:
+                              identical_duplicate_rows+=1
+                          else:
+                              conflict_duplicate_rows+=1
+                              db.execute('UPDATE car SET conflict=1 WHERE code=?',(code,))
+                  if n%10==0 or n==len(starts): db.commit()
+                  print(f'page {n}/{len(starts)} start={start} rows={len(rows)}',flush=True)
+          db.commit()
+
+          counts=Counter({'NOME_GRATUITO_ALTA':0,'NOME_MUNICIPIO_AREA':0,'SEM_NOME_AMBIGUIDADE':0,'SEM_NOME_AUSENCIA_CAFIR':0})
+          exclusion=Counter({'invalid_code_rows':invalid_code_rows,'duplicate_conflict_codes':0,'missing_municipality':0,'invalid_or_nonpositive_area':0})
+          absence_subreason=Counter()
+          by_status=defaultdict(Counter); by_tipo=defaultdict(Counter)
+          ref_result=None
+
+          def classify(mun,area):
+              tol=max(area*0.005,0.01)
+              lo=math.ceil((area-tol)*10-1e-9); hi=math.floor((area+tol)*10+1e-9)
+              named=0; blank=0; names=[]; keys=[]
+              for tenth in range(max(0,lo),hi+1):
+                  key=f'{mun}|{tenth:09d}'
+                  item=named_idx.get(key)
+                  if item:
+                      named+=int(item[0]); keys.append({'key':key,'named':int(item[0]),'name':item[1]})
+                      if int(item[0])==1 and item[1]: names.append(item[1])
+                  b=int(blank_idx.get(key,0)); blank+=b
+                  if b: keys.append({'key':key,'blank':b})
+              total=named+blank
+              if total==0:
+                  return 'SEM_NOME_AUSENCIA_CAFIR',tol,total,named,blank,names,keys,'no_candidate'
+              if total==1 and named==1:
+                  return 'NOME_MUNICIPIO_AREA',tol,total,named,blank,names,keys,None
+              if total==1 and blank==1:
+                  return 'SEM_NOME_AUSENCIA_CAFIR',tol,total,named,blank,names,keys,'blank_name'
+              return 'SEM_NOME_AMBIGUIDADE',tol,total,named,blank,names,keys,None
+
+          unique_codes=db.execute('SELECT COUNT(*) FROM car').fetchone()[0]
+          for code,area_raw,mun,status,tipo,conflict in db.execute('SELECT code,area,municipio,status,tipo,conflict FROM car ORDER BY code'):
+              if conflict:
+                  exclusion['duplicate_conflict_codes']+=1; continue
+              if not mun:
+                  exclusion['missing_municipality']+=1; continue
+              try: area=float(str(area_raw).replace(',','.'))
+              except Exception:
+                  exclusion['invalid_or_nonpositive_area']+=1; continue
+              if not math.isfinite(area) or area<=0:
+                  exclusion['invalid_or_nonpositive_area']+=1; continue
+              cls,tol,total,named,blank,names,keys,sub=classify(mun,area)
+              counts[cls]+=1; by_status[status][cls]+=1; by_tipo[tipo or 'VAZIO'][cls]+=1
+              if sub: absence_subreason[sub]+=1
+              if code==REF:
+                  ref_result={'car':code,'municipality':mun,'car_area_ha':area,'tolerance_ha':tol,'candidate_count_total_active_cafir':total,'named_candidate_count':named,'blank_candidate_count':blank,'classification':cls,'candidate_names':names,'candidate_keys':keys}
+
+          denom=sum(counts.values())
+          assert denom + exclusion['duplicate_conflict_codes'] + exclusion['missing_municipality'] + exclusion['invalid_or_nonpositive_area'] == unique_codes, (denom,exclusion,unique_codes)
+          assert sum(counts.values())==denom
+
+          result={
+            'protocol':'CAR_NAME_COVERAGE_PROTOCOL_V1',
+            'generated_at_utc':datetime.now(timezone.utc).isoformat(),
+            'scope':'Minas Gerais',
+            'eligible_definition':'AT+PE+SU; valid MG CAR code; normalized municipality present; finite declared area >0; deduplicated by cod_imovel; CA/RE excluded; overlap/SIGEF/geometry do not exclude',
+            'method_fallback':'normalized municipality + area; tolerance=max(0.5% of CAR area,0.01 ha); strict uniqueness over ALL active CAFIR records in window; blank-name CAFIR remains a candidate',
+            'high_confidence_free_route':{'count':0,'state':'NOT_YET_MEASURED','reason':'No legitimate zero-cost deterministic CAR→name/INCRA route has yet been proven for statewide automation. Zero here is a lower-bound placeholder, not evidence that such coverage is absent.'},
+            'sicar':{
+              'source':WFS,'type_name':TYPENAME,'number_matched_all_statuses':total_all,
+              'status_counts_hits':status_counts,'number_matched_included_statuses':matched_eligible_status,
+              'rows_read_included_statuses':rows_read,'unique_valid_codes_loaded':unique_codes,
+              'identical_duplicate_rows_collapsed':identical_duplicate_rows,'conflicting_duplicate_rows_seen':conflict_duplicate_rows,
+              'pages':len(starts),'page_size':PAGE,'property_names':['cod_imovel','area','municipio','status_imovel','tipo_imovel']
+            },
+            'cafir':{**cafir_meta,'blank_name_active_records_indexed':blank_records,'blank_name_keys':len(blank_idx)},
+            'exclusions':dict(exclusion),
+            'eligible_denominator':denom,
+            'counts':dict(counts),
+            'percentages':{k:round(v*100/denom,6) if denom else None for k,v in counts.items()},
+            'absence_subreasons':dict(absence_subreason),
+            'by_status':{k:dict(v) for k,v in sorted(by_status.items())},
+            'by_tipo_imovel':{k:dict(v) for k,v in sorted(by_tipo.items())},
+            'reference_property':ref_result,
+            'tolerance_formula':'max(car_area_ha * 0.005, 0.01)',
+            'cost_per_automatic_lookup_brl':0.0,
+            'warnings':[
+              'This benchmark measures the free municipality+area fallback completely; deterministic high-confidence free coverage is not yet measured and is reported as NOT_YET_MEASURED.',
+              'The SICAR WFS is a live service, not a transaction-frozen snapshot; counts may drift slightly if records change during the run.',
+              'A CAFIR blank-name record is retained as a candidate so it cannot make another named record look falsely unique.'
+            ]
+          }
+          Path('benchmark/cafir_mg_real_coverage_2026-09-01.json').write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')
+          print(json.dumps(result,ensure_ascii=False,indent=2))
+          PY
+
+      - name: Commit benchmark proof on working branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add benchmark/cafir_mg_real_coverage_2026-09-01.json benchmark/cafir_national_inventory_D60901.json
+          git commit -m 'audit: measure frozen CAR name coverage protocol v1'
+          git push

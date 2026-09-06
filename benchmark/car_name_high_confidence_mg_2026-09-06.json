@@ -1,0 +1,105 @@
+{
+  "protocol": "CAR_NAME_HIGH_CONFIDENCE_PROTOCOL_V1",
+  "generated_at_utc": "2026-09-06T16:53:04.872519+00:00",
+  "scope": "Minas Gerais",
+  "frozen_stop_threshold_total_coverage_pct": 25.0,
+  "method": {
+    "id": "INCRA_CODE_EXACT_GEOMETRY_98",
+    "confidence": "MUITO_ALTA",
+    "car_overlap_min": 0.98,
+    "sigef_overlap_min": 0.98,
+    "distinct_incra_codes_required": 1,
+    "active_cafir_records_for_incra_required": 1,
+    "personal_data_used": false
+  },
+  "sources": {
+    "sicar": "https://geoserver.car.gov.br/geoserver/sicar/ows",
+    "sigef": [
+      "https://pamgia.ibama.gov.br/server/rest/services/01_Publicacoes_Bases/lim_imovel_sigef_publico_a/FeatureServer/10/query",
+      "https://pamgia.ibama.gov.br/server/rest/services/01_Publicacoes_Bases/lim_imovel_sigef_privado_a/FeatureServer/9/query"
+    ],
+    "cafir": "https://arquivos.receitafederal.gov.br/public.php/dav/files/RRmcpB2tf5cXskz",
+    "cafir_snapshot": "D60901"
+  },
+  "scan": {
+    "tiles_completed": 120,
+    "unique_car_codes_seen": 1167298,
+    "frozen_eligible_denominator": 1167297,
+    "denominator_drift": 1,
+    "sigef_features_seen_unique": 132338,
+    "sigef_features_by_source_tile_sum": {
+      "PRIVADO": 145195,
+      "PUBLICO": 11259
+    }
+  },
+  "cafir_exact_code_index": {
+    "snapshot": "D60901",
+    "files": [
+      {
+        "part": "MG01",
+        "total": 486394,
+        "active": 427024,
+        "bad": 0
+      },
+      {
+        "part": "MG02",
+        "total": 486393,
+        "active": 427246,
+        "bad": 0
+      },
+      {
+        "part": "MG03",
+        "total": 486393,
+        "active": 426827,
+        "bad": 0
+      }
+    ],
+    "active_records": 1281097,
+    "unique_incra_codes": 836350,
+    "exact_single_active_named_incra_codes": 836252,
+    "duplicate_active_incra_codes": 0,
+    "conflicting_active_incra_codes": 0,
+    "single_active_blank_name_incra_codes": 98
+  },
+  "high_confidence": {
+    "count": 41773,
+    "accounted_against_frozen_fallback": 41773,
+    "unaccounted_due_to_live_drift_or_missing_fallback_fields": 0,
+    "pct_of_frozen_denominator": 3.578609,
+    "promoted_from": {
+      "NOME_MUNICIPIO_AREA": 6436,
+      "SEM_NOME_AMBIGUIDADE": 29820,
+      "SEM_NOME_AUSENCIA_CAFIR": 5517
+    }
+  },
+  "cascade_after_high_confidence": {
+    "counts": {
+      "NOME_GRATUITO_ALTA": 41773,
+      "NOME_MUNICIPIO_AREA": 96842,
+      "SEM_NOME_AMBIGUIDADE": 681025,
+      "SEM_NOME_AUSENCIA_CAFIR": 347657
+    },
+    "percentages": {
+      "NOME_GRATUITO_ALTA": 3.578609,
+      "NOME_MUNICIPIO_AREA": 8.296261,
+      "SEM_NOME_AMBIGUIDADE": 58.34205,
+      "SEM_NOME_AUSENCIA_CAFIR": 29.78308
+    },
+    "total_automatic_name_count": 138615,
+    "total_automatic_name_pct": 11.87487
+  },
+  "stop_decision": "ACCEPT_RESULT_CLOSE_STAGE_2_NO_OPTIMIZATION",
+  "reference_property": {
+    "car": "MG-3120904-DFB380BECD7A4323AD8AA68FA14D011F",
+    "high_confidence": false,
+    "method": null,
+    "incra_code": null,
+    "name": null
+  },
+  "optimization_after_result_allowed": false,
+  "notes": [
+    "Known benchmark denomination is never used as an input to matching.",
+    "Raw SIGEF names do not become CAR names; only exact INCRA-code bridge followed by one active CAFIR denomination is accepted.",
+    "The 25% stop criterion was frozen before this measurement."
+  ]
+}

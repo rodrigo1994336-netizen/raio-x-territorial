@@ -1,0 +1,56 @@
+name: V44 Build CAFIR MG Name Index
+
+on:
+  push:
+    branches: [ v44-step2-finalize ]
+    paths:
+      - scripts/build_cafir_mg_name_index.py
+      - .github/workflows/v44-build-cafir-mg-name-index.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile builder
+        run: python -m py_compile scripts/build_cafir_mg_name_index.py
+      - name: Build official CAFIR name shards
+        run: python scripts/build_cafir_mg_name_index.py
+      - name: Verify complete named-record accounting
+        run: |
+          python - <<'PY'
+          import gzip,json
+          from pathlib import Path
+          root=Path('data/cafir/name_shards/MG')
+          meta=json.loads((root/'meta.json').read_text())
+          n=0
+          for p in root.glob('*.jsonl.gz'):
+              with gzip.open(p,'rt',encoding='utf-8') as f:n+=sum(1 for _ in f)
+          assert n==meta['indexed_named_records'],(n,meta['indexed_named_records'])
+          assert meta['indexed_named_records']+meta['unsearchable_normalized_names']==meta['active_named_records'],meta
+          assert meta['personal_data_fields_in_index'] is False
+          print('RX_CAFIR_MG_NAME_INDEX=PASS',n,'searchable_records','unsearchable=',meta['unsearchable_normalized_names'],'bytes=',sum(x['bytes'] for x in meta['shards'].values()))
+          PY
+      - name: Commit shards without losing concurrent branch work
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/rx-name-index
+          cp -a data/cafir/name_shards/MG /tmp/rx-name-index/MG
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git fetch origin v44-step2-finalize
+          git reset --hard origin/v44-step2-finalize
+          rm -rf data/cafir/name_shards/MG
+          mkdir -p data/cafir/name_shards
+          cp -a /tmp/rx-name-index/MG data/cafir/name_shards/MG
+          git add data/cafir/name_shards/MG
+          git commit -m 'data(stage2): add complete active MG CAFIR name index D60901' || exit 0
+          git push origin HEAD:v44-step2-finalize

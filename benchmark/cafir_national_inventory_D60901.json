@@ -1,0 +1,132 @@
+{
+  "snapshot": "D60901",
+  "dav_root": "https://arquivos.receitafederal.gov.br/public.php/dav/files/RRmcpB2tf5cXskz/",
+  "uf_count": 27,
+  "file_count": 38,
+  "ufs": {
+    "AC": [
+      "K34313UF.D60901.AC01.csv"
+    ],
+    "AL": [
+      "K34313UF.D60901.AL01.csv"
+    ],
+    "AM": [
+      "K34313UF.D60901.AM01.csv"
+    ],
+    "AP": [
+      "K34313UF.D60901.AP01.csv"
+    ],
+    "BA": [
+      "K34313UF.D60901.BA01.csv",
+      "K34313UF.D60901.BA02.csv",
+      "K34313UF.D60901.BA03.csv",
+      "K34313UF.D60901.BA04.csv",
+      "K34313UF.D60901.BA05.csv"
+    ],
+    "CE": [
+      "K34313UF.D60901.CE01.csv"
+    ],
+    "DF": [
+      "K34313UF.D60901.DF01.csv"
+    ],
+    "ES": [
+      "K34313UF.D60901.ES01.csv"
+    ],
+    "GO": [
+      "K34313UF.D60901.GO01.csv"
+    ],
+    "MA": [
+      "K34313UF.D60901.MA01.csv"
+    ],
+    "MG": [
+      "K34313UF.D60901.MG01.csv",
+      "K34313UF.D60901.MG02.csv",
+      "K34313UF.D60901.MG03.csv"
+    ],
+    "MS": [
+      "K34313UF.D60901.MS01.csv"
+    ],
+    "MT": [
+      "K34313UF.D60901.MT01.csv"
+    ],
+    "PA": [
+      "K34313UF.D60901.PA01.csv"
+    ],
+    "PB": [
+      "K34313UF.D60901.PB01.csv"
+    ],
+    "PE": [
+      "K34313UF.D60901.PE01.csv"
+    ],
+    "PI": [
+      "K34313UF.D60901.PI01.csv"
+    ],
+    "PR": [
+      "K34313UF.D60901.PR01.csv",
+      "K34313UF.D60901.PR02.csv"
+    ],
+    "RJ": [
+      "K34313UF.D60901.RJ01.csv"
+    ],
+    "RN": [
+      "K34313UF.D60901.RN01.csv"
+    ],
+    "RO": [
+      "K34313UF.D60901.RO01.csv"
+    ],
+    "RR": [
+      "K34313UF.D60901.RR01.csv"
+    ],
+    "RS": [
+      "K34313UF.D60901.RS01.csv",
+      "K34313UF.D60901.RS02.csv",
+      "K34313UF.D60901.RS03.csv"
+    ],
+    "SC": [
+      "K34313UF.D60901.SC01.csv",
+      "K34313UF.D60901.SC02.csv"
+    ],
+    "SE": [
+      "K34313UF.D60901.SE01.csv"
+    ],
+    "SP": [
+      "K34313UF.D60901.SP01.csv",
+      "K34313UF.D60901.SP02.csv"
+    ],
+    "TO": [
+      "K34313UF.D60901.TO01.csv"
+    ]
+  },
+  "expected_27_ufs": [
+    "AC",
+    "AL",
+    "AP",
+    "AM",
+    "BA",
+    "CE",
+    "DF",
+    "ES",
+    "GO",
+    "MA",
+    "MT",
+    "MS",
+    "MG",
+    "PA",
+    "PB",
+    "PR",
+    "PE",
+    "PI",
+    "RJ",
+    "RN",
+    "RS",
+    "RO",
+    "RR",
+    "SC",
+    "SP",
+    "SE",
+    "TO"
+  ],
+  "missing_ufs": [],
+  "national_snapshot_complete_27_ufs": true,
+  "note": "The legacy /download endpoint redirects to this DAV root with ?accept=zip, so CAFIR.zip is an archive of the shared national folder, not an MG-only file."
+}

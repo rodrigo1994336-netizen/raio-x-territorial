@@ -1,0 +1,107 @@
+name: V44 Step 2 CAFIR MG Index
+on:
+  push:
+    branches: [ v44-step2-cafir-mg-index ]
+permissions:
+  contents: write
+jobs:
+  part:
+    strategy:
+      matrix:
+        part: [MG01, MG02, MG03]
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Build compact active-key part
+        shell: bash
+        run: |
+          set -euo pipefail
+          P='${{ matrix.part }}'
+          U="https://arquivos.receitafederal.gov.br/public.php/dav/files/RRmcpB2tf5cXskz/K34313UF.D60901.$P.csv"
+          curl -sS --fail "$U" -o raw.csv
+          python - "$P" <<'PY'
+          import sys, json, gzip, unicodedata, hashlib
+          p=sys.argv[1]
+          def dec(b):
+              for enc in ('utf-8','cp1252','latin1'):
+                  try: return b.decode(enc).strip()
+                  except UnicodeDecodeError: pass
+              return b.decode('latin1','replace').strip()
+          def norm(s):
+              s=''.join(c for c in unicodedata.normalize('NFKD',s) if not unicodedata.combining(c))
+              return ' '.join(s.upper().split())
+          d={}; total=active=bad=0
+          h=hashlib.sha256()
+          with open('raw.csv','rb') as f:
+              for line in f:
+                  h.update(line); total+=1
+                  r=line.rstrip(b'\r\n')
+                  if len(r)!=245:
+                      bad+=1; continue
+                  if r[85:87] != b'02':
+                      continue
+                  active+=1
+                  area_raw=r[8:17].decode('ascii','ignore')
+                  if not area_raw.isdigit():
+                      bad+=1; continue
+                  mun=norm(dec(r[185:225])); name=dec(r[30:85])
+                  if not mun or not name: continue
+                  key=mun+'|'+area_raw
+                  x=d.get(key)
+                  if x is None: d[key]=[1,name]
+                  else:
+                      x[0]+=1
+                      if x[0]>1: x[1]=None
+          out={'part':p,'snapshot':'D60901','source_file':f'K34313UF.D60901.{p}.csv','sha256':h.hexdigest(),'total_records':total,'active_records':active,'bad_records':bad,'keys':d}
+          with gzip.open(f'{p}.json.gz','wt',encoding='utf-8',compresslevel=9) as g: json.dump(out,g,ensure_ascii=False,separators=(',',':'))
+          print(json.dumps({k:v for k,v in out.items() if k!='keys'},ensure_ascii=False))
+          print('KEYS',len(d),'BYTES_GZ',__import__('os').path.getsize(f'{p}.json.gz'))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cafir-mg-${{ matrix.part }}
+          path: ${{ matrix.part }}.json.gz
+          retention-days: 3
+  merge:
+    needs: part
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: cafir-mg-*
+          path: parts
+          merge-multiple: true
+      - name: Merge parts and commit index
+        run: |
+          set -euo pipefail
+          mkdir -p data/cafir
+          python - <<'PY'
+          import gzip,json,glob,hashlib,os
+          merged={}; meta={'snapshot':'D60901','uf':'MG','source':'Receita Federal / CAFIR - compartilhamento público oficial','files':[],'total_records':0,'active_records':0,'bad_records':0}
+          for fn in sorted(glob.glob('parts/*.json.gz')):
+              with gzip.open(fn,'rt',encoding='utf-8') as f: x=json.load(f)
+              meta['files'].append({'file':x['source_file'],'sha256':x['sha256'],'total_records':x['total_records'],'active_records':x['active_records'],'bad_records':x['bad_records']})
+              meta['total_records']+=x['total_records']; meta['active_records']+=x['active_records']; meta['bad_records']+=x['bad_records']
+              for k,(cnt,name) in x['keys'].items():
+                  cur=merged.get(k)
+                  if cur is None: merged[k]=[cnt,name if cnt==1 else None]
+                  else:
+                      cur[0]+=cnt
+                      cur[1]=None
+          unique=sum(1 for c,n in merged.values() if c==1 and n)
+          ambiguous=sum(1 for c,n in merged.values() if c>1)
+          meta['key_count']=len(merged); meta['unique_key_count']=unique; meta['ambiguous_key_count']=ambiguous
+          payload={'meta':meta,'keys':merged}
+          out='data/cafir/mg_unique_area_index.json.gz'
+          with gzip.open(out,'wt',encoding='utf-8',compresslevel=9) as f: json.dump(payload,f,ensure_ascii=False,separators=(',',':'))
+          b=open(out,'rb').read(); meta['index_sha256']=hashlib.sha256(b).hexdigest(); meta['index_bytes']=len(b)
+          open('data/cafir/mg_index_meta.json','w',encoding='utf-8').write(json.dumps(meta,ensure_ascii=False,indent=2))
+          print(json.dumps(meta,ensure_ascii=False,indent=2))
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add data/cafir/mg_unique_area_index.json.gz data/cafir/mg_index_meta.json
+          git commit -m 'data: add compact CAFIR MG D60901 high-confidence index'
+          git push

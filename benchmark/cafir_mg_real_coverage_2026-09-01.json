@@ -1,0 +1,157 @@
+{
+  "protocol": "CAR_NAME_COVERAGE_PROTOCOL_V1",
+  "generated_at_utc": "2026-09-06T03:50:42.016795+00:00",
+  "scope": "Minas Gerais",
+  "eligible_definition": "AT+PE+SU; valid MG CAR code; normalized municipality present; finite declared area >0; deduplicated by cod_imovel; CA/RE excluded; overlap/SIGEF/geometry do not exclude",
+  "method_fallback": "normalized municipality + area; tolerance=max(0.5% of CAR area,0.01 ha); strict uniqueness over ALL active CAFIR records in window; blank-name CAFIR remains a candidate",
+  "high_confidence_free_route": {
+    "count": 0,
+    "state": "NOT_YET_MEASURED",
+    "reason": "No legitimate zero-cost deterministic CAR→name/INCRA route has yet been proven for statewide automation. Zero here is a lower-bound placeholder, not evidence that such coverage is absent."
+  },
+  "sicar": {
+    "source": "https://geoserver.car.gov.br/geoserver/sicar/ows",
+    "type_name": "sicar:sicar_imoveis_mg",
+    "number_matched_all_statuses": 1175979,
+    "status_counts_hits": {
+      "AT": 1010686,
+      "PE": 155732,
+      "SU": 879,
+      "CA": 8682,
+      "RE": 0,
+      "OTHER_OR_EMPTY": 0
+    },
+    "number_matched_included_statuses": 1167297,
+    "rows_read_included_statuses": 1167297,
+    "unique_valid_codes_loaded": 1167297,
+    "identical_duplicate_rows_collapsed": 0,
+    "conflicting_duplicate_rows_seen": 0,
+    "pages": 117,
+    "page_size": 10000,
+    "property_names": [
+      "cod_imovel",
+      "area",
+      "municipio",
+      "status_imovel",
+      "tipo_imovel"
+    ]
+  },
+  "cafir": {
+    "snapshot": "D60901",
+    "uf": "MG",
+    "source": "Receita Federal / CAFIR - compartilhamento público oficial",
+    "files": [
+      {
+        "file": "K34313UF.D60901.MG01.csv",
+        "sha256": "07f2c7ae9d90c44edae514deaefbae3c01f57bba9d296e28e4594ad41fb64c7a",
+        "total_records": 486394,
+        "active_records": 427024,
+        "bad_records": 0
+      },
+      {
+        "file": "K34313UF.D60901.MG02.csv",
+        "sha256": "1e651e8d9c9b3d953b23f6578f0022441d592c37463a7223aa6f67898f6aeeb6",
+        "total_records": 486393,
+        "active_records": 427246,
+        "bad_records": 0
+      },
+      {
+        "file": "K34313UF.D60901.MG03.csv",
+        "sha256": "3115080f1813411778a92b41ab75634199b4e815c1d3a7583545321a7b4f2ec2",
+        "total_records": 486393,
+        "active_records": 426827,
+        "bad_records": 0
+      }
+    ],
+    "total_records": 1459180,
+    "active_records": 1281097,
+    "bad_records": 0,
+    "key_count": 424231,
+    "unique_key_count": 247679,
+    "ambiguous_key_count": 176552,
+    "blank_name_active_records_indexed": 356,
+    "blank_name_keys": 342
+  },
+  "exclusions": {
+    "invalid_code_rows": 0,
+    "duplicate_conflict_codes": 0,
+    "missing_municipality": 0,
+    "invalid_or_nonpositive_area": 0
+  },
+  "eligible_denominator": 1167297,
+  "counts": {
+    "NOME_GRATUITO_ALTA": 0,
+    "NOME_MUNICIPIO_AREA": 103278,
+    "SEM_NOME_AMBIGUIDADE": 710845,
+    "SEM_NOME_AUSENCIA_CAFIR": 353174
+  },
+  "percentages": {
+    "NOME_GRATUITO_ALTA": 0.0,
+    "NOME_MUNICIPIO_AREA": 8.84762,
+    "SEM_NOME_AMBIGUIDADE": 60.89667,
+    "SEM_NOME_AUSENCIA_CAFIR": 30.25571
+  },
+  "absence_subreasons": {
+    "no_candidate": 353155,
+    "blank_name": 19
+  },
+  "by_status": {
+    "AT": {
+      "SEM_NOME_AMBIGUIDADE": 606992,
+      "NOME_MUNICIPIO_AREA": 89189,
+      "SEM_NOME_AUSENCIA_CAFIR": 314505
+    },
+    "PE": {
+      "SEM_NOME_AMBIGUIDADE": 103251,
+      "NOME_MUNICIPIO_AREA": 13974,
+      "SEM_NOME_AUSENCIA_CAFIR": 38507
+    },
+    "SU": {
+      "SEM_NOME_AMBIGUIDADE": 602,
+      "SEM_NOME_AUSENCIA_CAFIR": 162,
+      "NOME_MUNICIPIO_AREA": 115
+    }
+  },
+  "by_tipo_imovel": {
+    "AST": {
+      "NOME_MUNICIPIO_AREA": 164,
+      "SEM_NOME_AMBIGUIDADE": 126,
+      "SEM_NOME_AUSENCIA_CAFIR": 110
+    },
+    "IRU": {
+      "SEM_NOME_AMBIGUIDADE": 710704,
+      "NOME_MUNICIPIO_AREA": 103093,
+      "SEM_NOME_AUSENCIA_CAFIR": 352985
+    },
+    "PCT": {
+      "SEM_NOME_AUSENCIA_CAFIR": 79,
+      "NOME_MUNICIPIO_AREA": 21,
+      "SEM_NOME_AMBIGUIDADE": 15
+    }
+  },
+  "reference_property": {
+    "car": "MG-3120904-DFB380BECD7A4323AD8AA68FA14D011F",
+    "municipality": "CURVELO",
+    "car_area_ha": 14.795,
+    "tolerance_ha": 0.073975,
+    "candidate_count_total_active_cafir": 4,
+    "named_candidate_count": 4,
+    "blank_candidate_count": 0,
+    "classification": "SEM_NOME_AMBIGUIDADE",
+    "candidate_names": [],
+    "candidate_keys": [
+      {
+        "key": "CURVELO|000000148",
+        "named": 4,
+        "name": null
+      }
+    ]
+  },
+  "tolerance_formula": "max(car_area_ha * 0.005, 0.01)",
+  "cost_per_automatic_lookup_brl": 0.0,
+  "warnings": [
+    "This benchmark measures the free municipality+area fallback completely; deterministic high-confidence free coverage is not yet measured and is reported as NOT_YET_MEASURED.",
+    "The SICAR WFS is a live service, not a transaction-frozen snapshot; counts may drift slightly if records change during the run.",
+    "A CAFIR blank-name record is retained as a candidate so it cannot make another named record look falsely unique."
+  ]
+}

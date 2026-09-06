@@ -1,0 +1,36 @@
+{
+  "snapshot": "D60901",
+  "uf": "MG",
+  "source": "Receita Federal / CAFIR - compartilhamento público oficial",
+  "files": [
+    {
+      "file": "K34313UF.D60901.MG01.csv",
+      "sha256": "07f2c7ae9d90c44edae514deaefbae3c01f57bba9d296e28e4594ad41fb64c7a",
+      "total_records": 486394,
+      "active_records": 427024,
+      "bad_records": 0
+    },
+    {
+      "file": "K34313UF.D60901.MG02.csv",
+      "sha256": "1e651e8d9c9b3d953b23f6578f0022441d592c37463a7223aa6f67898f6aeeb6",
+      "total_records": 486393,
+      "active_records": 427246,
+      "bad_records": 0
+    },
+    {
+      "file": "K34313UF.D60901.MG03.csv",
+      "sha256": "3115080f1813411778a92b41ab75634199b4e815c1d3a7583545321a7b4f2ec2",
+      "total_records": 486393,
+      "active_records": 426827,
+      "bad_records": 0
+    }
+  ],
+  "total_records": 1459180,
+  "active_records": 1281097,
+  "bad_records": 0,
+  "key_count": 424231,
+  "unique_key_count": 247679,
+  "ambiguous_key_count": 176552,
+  "index_sha256": "5a0940ea00964c541e3f432259d8c456a73712aed3d3fa58ff359744913b06f1",
+  "index_bytes": 4247529
+}
