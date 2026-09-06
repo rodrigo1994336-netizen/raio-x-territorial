@@ -39,6 +39,16 @@ jobs:
           assert 'optimization_after_result_allowed' in src and 'False' in src
           print('RX_STAGE2_FROZEN_PROTOCOL=UNCHANGED')
           PY
+      - name: Preflight SICAR WFS 1.0 transport
+        run: |
+          python - <<'PY'
+          import sys
+          sys.path.insert(0, 'scripts')
+          import run_stage2_high_confidence_with_curl as transport
+          rows = transport.wfs1_page((-45.0, -19.0, -44.0, -18.0), 0, 1)
+          assert isinstance(rows, list)
+          print('RX_STAGE2_SICAR_WFS1_PREFLIGHT=PASS', 'rows=', len(rows), 'geometry=', transport.wfs_geometry_attr())
+          PY
       - name: Run frozen statewide high-confidence protocol
         run: python scripts/run_stage2_high_confidence_with_curl.py
       - name: Verify frozen stop decision and accounting
