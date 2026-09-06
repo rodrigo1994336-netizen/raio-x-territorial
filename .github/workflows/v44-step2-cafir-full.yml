@@ -1,0 +1,76 @@
+name: V44 Step 2 CAFIR Full Download
+
+on:
+  push:
+    branches: [ v44-step2-cafir-full ]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Download national CAFIR ZIP once
+        shell: bash
+        run: |
+          set -euo pipefail
+          URL='https://arquivos.receitafederal.gov.br/index.php/s/RRmcpB2tf5cXskz/download'
+          curl -L --fail --retry 3 --retry-delay 5 --connect-timeout 20 --max-time 1200 "$URL" -o cafir.zip
+          stat -c 'CAFIR_BYTES=%s' cafir.zip | tee proof.txt
+          file cafir.zip | tee -a proof.txt
+          unzip -t cafir.zip >/dev/null
+          echo 'ZIP_OK=1' | tee -a proof.txt
+      - name: Inspect structure and target benchmark
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo '=== ZIP LIST ===' | tee -a proof.txt
+          unzip -l cafir.zip | tee ziplist.txt | head -120 | tee -a proof.txt
+          rm -rf work && mkdir work
+          unzip -q cafir.zip -d work
+          echo '=== EXTRACTED FILES ===' | tee -a proof.txt
+          find work -type f -printf '%p\t%s\n' | sort | tee files.txt | head -120 | tee -a proof.txt
+          python - <<'PY' | tee -a proof.txt
+          from pathlib import Path
+          import csv, io, os, re, unicodedata
+          TARGETS=('SÍTIO LAGOA BONITA','SITIO LAGOA BONITA','LAGOA BONITA')
+          def norm(s):
+              s=str(s or '')
+              s=unicodedata.normalize('NFKD',s).encode('ascii','ignore').decode().upper()
+              return re.sub(r'\s+',' ',s).strip()
+          hits=[]
+          for p in Path('work').rglob('*'):
+              if not p.is_file(): continue
+              print('FILE_META',p,p.stat().st_size)
+              raw=p.read_bytes()
+              txt=''
+              enc_used=''
+              for enc in ('utf-8-sig','latin1','cp1252'):
+                  try:
+                      txt=raw.decode(enc);enc_used=enc;break
+                  except UnicodeDecodeError: pass
+              if not txt:
+                  continue
+              lines=txt.splitlines()
+              print('FILE_HEAD',p,'ENC',enc_used,'LINES',len(lines),'HEAD',lines[:3])
+              for i,line in enumerate(lines,1):
+                  n=norm(line)
+                  if 'LAGOA BONITA' in n or 'CURVELO' in n:
+                      if 'LAGOA BONITA' in n:
+                          hits.append((str(p),i,line))
+                          print('TARGET_HIT',p,i,line[:1800])
+          print('TARGET_HIT_COUNT',len(hits))
+          if not hits:
+              raise SystemExit('benchmark name not found in CAFIR payload')
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: v44-step2-cafir-full-proof
+          path: |
+            proof.txt
+            ziplist.txt
+            files.txt
+          retention-days: 7
