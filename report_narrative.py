@@ -17,6 +17,11 @@ def _f(v, default=0.0):
     except Exception:return default
 
 
+def _pct(v):
+    try:return f'{float(v):.2f}%'
+    except Exception:return '—'
+
+
 def _status(srcs, term):
     term=term.lower()
     for x in srcs or []:
@@ -42,8 +47,8 @@ def _missing_or_partial(srcs):
 def build_narrative(payload: dict[str,Any]) -> dict[str,Any]:
     prop=payload.get('property') or {}; env=payload.get('environment') or {}; enf=payload.get('enforcement') or {}; mining=payload.get('mining') or {}; water=payload.get('water') or {}; con=payload.get('conclusion') or {}; sources=payload.get('sources') or []
     pd=env.get('prodes') or {}; lens=pd.get('lens') or {}; hist=lens.get('historical') or {}; post=lens.get('post_2019_07_31') or {}; credit=lens.get('credit_screening') or {}
-    prodes_n=_n(hist.get('occurrence_count',pd.get('count'))); prodes_area=_f(hist.get('area_unique_ha',pd.get('area_ha')))
-    post_n=_n(post.get('occurrence_count')); post_area=_f(post.get('area_sum_ha'))
+    prodes_n=_n(hist.get('occurrence_count',pd.get('count'))); prodes_area=_f(hist.get('area_unique_ha',pd.get('area_ha'))); prodes_pct=hist.get('pct_car')
+    post_n=_n(post.get('occurrence_count')); post_area=_f(post.get('area_unique_ha')); post_pct=post.get('pct_car')
     emb=_n(enf.get('embargo_count')); anm=_n(mining.get('process_count')); rare=str(mining.get('rare_earth_signal') or '').upper()=='SIM'
     area=_s(prop.get('area_ha')); city=f"{_s(prop.get('municipality'))}/{_s(prop.get('uf'))}"
 
@@ -61,8 +66,8 @@ def build_narrative(payload: dict[str,Any]) -> dict[str,Any]:
     found=['CAR localizado e geometria real usada como base para os cruzamentos.']
     if prodes_n:
         years=', '.join(str(x) for x in hist.get('years') or []) or 'anos não informados'
-        found.append(f"PRODES histórico: {prodes_n} ocorrência(s), cerca de {prodes_area:.2f} ha de interseção única; anos identificados: {years}.")
-        found.append(f"Recorte pós-31/07/2019: {post_n} ocorrência(s), soma aproximada de {post_area:.2f} ha nas ocorrências retornadas.")
+        found.append(f"PRODES histórico: {prodes_n} ocorrência(s), {prodes_area:.6f} ha de interseção única ({_pct(prodes_pct)} do CAR); anos identificados: {years}.")
+        found.append(f"Recorte pós-31/07/2019: {post_n} ocorrência(s), {post_area:.6f} ha de interseção única ({_pct(post_pct)} do CAR), calculada pela união das interseções exatas com o CAR.")
     else:
         found.append('PRODES: nenhuma ocorrência intersectante foi localizada na consulta que respondeu.')
     found.append(f"Fiscalização ambiental: {emb} embargo(s) intersectante(s) identificado(s)." if emb else 'Fiscalização ambiental: nenhum embargo intersectante apareceu nas fontes que responderam.')
