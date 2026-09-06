@@ -68,7 +68,7 @@ def search_sync(q:str,uf:str='MG',municipality:str|None=None,limit:int=30)->dict
     code=(uf or '').strip().upper();term=_alias(q);cap=max(1,min(int(limit),60))
     if code!='MG':
         return {'ok':True,'indexed':False,'items':[],'count':0,'uf':code,'source':'CAFIR/Receita Federal','snapshot':SNAPSHOT,'detail':'Índice direto CAFIR desta etapa está materializado para MG; arquitetura de shards é expansível por UF.'}
-    if len(term)<2:return {'ok':True,'indexed':True,'items':[],'count':0,'uf':'MG','source':'CAFIR/Receita Federal','snapshot':SNAPSHOT,'detail':'Informe pelo menos 2 caracteres do nome.'}
+    if not term:return {'ok':True,'indexed':True,'items':[],'count':0,'uf':'MG','source':'CAFIR/Receita Federal','snapshot':SNAPSHOT,'detail':'Informe uma denominação pesquisável.'}
     wanted=_norm(municipality) if municipality else ''
     hits=[]
     for r in _load_shard(_shard(term)):
