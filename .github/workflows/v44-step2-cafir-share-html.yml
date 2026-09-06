@@ -1,0 +1,25 @@
+name: V44 Step 2 CAFIR Share HTML Probe
+on:
+  push:
+    branches: [ v44-step2-cafir-webdav ]
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Inspect public share HTML
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -L --fail --connect-timeout 15 --max-time 45 'https://arquivos.receitafederal.gov.br/index.php/s/RRmcpB2tf5cXskz' -o share.html
+          echo "bytes=$(wc -c < share.html)"
+          grep -Eio '.{0,120}(MG01|Minas Gerais|fileList|public-files|webdav|download).{0,180}' share.html | head -100 | tee clues.txt || true
+          head -80 share.html >> clues.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: v44-step2-cafir-share-html
+          path: clues.txt
+          retention-days: 3
