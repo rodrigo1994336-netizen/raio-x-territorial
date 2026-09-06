@@ -1,0 +1,42 @@
+name: V45 Stage 3 SICAR municipal download probe
+
+on:
+  push:
+    branches: [ v45-stage3-car-composition ]
+    paths:
+      - '.github/workflows/v45-stage3-sicar-download-probe.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Probe Curvelo public theme downloads
+        shell: bash
+        run: |
+          set -u
+          BASE='https://consulta.car.gov.br/geoservices/estadosCSV/MG?municipio=3120904&servico=SHP&tema='
+          themes=(
+            PERIMETRO_IMOVEL AREA_IMOVEL IMOVEL
+            AREA_CONSOLIDADA CONSOLIDADA
+            VEGETACAO_NATIVA REMANESCENTE_VEGETACAO_NATIVA
+            RESERVA_LEGAL APP APPS
+            AREA_POUSIO POUSIO
+            REGENERACAO AREA_REGENERACAO
+            HIDROGRAFIA USO_RESTRITO SERVIDAO_ADMINISTRATIVA
+          )
+          mkdir -p probe
+          for t in "${themes[@]}"; do
+            url="${BASE}${t}"
+            code=$(curl -k -L -sS --connect-timeout 12 --max-time 60 -o "probe/${t}.bin" -w '%{http_code}' "$url" || true)
+            size=$(wc -c < "probe/${t}.bin" 2>/dev/null || echo 0)
+            kind=$(file -b "probe/${t}.bin" 2>/dev/null || true)
+            printf '%-34s http=%s bytes=%s type=%s\n' "$t" "$code" "$size" "$kind"
+            if [ "$size" -gt 0 ] && [ "$size" -lt 1000 ]; then
+              head -c 300 "probe/${t}.bin" | tr '\n' ' ' | sed 's/[^[:print:]]/./g'; echo
+            fi
+          done
