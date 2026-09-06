@@ -84,7 +84,10 @@ def _sigef_candidates(car_geom:dict[str,Any],bbox:list[float]):
             'parcel_code':props.get('parcela_co'),'property_code':props.get('codigo_imo'),
             'registry':props.get('registro_m') or props.get('registro_d'),
             'municipality':props.get('municipio_'),'uf':props.get('uf_id'),
-            'source':'SIGEF/INCRA — espelho público IBAMA/PAMGIA'
+            'source':'SIGEF/INCRA — espelho público IBAMA/PAMGIA',
+            'display_kind':'REFERENCE','validation_status':'UNVALIDATED','panel_name_eligible':False,
+            'reference_kind':'SIGEF_CADASTRAL','map_anchor':'CADASTRAL_REFERENCE',
+            'origin_label':'SIGEF/INCRA — referência cadastral ainda não vinculada ao CAR'
         })
     items.sort(key=lambda x:x['score'],reverse=True)
     return {'ok':True,'items':items,'count':len(items)}
@@ -101,7 +104,7 @@ def _osm_named_farms_bbox(west:float,south:float,east:float,north:float,limit:in
     errors=[]
     for endpoint in _OSM_ENDPOINTS:
         try:
-            req=Request(endpoint,data=body,headers={'User-Agent':'Raio-X-Territorial/V43.8.1 (+public-name-resolution)','Content-Type':'application/x-www-form-urlencoded','Accept':'application/json'})
+            req=Request(endpoint,data=body,headers={'User-Agent':'Raio-X-Territorial/V44 (+public-name-resolution)','Content-Type':'application/x-www-form-urlencoded','Accept':'application/json'})
             with urlopen(req,timeout=7) as response:data=json.load(response)
             items=[];seen=set()
             for element in data.get('elements') or []:
@@ -112,7 +115,7 @@ def _osm_named_farms_bbox(west:float,south:float,east:float,north:float,limit:in
                 key=(node_id or 0,name.casefold(),round(float(lat),7),round(float(lon),7))
                 if key in seen:continue
                 seen.add(key)
-                items.append({'name':name,'lat':float(lat),'lon':float(lon),'osm_type':'node','osm_id':node_id,'place':tags.get('place'),'source':_OSM_SOURCE})
+                items.append({'name':name,'lat':float(lat),'lon':float(lon),'osm_type':'node','osm_id':node_id,'place':tags.get('place'),'source':_OSM_SOURCE,'display_kind':'REFERENCE','validation_status':'UNVALIDATED','panel_name_eligible':False,'reference_kind':'OSM_LIVE','map_anchor':'GEOGRAPHIC_POINT','origin_label':'OpenStreetMap ao vivo — referência geográfica não confirmada para o CAR'})
             return {'ok':True,'items':items,'count':len(items),'source':_OSM_SOURCE,'endpoint':endpoint}
         except Exception as exc:
             errors.append(f'{type(exc).__name__}:{str(exc)[:120]}')
@@ -120,6 +123,7 @@ def _osm_named_farms_bbox(west:float,south:float,east:float,north:float,limit:in
 
 
 def _osm_identity_candidate(car_geom:dict[str,Any],bbox:list[float])->dict[str,Any]:
+    """Diagnostic only. A live OSM point inside CAR is not a validated CAR denomination."""
     if not car_geom or not bbox or len(bbox)!=4:return {'ok':False,'chosen':None,'items':[],'detail':'missing_geometry_or_bbox'}
     try:
         west,south,east,north=[float(x) for x in bbox];car=shape(car_geom)
@@ -135,10 +139,7 @@ def _osm_identity_candidate(car_geom:dict[str,Any],bbox:list[float])->dict[str,A
         inside.append(item)
     by_name:dict[str,list[dict[str,Any]]]={}
     for item in inside:by_name.setdefault(str(item['name']).casefold(),[]).append(item)
-    if len(by_name)==1:
-        group=next(iter(by_name.values()));first=group[0];chosen={**first,'evidence_count':len(group)}
-        return {'ok':True,'chosen':chosen,'items':inside,'conflict':False,'source':_OSM_SOURCE}
-    return {'ok':True,'chosen':None,'items':inside,'conflict':len(by_name)>1,'names':sorted({x['name'] for x in inside},key=str.casefold),'source':_OSM_SOURCE}
+    return {'ok':True,'chosen':None,'items':inside,'conflict':len(by_name)>1,'names':sorted({x['name'] for x in inside},key=str.casefold),'source':_OSM_SOURCE,'note':'Referências OSM ao vivo são contexto geográfico e nunca são promovidas automaticamente a denominação do CAR.'}
 
 
 def _seed_identity(code:str,items:list[dict[str,Any]])->dict[str,Any]|None:
@@ -149,16 +150,20 @@ def _seed_identity(code:str,items:list[dict[str,Any]])->dict[str,Any]|None:
             'confidence':'unresolved','method':'audited_osm_conflict','candidates':items[:5],
             'candidate_count':len(items),'osm_candidates_inside_car':len(conflict.get('names') or []),'osm_conflict':True,
             'conflicting_public_names':conflict.get('names') or [],
-            'note':'Mais de uma denominação geográfica pública foi validada dentro do CAR; nenhuma é promovida sem evidência adicional.'
+            'display_kind':'UNRESOLVED','validation_status':'AMBIGUOUS','panel_name_eligible':False,
+            'note':'Mais de uma denominação geográfica pública foi validada no CAR; nenhuma é promovida sem evidência adicional.'
         }
     item=seed.by_car(code)
     if not item:return None
     return {
         'ok':True,'car_code':code,'name':item['name'],'source':seed.SOURCE,
-        'confidence':'medium','method':'audited_osm_point_inside_car',
+        'confidence':'medium','method':'audited_osm_point_inside_exact_car',
+        'display_kind':'VALIDATED_PROPERTY_NAME','validation_status':'VALIDATED','panel_name_eligible':True,
+        'map_anchor':'CAR_POLYGON','validation_scope':'SPATIAL_ASSOCIATION',
+        'origin_label':'OpenStreetMap auditado + cruzamento espacial CAR/SICAR',
         'osm_node_id':item.get('osm_id'),'osm_lat':item.get('lat'),'osm_lon':item.get('lon'),
         'evidence_count':1,'candidates':items[:5],'candidate_count':len(items),'osm_candidates_inside_car':1,
-        'note':'Denominação geográfica pública previamente auditada por ponto nomeado contido no polígono exato do CAR; não implica titularidade.'
+        'note':'Denominação geográfica pública previamente auditada e associada ao código CAR exato por cruzamento espacial; não implica titularidade.'
     }
 
 
@@ -172,24 +177,24 @@ def resolve_property_identity_sync(car_code:str)->dict[str,Any]:
         out={'ok':False,'car_code':code,'detail':car.get('detail') or 'CAR não localizado','source':'SICAR'};_CACHE[code]=(now,out);return out
     props=car.get('properties') or {};direct=_first_name(props)
     if direct:
-        out={'ok':True,'car_code':code,'name':direct,'source':'SICAR','confidence':'high','method':'explicit_sicar_field','candidates':[],'candidate_count':0};_CACHE[code]=(now,out);return out
-    sig=_sigef_candidates(car.get('geometry'),car.get('bbox') or []);items=sig.get('items') or [];chosen=None
-    if items:
-        top=items[0];second=items[1] if len(items)>1 else None
-        strong=top.get('overlap_ratio',0)>=0.72 or (top.get('centroid_inside') and top.get('overlap_ratio',0)>=0.58)
-        unambiguous=(second is None) or (top.get('score',0)-second.get('score',0)>=0.12) or (top.get('name')==second.get('name'))
-        if strong and unambiguous:chosen=top
-    if chosen:
-        out={'ok':True,'car_code':code,'name':chosen['name'],'source':chosen['source'],'confidence':'medium_high','method':'strong_sigef_overlap','overlap_ratio':chosen['overlap_ratio'],'registry':chosen.get('registry'),'parcel_code':chosen.get('parcel_code'),'candidates':items[:5],'candidate_count':len(items)}
-    else:
-        # Deterministic audited cache is preferred over a live Overpass dependency.
-        out=_seed_identity(code,items)
-        if out is None:
-            osm=_osm_identity_candidate(car.get('geometry'),car.get('bbox') or []);osm_chosen=osm.get('chosen')
-            if osm_chosen:
-                out={'ok':True,'car_code':code,'name':osm_chosen['name'],'source':_OSM_SOURCE,'confidence':'medium','method':'osm_named_farm_point_inside_car','osm_node_id':osm_chosen.get('osm_id'),'osm_lat':osm_chosen.get('lat'),'osm_lon':osm_chosen.get('lon'),'evidence_count':osm_chosen.get('evidence_count',1),'candidates':items[:5],'candidate_count':len(items),'osm_candidates_inside_car':len(osm.get('items') or []),'note':'Denominação geográfica pública associada por ponto nomeado contido no polígono exato do CAR; não implica titularidade.'}
-            else:
-                out={'ok':True,'car_code':code,'name':None,'source':'SICAR + SIGEF + OpenStreetMap','confidence':'unresolved','method':'no_safe_public_name','candidates':items[:5],'candidate_count':len(items),'osm_candidates_inside_car':len(osm.get('items') or []),'osm_conflict':bool(osm.get('conflict')),'note':'Nenhum nome público pôde ser atribuído com segurança. O sistema não inventa a denominação da fazenda.'}
+        out={'ok':True,'car_code':code,'name':direct,'source':'SICAR','confidence':'high','method':'explicit_sicar_field','display_kind':'VALIDATED_PROPERTY_NAME','validation_status':'VALIDATED','panel_name_eligible':True,'map_anchor':'CAR_POLYGON','validation_scope':'DIRECT_CAR_FIELD','origin_label':'SICAR — denominação explícita do próprio cadastro CAR','candidates':[],'candidate_count':0};_CACHE[code]=(now,out);return out
+
+    sig=_sigef_candidates(car.get('geometry'),car.get('bbox') or []);items=sig.get('items') or []
+
+    # A named SIGEF parcel intersecting a CAR is useful cadastral context, but
+    # overlap alone does not prove that the SIGEF denomination belongs to that CAR.
+    out=_seed_identity(code,items)
+    if out is None:
+        osm=_osm_identity_candidate(car.get('geometry'),car.get('bbox') or [])
+        out={
+            'ok':True,'car_code':code,'name':None,'source':'SICAR + SIGEF + OpenStreetMap',
+            'confidence':'unresolved','method':'no_validated_property_name',
+            'display_kind':'UNRESOLVED','validation_status':'UNRESOLVED','panel_name_eligible':False,
+            'candidates':items[:5],'candidate_count':len(items),
+            'osm_candidates_inside_car':len(osm.get('items') or []),'osm_conflict':bool(osm.get('conflict')),
+            'geographic_reference_names':osm.get('names') or [],
+            'note':'Nenhuma denominação foi validada para este CAR. SIGEF não vinculado e OSM ao vivo permanecem referências cartográficas e não podem preencher o painel do imóvel.'
+        }
     _CACHE[code]=(now,out)
     if len(_CACHE)>500:
         for k,_ in sorted(_CACHE.items(),key=lambda kv:kv[1][0])[:100]:_CACHE.pop(k,None)
@@ -203,4 +208,4 @@ async def property_identity(car_code:str):
     return out
 
 
-print('RX_PROPERTY_IDENTITY=public_name_resolver_sicar_sigef_audited_seed_osm_live',flush=True)
+print('RX_PROPERTY_IDENTITY_V44=validated_car_names_only_references_never_promoted',flush=True)
