@@ -18,24 +18,16 @@ jobs:
           import csv,gzip,io,json,math,re,time,unicodedata,urllib.parse,urllib.request
           from concurrent.futures import ThreadPoolExecutor,as_completed
           from pathlib import Path
-
-          WFS='https://geoserver.car.gov.br/geoserver/sicar/ows'
-          TYPENAME='sicar:sicar_imoveis_mg'
-          PAGE=25000
-          WORKERS=4
-          REF='MG-3120904-DFB380BECD7A4323AD8AA68FA14D011F'
-          REF_AREA=14.795
-          REF_MUN='Curvelo'
-
+          from datetime import datetime,timezone
+          WFS='https://geoserver.car.gov.br/geoserver/sicar/ows'; TYPENAME='sicar:sicar_imoveis_mg'
+          PAGE=25000; WORKERS=4
+          REF='MG-3120904-DFB380BECD7A4323AD8AA68FA14D011F'; REF_AREA=14.795; REF_MUN='Curvelo'
           def norm(s):
               s=''.join(c for c in unicodedata.normalize('NFKD',str(s or '')) if not unicodedata.combining(c))
               return ' '.join(s.upper().split())
-
-          with gzip.open('data/cafir/mg_unique_area_index.json.gz','rt',encoding='utf-8') as f:
-              idx_payload=json.load(f)
+          with gzip.open('data/cafir/mg_unique_area_index.json.gz','rt',encoding='utf-8') as f: idx_payload=json.load(f)
           idx=idx_payload['keys']; cafir_meta=idx_payload['meta']
-
-          def get(url,timeout=90,retries=4):
+          def get(url,timeout=90,retries=5):
               last=None
               for i in range(retries):
                   try:
@@ -44,83 +36,48 @@ jobs:
                   except Exception as e:
                       last=e; time.sleep(1.5*(i+1))
               raise last
-
           hit_q=urllib.parse.urlencode({'service':'WFS','version':'2.0.0','request':'GetFeature','typeNames':TYPENAME,'resultType':'hits'})
           hit_xml=get(WFS+'?'+hit_q).decode('utf-8','replace')
           m=re.search(r'numberMatched=["\'](\d+)',hit_xml)
           if not m: raise RuntimeError('numberMatched não encontrado: '+hit_xml[:800])
           matched=int(m.group(1))
-
           def page_url(start):
-              q=urllib.parse.urlencode({'service':'WFS','version':'2.0.0','request':'GetFeature','typeNames':TYPENAME,'outputFormat':'csv','count':PAGE,'startIndex':start})
-              return WFS+'?'+q
+              return WFS+'?'+urllib.parse.urlencode({'service':'WFS','version':'2.0.0','request':'GetFeature','typeNames':TYPENAME,'outputFormat':'csv','count':PAGE,'startIndex':start})
           starts=list(range(0,matched,PAGE))
-
-          counts={'COM_NOME':0,'AMBIGUIDADE':0,'AUSENCIA_NO_CAFIR':0}
-          all_status={}; active=0; invalid_area=0; pages_ok=0; rows_seen=0
-          ref=None
-
+          counts={'COM_NOME':0,'AMBIGUIDADE':0,'AUSENCIA_NO_CAFIR':0}; all_status={}
+          active=0; invalid_area=[0]; pages_ok=0; rows_seen=0; ref=None
           def classify(row):
-              nonlocal invalid_area
               try: area=float(str(row.get('area') or '').replace(',','.'))
               except Exception:
-                  invalid_area+=1; return None
-              mun=norm(row.get('municipio'))
-              tol=max(area*0.005,0.01)
+                  invalid_area[0]+=1; return None
+              mun=norm(row.get('municipio')); tol=max(area*0.005,0.01)
               lo=math.ceil((area-tol)*10-1e-9); hi=math.floor((area+tol)*10+1e-9)
-              candidate_count=0; candidate_keys=[]
+              cand=0; keys=[]
               for tenth in range(max(0,lo),hi+1):
-                  key=f'{mun}|{tenth:09d}'
-                  item=idx.get(key)
-                  if item:
-                      candidate_count+=int(item[0]); candidate_keys.append((key,int(item[0]),item[1]))
-              if candidate_count==0: cls='AUSENCIA_NO_CAFIR'
-              elif candidate_count==1: cls='COM_NOME'
-              else: cls='AMBIGUIDADE'
-              return cls,area,tol,candidate_count,candidate_keys
-
+                  key=f'{mun}|{tenth:09d}'; item=idx.get(key)
+                  if item: cand+=int(item[0]); keys.append((key,int(item[0]),item[1]))
+              cls='AUSENCIA_NO_CAFIR' if cand==0 else ('COM_NOME' if cand==1 else 'AMBIGUIDADE')
+              return cls,area,tol,cand,keys
           def fetch_page(start):
               raw=get(page_url(start),timeout=120,retries=5)
-              text=raw.decode('utf-8-sig','replace')
-              return start,list(csv.DictReader(io.StringIO(text)))
-
+              return start,list(csv.DictReader(io.StringIO(raw.decode('utf-8-sig','replace'))))
           with ThreadPoolExecutor(max_workers=WORKERS) as ex:
               futs={ex.submit(fetch_page,s):s for s in starts}
               for fut in as_completed(futs):
                   start,rows=fut.result(); pages_ok+=1; rows_seen+=len(rows)
                   for row in rows:
-                      st=(row.get('status_imovel') or '').strip() or 'VAZIO'
-                      all_status[st]=all_status.get(st,0)+1
+                      st=(row.get('status_imovel') or '').strip() or 'VAZIO'; all_status[st]=all_status.get(st,0)+1
                       if st!='AT': continue
-                      active+=1
-                      r=classify(row)
+                      active+=1; r=classify(row)
                       if not r: continue
                       cls,area,tol,cand,keys=r; counts[cls]+=1
                       if (row.get('cod_imovel') or '').upper()==REF:
                           ref={'car':REF,'municipality':row.get('municipio'),'car_area_ha':area,'tolerance_ha':tol,'candidate_count':cand,'classification':cls,'candidate_keys':keys}
                   print('page',start,'rows',len(rows),'progress',pages_ok,'/',len(starts),flush=True)
-
-          # independent benchmark classification using exact reference values even if WFS row is missed
-          ref_row={'cod_imovel':REF,'municipio':REF_MUN,'area':str(REF_AREA),'status_imovel':'AT'}
-          rr=classify(ref_row)
-          rcls,rarea,rtol,rcand,rkeys=rr
+          rcls,rarea,rtol,rcand,rkeys=classify({'municipio':REF_MUN,'area':str(REF_AREA)})
           ref_check={'car':REF,'municipality':REF_MUN,'car_area_ha':rarea,'tolerance_ha':rtol,'candidate_count':rcand,'classification':rcls,'candidate_keys':rkeys}
-
           denom=sum(counts.values())
-          result={
-            'generated_at_utc':__import__('datetime').datetime.now(__import__('datetime').timezone.utc).isoformat(),
-            'scope':'Minas Gerais — CARs com status AT, cruzados somente contra imóveis CAFIR ativos (situação 02)',
-            'method':'município normalizado + área; tolerância=max(0,5% da área CAR, 0,01 ha); unicidade rigorosa dentro da janela; sem dado de proprietário/titular',
-            'sicar':{'source':WFS,'type_name':TYPENAME,'number_matched_all_statuses':matched,'rows_seen':rows_seen,'active_at':active,'status_counts':all_status,'pages':len(starts),'pages_ok':pages_ok},
-            'cafir':cafir_meta,
-            'counts':counts,
-            'denominator_active_car_classified':denom,
-            'percentages':{k:round(v*100/denom,6) if denom else None for k,v in counts.items()},
-            'invalid_area_rows_active':invalid_area,
-            'reference_from_state_scan':ref,
-            'reference_independent_check':ref_check,
-            'warning':'Estas métricas medem a heurística CAR→CAFIR. Elas não tornam o casamento uma identificação determinística; um mesmo registro CAFIR pode ser candidato de mais de um CAR e divergências cadastrais de área podem impedir o vínculo correto.'
-          }
+          result={'generated_at_utc':datetime.now(timezone.utc).isoformat(),'scope':'Minas Gerais — CARs com status AT, cruzados somente contra imóveis CAFIR ativos (situação 02)','method':'município normalizado + área; tolerância=max(0,5% da área CAR, 0,01 ha); unicidade rigorosa dentro da janela; sem dado de proprietário/titular','sicar':{'source':WFS,'type_name':TYPENAME,'number_matched_all_statuses':matched,'rows_seen':rows_seen,'active_at':active,'status_counts':all_status,'pages':len(starts),'pages_ok':pages_ok},'cafir':cafir_meta,'counts':counts,'denominator_active_car_classified':denom,'percentages':{k:round(v*100/denom,6) if denom else None for k,v in counts.items()},'invalid_area_rows_active':invalid_area[0],'reference_from_state_scan':ref,'reference_independent_check':ref_check,'warning':'Estas métricas medem a heurística CAR→CAFIR. Elas não tornam o casamento uma identificação determinística; um mesmo registro CAFIR pode ser candidato de mais de um CAR e divergências cadastrais de área podem impedir o vínculo correto.'}
           Path('benchmark').mkdir(exist_ok=True)
           Path('benchmark/cafir_mg_real_coverage_2026-09-01.json').write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')
           print(json.dumps(result,ensure_ascii=False,indent=2))
