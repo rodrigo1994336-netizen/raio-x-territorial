@@ -1,0 +1,64 @@
+name: V44 Step 2 CAFIR MG Metrics Fast
+
+on:
+  push:
+    branches: [ v44-step2-cafir-mg-metrics-fast ]
+    paths-ignore:
+      - 'benchmark/cafir_mg_real_coverage_2026-09-01.json'
+      - 'benchmark/cafir_national_inventory_D60901.json'
+
+permissions:
+  contents: write
+
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - name: Inventory official CAFIR DAV snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p benchmark
+          curl -sS --fail --connect-timeout 15 --max-time 90 -X PROPFIND -H 'Depth: 1' 'https://arquivos.receitafederal.gov.br/public.php/dav/files/RRmcpB2tf5cXskz/' -o /tmp/cafir_dav.xml
+          python - <<'PY'
+          import json,re,xml.etree.ElementTree as ET
+          from pathlib import Path
+          root=ET.parse('/tmp/cafir_dav.xml').getroot(); hrefs=[x.text for x in root.iter() if x.tag.endswith('href') and x.text]
+          rx=re.compile(r'K34313UF\.D60901\.([A-Z]{2})(\d{2})\.csv$',re.I); parts={}
+          for h in hrefs:
+              name=h.rsplit('/',1)[-1]; m=rx.search(name)
+              if m: parts.setdefault(m.group(1).upper(),[]).append(name)
+          for uf in parts: parts[uf].sort()
+          expected=['AC','AL','AP','AM','BA','CE','DF','ES','GO','MA','MT','MS','MG','PA','PB','PR','PE','PI','RJ','RN','RS','RO','RR','SC','SP','SE','TO']
+          missing=[x for x in expected if x not in parts]
+          result={'snapshot':'D60901','dav_root':'https://arquivos.receitafederal.gov.br/public.php/dav/files/RRmcpB2tf5cXskz/','uf_count':len(parts),'file_count':sum(len(v) for v in parts.values()),'ufs':parts,'expected_27_ufs':expected,'missing_ufs':missing,'national_snapshot_complete_27_ufs':not missing,'note':'The legacy /download endpoint redirects to this DAV root with ?accept=zip, so CAFIR.zip is an archive of the shared national folder, not an MG-only file.'}
+          Path('benchmark/cafir_national_inventory_D60901.json').write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')
+          print(json.dumps(result,ensure_ascii=False,indent=2))
+          if missing: raise SystemExit('missing UFs: '+','.join(missing))
+          PY
+      - name: Execute frozen metric without redundant GeoServer sort
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import re,textwrap
+          from pathlib import Path
+          text=Path('.github/workflows/v44-step2-cafir-mg-metrics.yml').read_text(encoding='utf-8')
+          block=text.split('- name: Measure frozen MG CAR naming protocol',1)[1].split('- name: Commit benchmark proof on working branch',1)[0]
+          m=re.search(r"python - <<'PY'\n(.*?)\n          PY",block,re.S)
+          if not m: raise SystemExit('metric script block not found')
+          script=textwrap.dedent(m.group(1)).replace("'sortBy':'cod_imovel',","")
+          print('FAST_RUN_SORT_REMOVED=',"sortBy" not in script,flush=True)
+          exec(compile(script,'frozen_metric_protocol_v1.py','exec'),{'__name__':'__main__'})
+          PY
+      - name: Commit proof on optimized working branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add benchmark/cafir_mg_real_coverage_2026-09-01.json benchmark/cafir_national_inventory_D60901.json
+          git commit -m 'audit: measure frozen CAR name coverage protocol v1 optimized'
+          git push
