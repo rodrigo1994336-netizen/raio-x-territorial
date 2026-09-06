@@ -7,25 +7,30 @@ permissions:
 jobs:
   probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
-      - name: Sample MG files
+      - name: Extract Curvelo from latest MG CAFIR
         run: |
           set -euo pipefail
           B='https://arquivos.receitafederal.gov.br/public.php/dav/files/RRmcpB2tf5cXskz'
+          : > curvelo.txt
           : > proof.txt
           for P in MG01 MG02 MG03; do
             U="$B/K34313UF.D60901.$P.csv"
-            echo "=== $P ===" >> proof.txt
-            curl -sS -D "$P.h" -o "$P.bin" -r 0-1475 "$U"
-            cat "$P.h" >> proof.txt
-            echo '--- FIRST BYTES ---' >> proof.txt
-            cat "$P.bin" >> proof.txt
-            echo >> proof.txt
+            echo "=== $P ===" | tee -a proof.txt
+            T0=$(date +%s)
+            curl -sS --fail "$U" | LC_ALL=C grep -a 'CURVELO' >> curvelo.txt
+            T1=$(date +%s)
+            echo "SECONDS=$((T1-T0))" | tee -a proof.txt
           done
+          echo "CURVELO_LINES=$(wc -l < curvelo.txt)" | tee -a proof.txt
+          echo "CURVELO_BYTES=$(wc -c < curvelo.txt)" | tee -a proof.txt
+          grep -a -i 'LAGOA BONITA' curvelo.txt | head -50 | tee -a proof.txt || true
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: v44-step2-cafir-mg-sample
-          path: proof.txt
+          name: v44-step2-cafir-mg-curvelo
+          path: |
+            proof.txt
+            curvelo.txt
           retention-days: 3
