@@ -1,0 +1,43 @@
+name: V45 Stage 3 SICAR app inspect
+
+on:
+  push:
+    branches: [ v45-stage3-car-composition ]
+    paths:
+      - '.github/workflows/v45-stage3-sicar-app-inspect.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Inspect public app
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p probe
+          ROOT='https://consulta.car.gov.br/geoservices/'
+          curl -k -L -sS --connect-timeout 12 --max-time 60 "$ROOT" -o probe/index.html
+          echo '=== HTML ==='; cat probe/index.html; echo
+          python - <<'PY'
+          from pathlib import Path
+          import re, subprocess
+          html=Path('probe/index.html').read_text(encoding='utf-8',errors='ignore')
+          refs=[]
+          for x in re.findall(r'(?:src|href)="([^"]+)"',html):
+              if '.js' in x: refs.append(x)
+          root='https://consulta.car.gov.br'
+          print('refs',refs)
+          for i,ref in enumerate(refs):
+              url=ref if ref.startswith('http') else root+(ref if ref.startswith('/') else '/geoservices/'+ref)
+              out=Path(f'probe/app_{i}.js')
+              subprocess.run(['curl','-k','-L','-sS','--connect-timeout','12','--max-time','90',url,'-o',str(out)],check=False)
+              print('JS',i,url,'bytes',out.stat().st_size if out.exists() else 0)
+          PY
+          echo '=== interesting strings ==='
+          grep -RhoE 'https?://[^"'"'"' )]+' probe/*.js | sort -u | head -300 || true
+          grep -RhoE '.{0,100}(download|shape|shp|municipio|município|tema|estadosCSV).{0,180}' probe/*.js | head -500 || true
