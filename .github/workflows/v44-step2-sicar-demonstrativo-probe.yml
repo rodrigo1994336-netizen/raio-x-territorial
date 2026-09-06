@@ -1,0 +1,52 @@
+name: V44 Step 2 SICAR Demonstrativo Probe
+on:
+  push:
+    branches: [ v44-step2-sicar-demonstrativo ]
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Inspect official CAR public app and scripts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out scripts
+          curl -k -sSL --fail 'https://www.car.gov.br/' -o out/index.html
+          echo '=== HTML SCRIPT SOURCES ===' > out/proof.txt
+          grep -Eo '<script[^>]+src=["'"'][^"'"']+' out/index.html | sed -E 's/.*src=["'"']//g' | tee out/scripts.txt >> out/proof.txt || true
+          python - <<'PY'
+          from pathlib import Path
+          from urllib.parse import urljoin
+          import urllib.request, ssl, re
+          base='https://www.car.gov.br/'
+          ctx=ssl._create_unverified_context()
+          srcs=[]
+          html=Path('out/index.html').read_text(errors='ignore')
+          for s in re.findall(r'<script[^>]+src=["\']([^"\']+)',html,re.I):
+              u=urljoin(base,s); srcs.append(u)
+          with open('out/script_urls.txt','w') as f:
+              f.write('\n'.join(srcs))
+          for i,u in enumerate(srcs):
+              try:
+                  data=urllib.request.urlopen(urllib.request.Request(u,headers={'User-Agent':'Mozilla/5.0'}),context=ctx,timeout=30).read()
+              except Exception as e:
+                  print('ERR',u,e); continue
+              Path(f'scripts/{i:02d}.js').write_bytes(data)
+              text=data.decode('utf-8','ignore')
+              for pat in ('demonstrativo','consultar','numeroRegistro','numero_car','baixar','pdf','api/','/api','rest/'):
+                  if pat.lower() in text.lower():
+                      print('HIT',i,u,pat)
+          PY
+          echo '=== ENDPOINT CLUES ===' >> out/proof.txt
+          grep -RniE '.{0,160}(demonstrativo|numero.?car|registro.?car|baixar.?demonstrativo|consultar).{0,260}' scripts | head -300 >> out/proof.txt || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: v44-step2-sicar-demonstrativo-probe
+          path: |
+            out
+            scripts
+          retention-days: 3
