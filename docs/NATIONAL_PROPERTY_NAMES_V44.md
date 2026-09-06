@@ -7,81 +7,76 @@ O Raio-X Territorial deve resolver a denominação pública do imóvel rural em 
 ## Fontes públicas oficiais
 
 1. **SNCR/INCRA — Consulta Pública de Imóveis Rurais**
-   - licença: ODbL;
-   - atualização declarada: mensal;
-   - campos úteis: código do imóvel rural, denominação, código IBGE do município, município, UF e área total;
-   - a consulta pública pode exigir hCaptcha para download. O Raio-X não contorna CAPTCHA nem proteção de acesso.
+   - denominação, código do imóvel rural, município/IBGE, UF e área;
+   - não contornar CAPTCHA ou proteção de acesso.
 
 2. **CAFIR/RFB — Dados Abertos**
-   - licença: Creative Commons Attribution;
-   - atualização declarada: trimestral;
    - cobertura nacional;
-   - campos úteis: CIB/NIRF, código do imóvel no INCRA/SNCR, nome do imóvel rural, área, situação, UF e município;
-   - desde 2024 os arquivos públicos podem ser disponibilizados por UF, o que permite carga nacional incremental.
+   - CIB/NIRF, código INCRA/SNCR quando presente, nome do imóvel, área, situação, UF, município;
+   - campos de localidade do imóvel como `id_municipio`, `distrito` e `endereco` podem ser usados somente para desambiguação cadastral.
 
 ## Minimização de dados
 
-A base local **não deve armazenar titular, detentor, CPF, CNPJ, endereço de pessoa, telefone, e-mail ou qualquer outro dado pessoal**. Mesmo que um arquivo de origem contenha essas colunas, o importador descarta esses campos e persiste apenas:
+A base local **não armazena titular, detentor, CPF, CNPJ, telefone, e-mail nem endereço de pessoa**. Endereço e distrito do próprio imóvel rural podem ser armazenados apenas como contexto de desambiguação do imóvel.
+
+Persistir somente:
 
 - identificador SNCR/INCRA;
-- CIB/NIRF quando público no arquivo de imóvel;
+- CIB/NIRF;
 - denominação do imóvel;
-- UF e município;
-- código IBGE quando disponível;
+- UF, município, `id_municipio`/IBGE quando disponíveis;
 - área;
+- distrito e endereço do imóvel, quando públicos no CAFIR;
 - situação cadastral;
-- fonte, licença, data da fonte e URL de origem.
+- fonte, licença, data e URL de origem.
 
 ## Prioridade do resolvedor
 
-1. nome explícito do SICAR, quando o serviço realmente o fornecer;
-2. base oficial local SNCR/CAFIR por código SNCR obtido de sobreposição SIGEF forte e inequívoca;
+1. nome explícito do SICAR;
+2. SNCR/CAFIR por código SNCR obtido de sobreposição SIGEF forte e inequívoca;
 3. nome explícito do SIGEF em sobreposição forte;
-4. base oficial local por município + área, somente quando houver um único nome compatível;
-5. evidência geográfica pública já auditada do OpenStreetMap;
-6. OpenStreetMap ao vivo como fallback fail-soft;
-7. sem nome quando houver conflito ou ausência de evidência segura.
+4. SNCR/CAFIR por município + área, com unicidade rigorosa;
+5. desambiguação adicional por `id_municipio`, `distrito` e `endereco` quando houver contexto equivalente confiável;
+6. evidência OSM auditada;
+7. OSM ao vivo fail-soft;
+8. sem nome quando houver conflito ou ausência de evidência segura.
 
-Nenhuma dessas regras comprova propriedade ou titularidade.
+Nenhuma regra comprova titularidade.
 
-## Match por município e área
+## Match por município + área
 
-- SNCR com código IBGE: janela estrita compatível com área de quatro casas decimais.
-- CAFIR fixed-width sem IBGE: fallback para UF + município, com tolerância máxima de `0,051 ha` para acomodar área pública armazenada com uma casa decimal.
-- dois ou mais nomes distintos na mesma janela: **não promover nome**.
+A área do CAR é declarada e pode divergir da área cadastrada no CAFIR. Portanto:
 
-## Construção da base
-
-Arquivo por arquivo:
-
-```bash
-python scripts/build_national_property_name_db.py \
-  --db /var/data/rx_property_names.sqlite3 \
-  --cafir-file /dados/CAFIR/K34313UF.D40701.MG01 \
-  --source-date 2026-09-01
+```text
+tolerancia_ha = max(0,5% da área CAR, 0,01 ha)
 ```
 
-Carga de todos os arquivos de uma pasta nacional:
+Regras:
 
-```bash
-python scripts/build_national_property_name_db.py \
-  --db /var/data/rx_property_names.sqlite3 \
-  --cafir-dir /dados/CAFIR \
-  --sncr-dir /dados/SNCR \
-  --source-date 2026-09-01
-```
+- aplicar a janela inteira de tolerância; não exigir igualdade exata;
+- usar primeiro IBGE quando a fonte de nomes o fornecer; caso contrário UF + município;
+- se todos os candidatos da janela tiverem a mesma denominação, o nome pode ser promovido;
+- se houver duas ou mais denominações, tentar desambiguar por `id_municipio`, `distrito` e `endereco` somente quando o lado CAR/territorial fornecer contexto equivalente confiável;
+- persistindo duas ou mais denominações, **não promover nome**;
+- registrar em cada resolução a tolerância efetivamente usada e o critério de match.
 
-Também são aceitos `--cafir-csv`, `--cafir-csv-dir` e múltiplos argumentos repetidos.
+## Métricas obrigatórias
+
+Toda medição de cobertura deve separar:
+
+1. `matched`: CARs que receberam nome com evidência segura;
+2. `ambiguous`: havia candidato(s) no CAFIR, mas mais de uma denominação permaneceu possível;
+3. `absent`: nenhum candidato CAFIR caiu na janela de município + área.
+
+Reportar quantidade e percentual dos três grupos. Ambiguidade é problema potencialmente tratável por desambiguação; ausência é falta de cobertura da fonte e não deve ser mascarada como ambiguidade.
 
 ## Produção
 
-Definir:
+O arquivo nacional não deve ser commitado no Git. Deve residir em armazenamento persistente do serviço ou ser construído por pipeline autorizado. O runtime abre a base em modo somente leitura.
 
 ```text
 RX_PROPERTY_NAMES_DB=/var/data/rx_property_names.sqlite3
 ```
-
-O arquivo nacional não deve ser commitado no Git. Deve residir em armazenamento persistente do serviço ou ser construído por pipeline de ingestão autorizado. O runtime abre a base em modo somente leitura para resolver nomes.
 
 Endpoint de diagnóstico:
 
@@ -89,12 +84,10 @@ Endpoint de diagnóstico:
 GET /v1/live/property-name-registry
 ```
 
-A resposta informa total de registros, fontes, UFs presentes e `national_ready`. A carga só é considerada nacionalmente completa quando as 27 UFs estiverem representadas.
-
 ## Atualização
 
-- CAFIR: sincronização a cada publicação trimestral, ou quando a Receita publicar nova competência.
-- SNCR: atualização mensal quando o arquivo for obtido por meio público permitido.
-- toda carga é idempotente por fingerprint;
+- CAFIR: atualizar quando a Receita publicar nova competência;
+- SNCR: atualizar quando o arquivo público permitido estiver disponível;
+- carga idempotente por fingerprint;
 - registrar data e origem da competência;
-- nunca automatizar bypass de hCaptcha.
+- nunca automatizar bypass de CAPTCHA.
