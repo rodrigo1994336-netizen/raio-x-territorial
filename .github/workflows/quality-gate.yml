@@ -148,8 +148,6 @@ jobs:
           assert 'z<11' in html and 'span>1.50' in html
           assert all(uf in html for uf in ('AC','AM','BA','DF','GO','MG','MT','PA','PR','RS','SC','SP','TO'))
 
-          # Deterministic V43.8 safety contract: one unique named farm inside the
-          # CAR may be promoted; two distinct names in the same CAR are rejected.
           geom=mapping(box(-44.67,-19.18,-44.65,-19.16));bbox=[-44.67,-19.18,-44.65,-19.16]
           original_osm=identity._osm_named_farms_bbox
           try:
@@ -172,7 +170,7 @@ jobs:
           assert rss < 220, f'portal RSS too high in gate: {rss:.1f} MB'
           print('RX_CI_PORTAL_V43_READY',len(paths),'rss_mb=',round(rss,1),'mutation_observers=',observer_count,'intervals=',interval_count,'version=',portal_v8.APP_PORTAL_VERSION,'name_coverage=observable','osm_names=on','named_pdf=on','viewport_guard=on','map_stability=on','map_polish=on','search_resilient=on','geolocation=explicit')
           PY
-      - name: V41 report bounded-latency and CAR-composition gate
+      - name: V41 report bounded-latency, CAR-composition and PRODES truth gate
         env:
           RX_RELEASE: OFF
         run: |
@@ -186,6 +184,7 @@ jobs:
           extras=Path('report_extras_perf_v30.py').read_text()
           car=Path('sicar_detail_sources_v2.py').read_text()
           adapter=Path('live_report_adapter_v17.py').read_text()
+          prodes_report=Path('prodes_truth_v44.py').read_text()
           assert "--max-time','7'" in a and "--retry','0'" in a
           assert 'anm_retry=skipped' in r and "query_anm_fast" not in r
           assert 'report_extras_perf_v30' in s
@@ -197,5 +196,29 @@ jobs:
           assert 'ThreadPoolExecutor' in car and 'CAP_TTL=21600' in car and "'share_pct'" in car
           assert 'asyncio.wait_for' in extras and "_timed('visual_hybrid'" in extras and ',34)' in extras
           assert "car['environmental_composition']" in adapter and 'passivo/excedente legal' in adapter
-          print('RX_CI_REPORT_V41_READY')
+          for required in ('Histórico PRODES completo','Recorte pós-31/07/2019','ha únicos','% do CAR','Interseção geométrica exata'):
+              assert required in prodes_report, required
+
+          # Deterministic regression: overlapping recent polygons must be unioned, never summed.
+          from prodes_lens import derive_prodes_lens
+          from shapely.geometry import shape
+          from pyproj import Geod
+          geom={'type':'Polygon','coordinates':[[[0,0],[0.02,0],[0.02,0.02],[0,0.02],[0,0]]]}
+          old={'type':'Polygon','coordinates':[[[0,0],[0.02,0],[0.02,0.018],[0,0.018],[0,0]]]}
+          r1={'type':'Polygon','coordinates':[[[0.001,0.001],[0.006,0.001],[0.006,0.006],[0.001,0.006],[0.001,0.001]]]}
+          r2={'type':'Polygon','coordinates':[[[0.003,0.003],[0.008,0.003],[0.008,0.008],[0.003,0.008],[0.003,0.003]]]}
+          payload={'hits':[{'layer':'proof:yearly_deforestation','features':[
+              {'id':'old','geometry':old,'properties':{'year':2006,'image_date':'2006-07-21'}},
+              {'id':'r1','geometry':r1,'properties':{'year':2021,'image_date':'2021-09-16'}},
+              {'id':'r2','geometry':r2,'properties':{'year':2022,'image_date':'2022-09-16'}},
+          ]}]}
+          lens=derive_prodes_lens(payload,0.5,car_geometry=geom,car_area_ha=49.236)
+          post=lens['post_2019_07_31'];hist=lens['historical']
+          assert lens['calculation_method']=='exact_geometry_union_after_intersection', lens
+          assert hist['area_unique_ha']>0 and hist['pct_car'] is not None, hist
+          assert post['occurrence_count']==2 and post['area_unique_ha']>0 and post['pct_car'] is not None, post
+          geod=Geod(ellps='GRS80')
+          def area(x):return abs(geod.geometry_area_perimeter(shape(x))[0])/10000.0
+          assert post['area_unique_ha'] < area(r1)+area(r2), (post,area(r1),area(r2))
+          print('RX_CI_REPORT_V41_READY PRODES_TWO_LENS_EXACT_UNION_OK')
           PY
