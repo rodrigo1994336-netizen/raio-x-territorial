@@ -1,0 +1,38 @@
+name: V44 Step 2 Consulta Publica Probe
+on:
+  push:
+    branches: [ v44-step2-sicar-demonstrativo ]
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Inspect current public frontend
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out js
+          B='https://consulta.car.gov.br/'
+          curl -sSL --fail --connect-timeout 10 --max-time 20 "$B" -o out/index.html
+          python - <<'PY'
+          from pathlib import Path
+          from urllib.parse import urljoin
+          import re, subprocess
+          h=Path('out/index.html').read_text(errors='ignore')
+          srcs=re.findall(r'<script[^>]+src=["\']([^"\']+)',h,re.I)
+          print('SCRIPTS',srcs)
+          Path('out/scripts.txt').write_text('\n'.join(urljoin('https://consulta.car.gov.br/',x) for x in srcs))
+          for i,s in enumerate(srcs):
+              u=urljoin('https://consulta.car.gov.br/',s)
+              subprocess.run(['curl','-sSL','--fail','--connect-timeout','5','--max-time','12',u,'-o',f'js/{i:02d}.js'],check=False)
+          PY
+          grep -RnioE '.{0,180}(demonstrativo|numero.?registro|cod_imovel|detalh|imovel|reserva.?legal|vegetacao.?nativa|area.?consolidada|api/|/api|http).{0,320}' js | head -500 > out/clues.txt || true
+          cat out/scripts.txt >> out/clues.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: v44-step2-consulta-publica-probe
+          path: out
+          retention-days: 3
