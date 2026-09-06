@@ -1,0 +1,77 @@
+name: V44 Step 2 National Property Name Tests
+on:
+  push:
+    branches: [ v44-step2-national-name ]
+  pull_request:
+    branches: [ main ]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build privacy-minimized registry fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/rxnames
+          cat > /tmp/rxnames/sncr.csv <<'CSV'
+          CÓDIGO DO IMÓVEL;DENOMINAÇÃO DO IMÓVEL;CÓDIGO DO MUNICÍPIO (IBGE);MUNICÍPIO;UF;ÁREA TOTAL;TITULAR
+          3100000000001;Fazenda Brasil;3120904;CURVELO;MG;14,7950;PESSOA PROIBIDA
+          3100000000003;Fazenda Única Nacional;5208707;GOIÂNIA;GO;25,1234;OUTRO TITULAR
+          3100000000004;Fazenda Conflito A;1501402;BELÉM;PA;30,0000;IGNORAR A
+          3100000000005;Fazenda Conflito B;1501402;BELÉM;PA;30,0000;IGNORAR B
+          CSV
+          cat > /tmp/rxnames/cafir.csv <<'CSV'
+          CIB;ÁREA TOTAL;CÓDIGO DO IMÓVEL NO INCRA;NOME DO IMÓVEL RURAL;SITUAÇÃO;UF;MUNICÍPIO;CPF/CNPJ Contribuinte;Nome do contribuinte
+          AB12345678;41,2500;3100000000006;Fazenda CAFIR CSV;ATIVA;RS;BAGÉ;00000000000;TITULAR CSV PROIBIDO
+          CSV
+          python - <<'PY'
+          from pathlib import Path
+          widths=(8,9,13,55,2,56,40,2,40,8,1,8,1)
+          vals=('87654321','000000251','3100000000002','Fazenda CAFIR Brasil','AT','RODOVIA TESTE','ZONA RURAL','BA','BARREIRAS','47800000','N','20260901','S')
+          Path('/tmp/rxnames/cafir.part').write_bytes((''.join(str(v)[:w].ljust(w) for v,w in zip(vals,widths))+'\n').encode('iso-8859-1'))
+          PY
+          python scripts/build_national_property_name_db.py --db /tmp/rxnames/names.sqlite3 --sncr-csv /tmp/rxnames/sncr.csv --cafir-file /tmp/rxnames/cafir.part --cafir-csv /tmp/rxnames/cafir.csv --source-date 2026-09-01
+      - name: Validate safe resolution and privacy minimization
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os,sqlite3
+          os.environ['RX_PROPERTY_NAMES_DB']='/tmp/rxnames/names.sqlite3'
+          import national_property_name_registry_v44 as n
+          assert n.lookup_by_sncr('3100000000001')['chosen']['name']=='Fazenda Brasil'
+          assert n.lookup_by_sncr('3100000000002')['chosen']['name']=='Fazenda CAFIR Brasil'
+          assert n.lookup_by_sncr('3100000000006')['chosen']['name']=='Fazenda CAFIR CSV'
+          go=n.lookup_unique_by_location_area(ibge_code='5208707',uf='GO',municipality='GOIÂNIA',area_ha='25.1234')
+          assert go['chosen']['name']=='Fazenda Única Nacional' and go['match_basis']=='ibge_area',go
+          pa=n.lookup_unique_by_location_area(ibge_code='1501402',uf='PA',municipality='BELÉM',area_ha='30.0000')
+          assert pa['chosen'] is None and pa['conflict'] is True,pa
+          ba=n.lookup_unique_by_location_area(ibge_code='2903201',uf='BA',municipality='BARREIRAS',area_ha='25.1234')
+          assert ba['chosen']['name']=='Fazenda CAFIR Brasil' and ba['match_basis']=='uf_municipality_area',ba
+          con=sqlite3.connect('/tmp/rxnames/names.sqlite3')
+          cols={r[1].lower() for r in con.execute('pragma table_info(property_names)')}
+          assert not ({'titular','cpf','cnpj','nome_titular','detentor'} & cols),cols
+          all_text=' '.join(str(v) for row in con.execute('select * from property_names') for v in row if v is not None)
+          for forbidden in ('PESSOA PROIBIDA','OUTRO TITULAR','TITULAR CSV PROIBIDO','00000000000'): assert forbidden not in all_text
+          con.close()
+          print('NATIONAL_NAME_REGISTRY_SAFE_OK')
+          PY
+      - name: Validate resolver priority and syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m py_compile national_property_name_registry_v44.py scripts/build_national_property_name_db.py property_identity_runtime.py
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('property_identity_runtime.py').read_text(encoding='utf-8')
+          exact=p.index('_official_exact_from_sigef(code,chosen,items)')
+          sigef=p.index("chosen['name']",exact)
+          area=p.index('_official_location_area(code,props,items)',sigef)
+          seed=p.index('_seed_identity(code,items)',area)
+          assert exact < sigef < area < seed
+          print('RESOLVER_PRIORITY_OK')
+          PY
