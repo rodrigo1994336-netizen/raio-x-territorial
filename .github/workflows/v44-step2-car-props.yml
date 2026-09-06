@@ -1,0 +1,35 @@
+name: V44 Step 2 CAR Property Probe
+on:
+  push:
+    branches: [ v44-step2-car-props ]
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install minimal dependencies
+        run: pip install -q fastapi shapely pyproj httpx
+      - name: Inspect exact SICAR feature properties
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY' | tee props.txt
+          from car_resilient import fetch_car_live_resilient
+          code='MG-3120904-DFB380BECD7A4323AD8AA68FA14D011F'
+          d=fetch_car_live_resilient(code)
+          print('OK',d.get('ok'),'STRATEGY',d.get('strategy'))
+          p=d.get('properties') or {}
+          for k in sorted(p): print(f'{k}={p[k]}')
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: v44-step2-car-props
+          path: props.txt
+          retention-days: 3
