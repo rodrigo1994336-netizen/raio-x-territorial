@@ -32,6 +32,9 @@ _GENERIC = {
     "IMOVEL RURAL", "IMÓVEL RURAL", "SEM DENOMINACAO", "SEM DENOMINAÇÃO",
     "FAZENDA", "SITIO", "SÍTIO", "CHACARA", "CHÁCARA", "GLEBA", "AREA RURAL", "ÁREA RURAL",
 }
+_UFS = {
+    "AC","AL","AP","AM","BA","CE","DF","ES","GO","MA","MT","MS","MG","PA","PB","PR","PE","PI","RJ","RN","RS","RO","RR","SC","SP","SE","TO"
+}
 
 
 def _norm_text(value: Any) -> str:
@@ -74,7 +77,6 @@ def parse_area(value: Any) -> float | None:
     if not s:
         return None
     if "," in s and "." in s:
-        # Brazilian thousands + decimal convention.
         s = s.replace(".", "").replace(",", ".")
     elif "," in s:
         s = s.replace(",", ".")
@@ -183,7 +185,6 @@ def _choose_unique_name(candidates: list[Candidate]) -> tuple[Candidate | None, 
     if len(groups) != 1:
         return None, len(groups) > 1
     group = next(iter(groups.values()))
-    # Prefer SNCR then CAFIR, then freshest/lowest area delta.
     def rank(c: Candidate):
         src = 0 if c.source.startswith("SNCR/") else 1
         delta = c.area_delta_ha if c.area_delta_ha is not None else 999999.0
@@ -211,11 +212,12 @@ def lookup_unique_by_location_area(
     *, ibge_code: Any = None, uf: Any = None, municipality: Any = None, area_ha: Any = None,
     path: str | os.PathLike[str] | None = None,
 ) -> dict[str, Any]:
-    """Conservative fallback for CAR -> official registry when no shared identifier exists.
+    """Conservative CAR -> official-registry fallback.
 
-    The CAR identifier already embeds the 7-digit municipality IBGE code. We only promote
-    a name if exactly one distinct public denomination exists inside a very tight area window.
-    The method remains cross-dataset evidence, never ownership/titularity evidence.
+    Stage A uses exact IBGE municipality + a tight area tolerance suitable for SNCR's
+    four-decimal areas. If no rows exist there, stage B uses UF + municipality name and a
+    0.051 ha window so CAFIR's fixed-width one-decimal area can still match safely.
+    A name is promoted only when all matching records collapse to exactly one denomination.
     """
     area = parse_area(area_ha)
     ibge = clean_ibge(ibge_code)
@@ -223,30 +225,42 @@ def lookup_unique_by_location_area(
     mun = _fold(municipality) if municipality else None
     if area is None or (not ibge and not (ufv and mun)):
         return {"ok": False, "chosen": None, "conflict": False, "detail": "missing_location_or_area", "items": []}
-    # Tight enough for 4-decimal official areas, with a tiny proportional allowance for
-    # CAR/SNCR rounding differences. Never exceed 0.05 ha at this resolver stage.
-    tol = min(0.05, max(0.002, area * 0.00002))
+
+    tight_tol = min(0.05, max(0.002, area * 0.00002))
+    cafir_tol = 0.051
     con = connect(path, readonly=True)
     if con is None:
         return {"ok": False, "chosen": None, "conflict": False, "detail": "registry_unavailable", "items": []}
+    rows: list[sqlite3.Row] = []
+    basis: str | None = None
+    tolerance = tight_tol
     try:
         if ibge:
             rows = con.execute(
                 "SELECT * FROM property_names WHERE ibge_code=? AND area_ha BETWEEN ? AND ? ORDER BY ABS(area_ha-?) ASC, source, source_date DESC LIMIT 80",
-                (ibge, area - tol, area + tol, area),
+                (ibge, area-tight_tol, area+tight_tol, area),
             ).fetchall()
-        else:
+            if rows:
+                basis = "ibge_area"
+        # CAFIR fixed-width data has UF+municipality but not IBGE code. Only fall back
+        # when the stronger IBGE-stage produced no candidate at all.
+        if not rows and ufv and mun:
+            tolerance = cafir_tol
             rows = con.execute(
                 "SELECT * FROM property_names WHERE uf=? AND municipality_norm=? AND area_ha BETWEEN ? AND ? ORDER BY ABS(area_ha-?) ASC, source, source_date DESC LIMIT 80",
-                (ufv, mun, area - tol, area + tol, area),
+                (ufv, mun, area-cafir_tol, area+cafir_tol, area),
             ).fetchall()
+            if rows:
+                basis = "uf_municipality_area"
     finally:
         con.close()
+
     items = _rows_to_candidates(rows, area)
     chosen, conflict = _choose_unique_name(items)
     return {
         "ok": True, "chosen": chosen.as_dict() if chosen else None, "conflict": conflict,
-        "items": [x.as_dict() for x in items[:20]], "count": len(items), "area_tolerance_ha": tol,
+        "items": [x.as_dict() for x in items[:20]], "count": len(items),
+        "area_tolerance_ha": tolerance, "match_basis": basis,
         "method": "unique_official_municipality_area",
     }
 
@@ -254,11 +268,17 @@ def lookup_unique_by_location_area(
 def registry_status(path: str | os.PathLike[str] | None = None) -> dict[str, Any]:
     con = connect(path, readonly=True)
     if con is None:
-        return {"available": False, "path": str(Path(path) if path else db_path()), "records": 0}
+        return {"available": False, "path": str(Path(path) if path else db_path()), "records": 0, "ufs_present": [], "national_ready": False}
     try:
         records = int(con.execute("SELECT COUNT(*) FROM property_names").fetchone()[0])
         sources = {r[0]: int(r[1]) for r in con.execute("SELECT source,COUNT(*) FROM property_names GROUP BY source")}
+        by_uf = {r[0]: int(r[1]) for r in con.execute("SELECT uf,COUNT(*) FROM property_names WHERE uf IS NOT NULL AND LENGTH(uf)=2 GROUP BY uf ORDER BY uf") if r[0]}
+        ufs_present = sorted(set(by_uf) & _UFS)
         meta = {r[0]: r[1] for r in con.execute("SELECT key,value FROM registry_meta")}
-        return {"available": True, "path": str(Path(path) if path else db_path()), "records": records, "sources": sources, "meta": meta}
+        return {
+            "available": True, "path": str(Path(path) if path else db_path()), "records": records,
+            "sources": sources, "by_uf": by_uf, "ufs_present": ufs_present,
+            "uf_count": len(ufs_present), "national_ready": set(ufs_present) == _UFS, "meta": meta,
+        }
     finally:
         con.close()
