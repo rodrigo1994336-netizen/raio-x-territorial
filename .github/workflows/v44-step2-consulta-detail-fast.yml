@@ -1,0 +1,28 @@
+name: V44 Step 2 Consulta Detail Fast
+on:
+  push:
+    branches: [ v44-step2-consulta-detail-fast ]
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Fetch benchmark detail
+        run: |
+          set -euo pipefail
+          REF='MG-3120904-DFB380BECD7A4323AD8AA68FA14D011F'
+          curl -sSL --fail --max-time 20 'https://consulta.car.gov.br/config/env.json' -o env.json
+          B=$(python -c "import json;print(json.load(open('env.json'))['urlBackend'].rstrip('/'))")
+          curl -sSL --fail --max-time 30 "$B/totalizer/getDeatilsByIdentifier/$REF" -o detail.json
+          cat env.json
+          echo
+          cat detail.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: v44-step2-consulta-detail-fast
+          path: |
+            env.json
+            detail.json
+          retention-days: 3
