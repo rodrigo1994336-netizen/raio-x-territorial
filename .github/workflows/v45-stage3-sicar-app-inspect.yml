@@ -15,29 +15,28 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - name: Inspect public app
+      - name: Extract API base and download flows
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p probe
-          ROOT='https://consulta.car.gov.br/geoservices/'
-          curl -k -L -sS --connect-timeout 12 --max-time 60 "$ROOT" -o probe/index.html
-          echo '=== HTML ==='; cat probe/index.html; echo
+          curl -k -L -sS --connect-timeout 12 --max-time 90 \
+            'https://consulta.car.gov.br/assets/index-DEyWcQqf.js' -o probe/app.js
           python - <<'PY'
           from pathlib import Path
-          import re, subprocess
-          html=Path('probe/index.html').read_text(encoding='utf-8',errors='ignore')
-          refs=[]
-          for x in re.findall(r'(?:src|href)="([^"]+)"',html):
-              if '.js' in x: refs.append(x)
-          root='https://consulta.car.gov.br'
-          print('refs',refs)
-          for i,ref in enumerate(refs):
-              url=ref if ref.startswith('http') else root+(ref if ref.startswith('/') else '/geoservices/'+ref)
-              out=Path(f'probe/app_{i}.js')
-              subprocess.run(['curl','-k','-L','-sS','--connect-timeout','12','--max-time','90',url,'-o',str(out)],check=False)
-              print('JS',i,url,'bytes',out.stat().st_size if out.exists() else 0)
+          text=Path('probe/app.js').read_text(encoding='utf-8',errors='ignore')
+          anchors=[
+            'environmental-theme/findAll','downloadBase/get-url-file-s3',
+            'downloadBase/getShapeByIdOrigin','geo/zip','municipalities/repeated',
+            'baseURL','p3=','axios.create','recaptchaWarn','envTheme','csvFromTo'
+          ]
+          for anchor in anchors:
+              print('\n'+'='*40,anchor,'='*40)
+              start=0;hits=0
+              while True:
+                  i=text.find(anchor,start)
+                  if i<0 or hits>=8: break
+                  print(text[max(0,i-1600):min(len(text),i+2200)])
+                  print('\n--- HIT ---\n')
+                  start=i+len(anchor);hits+=1
           PY
-          echo '=== interesting strings ==='
-          grep -RhoE 'https?://[^"'"'"' )]+' probe/*.js | sort -u | head -300 || true
-          grep -RhoE '.{0,100}(download|shape|shp|municipio|município|tema|estadosCSV).{0,180}' probe/*.js | head -500 || true
