@@ -50,14 +50,11 @@ jobs:
           assert n.lookup_by_sncr('3100000000001')['chosen']['name']=='Fazenda Brasil'
           assert n.lookup_by_sncr('3100000000002')['chosen']['name']=='Fazenda CAFIR Brasil'
           assert n.lookup_by_sncr('3100000000006')['chosen']['name']=='Fazenda CAFIR CSV'
-
           go=n.lookup_unique_by_location_area(ibge_code='5208707',uf='GO',municipality='GOIÂNIA',area_ha='25.20')
           assert go['chosen']['name']=='Fazenda Única Nacional' and go['match_basis']=='ibge_area',go
           assert go['area_tolerance_rule']=='max(0.5% da área CAR, 0.01 ha)',go
-
           pa=n.lookup_unique_by_location_area(ibge_code='1501402',uf='PA',municipality='BELÉM',area_ha='30.0000')
           assert pa['chosen'] is None and pa['resolution_status']=='ambiguous',pa
-
           mg=n.lookup_unique_by_location_area(uf='MG',municipality='TESTE',area_ha='100.0')
           assert mg['chosen'] is None and mg['resolution_status']=='ambiguous' and mg['count']==2,mg
           mg2=n.lookup_unique_by_location_area(uf='MG',municipality='TESTE',area_ha='100.0',district='NORTE')
@@ -66,13 +63,10 @@ jobs:
           mg3=n.lookup_unique_by_location_area(uf='MG',municipality='TESTE',area_ha='100.0',municipality_id='MGTST',address='ESTRADA SUL')
           assert mg3['chosen']['name']=='Fazenda Janela B' and mg3['resolution_status']=='matched',mg3
           assert 'id_municipio' in mg3['disambiguation_used'] and 'endereco' in mg3['disambiguation_used'],mg3
-
           absent=n.lookup_unique_by_location_area(uf='MG',municipality='TESTE',area_ha='777.0')
           assert absent['chosen'] is None and absent['resolution_status']=='absent' and absent['count']==0,absent
-
           ba=n.lookup_unique_by_location_area(ibge_code='2903201',uf='BA',municipality='BARREIRAS',area_ha='25.1234')
           assert ba['chosen']['name']=='Fazenda CAFIR Brasil' and ba['match_basis']=='uf_municipality_area',ba
-
           con=sqlite3.connect('/tmp/rxnames/names.sqlite3')
           cols={r[1].lower() for r in con.execute('pragma table_info(property_names)')}
           assert {'municipality_id','district','address'} <= cols,cols
@@ -83,11 +77,32 @@ jobs:
           con.close()
           print('NATIONAL_NAME_MATCH_POLICY_OK')
           PY
+      - name: Validate coverage metrics split matched ambiguous absent
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > /tmp/rxnames/cars.json <<'JSON'
+          [
+            {"cod_imovel":"MG-3120904-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","cod_municipio_ibge":"3120904","uf":"MG","municipio":"CURVELO","area":14.80},
+            {"cod_imovel":"MG-0000000-BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB","uf":"MG","municipio":"TESTE","area":100.0},
+            {"cod_imovel":"MG-0000000-CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC","uf":"MG","municipio":"TESTE","area":777.0}
+          ]
+          JSON
+          python scripts/measure_cafir_name_coverage.py --db /tmp/rxnames/names.sqlite3 --cars-json /tmp/rxnames/cars.json --output /tmp/rxnames/coverage.json >/dev/null
+          python - <<'PY'
+          import json
+          d=json.load(open('/tmp/rxnames/coverage.json'))
+          assert d['total']==3,d
+          assert d['counts']['matched']==1,d
+          assert d['counts']['ambiguous']==1,d
+          assert d['counts']['absent']==1,d
+          print('COVERAGE_SPLIT_OK',d['counts'],d['percent'])
+          PY
       - name: Validate resolver priority and syntax
         shell: bash
         run: |
           set -euo pipefail
-          python -m py_compile national_property_name_registry_v44.py scripts/build_national_property_name_db.py property_identity_runtime.py
+          python -m py_compile national_property_name_registry_v44.py scripts/build_national_property_name_db.py scripts/measure_cafir_name_coverage.py property_identity_runtime.py
           python - <<'PY'
           from pathlib import Path
           p=Path('property_identity_runtime.py').read_text(encoding='utf-8')
