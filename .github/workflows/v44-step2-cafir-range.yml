@@ -1,0 +1,60 @@
+name: V44 Step 2 CAFIR Range Probe
+
+on:
+  push:
+    branches: [ v44-step2-cafir-range ]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - name: Probe ZIP central directory by HTTP Range
+        shell: bash
+        run: |
+          set -euo pipefail
+          URL='https://arquivos.receitafederal.gov.br/index.php/s/RRmcpB2tf5cXskz/download'
+          SIZE=165970604
+          START=$((SIZE-2097152))
+          echo "range_start=$START size=$SIZE" | tee range.txt
+          curl -L --fail --connect-timeout 15 --max-time 90 --max-filesize 3000000 \
+            -H "Range: bytes=${START}-" -D headers.txt "$URL" -o tail.bin
+          echo '=== HEADERS ===' | tee -a range.txt
+          cat headers.txt | tee -a range.txt
+          echo '=== BYTES ===' | tee -a range.txt
+          wc -c tail.bin | tee -a range.txt
+          python - <<'PY' | tee -a range.txt
+          import struct
+          b=open('tail.bin','rb').read()
+          base=165970604-len(b)
+          eocd=b.rfind(b'PK\x05\x06')
+          print('EOCD_OFFSET_IN_TAIL',eocd,'ABS',base+eocd if eocd>=0 else None)
+          if eocd<0: raise SystemExit('EOCD not found')
+          sig,disk,cd_disk,n_disk,n_total,cd_size,cd_off,comment_len=struct.unpack_from('<4s4H2LH',b,eocd)
+          print('ENTRIES',n_total,'CD_SIZE',cd_size,'CD_OFFSET',cd_off,'COMMENT',comment_len)
+          rel=cd_off-base
+          if rel<0:
+              print('CENTRAL_DIRECTORY_NOT_FULLY_IN_TAIL need_start=',cd_off)
+              raise SystemExit(2)
+          pos=rel
+          for i in range(n_total):
+              if b[pos:pos+4]!=b'PK\x01\x02':
+                  print('BAD_CENTRAL_SIG',i,pos,b[pos:pos+4]); break
+              vals=struct.unpack_from('<4s6H3L5H2L',b,pos)
+              comp_method=vals[4]; comp_size=vals[8]; uncomp_size=vals[9]
+              fnlen=vals[10]; extralen=vals[11]; comlen=vals[12]; local_off=vals[16]
+              name=b[pos+46:pos+46+fnlen].decode('utf-8','replace')
+              print(f'ENTRY\t{i}\t{name}\tcomp={comp_size}\tuncomp={uncomp_size}\tmethod={comp_method}\tlocal={local_off}')
+              pos += 46+fnlen+extralen+comlen
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: v44-step2-cafir-range
+          path: |
+            range.txt
+            headers.txt
+          retention-days: 3
