@@ -102,6 +102,14 @@ UI = r'''
 </script>
 '''
 
+# The base portal must stay explicitly generic until a validated-name path
+# passes the CAR cross-check above. This is presentation-only and never derives
+# a property name from a nearby map label.
+portal_v8.PORTAL_HTML = portal_v8.PORTAL_HTML.replace(
+    "$('#name').textContent=`Imóvel rural • ${p.municipality||'-'}/${p.uf||'-'}`;",
+    "$('#name').textContent=`Imóvel rural — ${p.municipality||'-'}/${p.uf||'-'}`;"
+)
+
 if 'RX_PROPERTY_NAMES_V44_TRUTH_UI' not in portal_v8.PORTAL_HTML:
     portal_v8.PORTAL_HTML = portal_v8.PORTAL_HTML.replace('</body>', UI + '<!-- RX_PROPERTY_NAMES_V44_TRUTH_UI --></body>')
 
