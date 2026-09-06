@@ -14,84 +14,45 @@ jobs:
         run: |
           set -euo pipefail
           python - <<'PY'
-          import requests,re,html,csv,io
+          import requests,re,html,csv,io,unicodedata
           from html.parser import HTMLParser
-
           class SelectParser(HTMLParser):
-              def __init__(self):
-                  super().__init__(); self.sel=None; self.opt=None; self.options={}
+              def __init__(self):super().__init__();self.sel=None;self.opt=None;self.options={}
               def handle_starttag(self,tag,attrs):
                   d=dict(attrs)
-                  if tag=='select': self.sel=d.get('name') or d.get('id')
-                  elif tag=='option' and self.sel:
-                      self.opt={'value':d.get('value') or '', 'text':''}
+                  if tag=='select':self.sel=d.get('name') or d.get('id')
+                  elif tag=='option' and self.sel:self.opt={'value':d.get('value') or '', 'text':''}
               def handle_data(self,data):
                   if self.opt is not None:self.opt['text']+=data
               def handle_endtag(self,tag):
-                  if tag=='option' and self.opt is not None and self.sel:
-                      self.options.setdefault(self.sel,[]).append((self.opt['value'],self.opt['text'].strip()));self.opt=None
+                  if tag=='option' and self.opt is not None and self.sel:self.options.setdefault(self.sel,[]).append((self.opt['value'],self.opt['text'].strip()));self.opt=None
                   elif tag=='select':self.sel=None
-
-          def parse_opts(text):
-              p=SelectParser();p.feed(text);return p.options
-          def norm(s):
-              import unicodedata
-              return ''.join(c for c in unicodedata.normalize('NFKD',str(s or '')) if not unicodedata.combining(c)).upper().strip()
-
-          base='https://sncr.serpro.gov.br'
-          url=base+'/sncr-web/consultaPublica.jsf'
+          def parse_opts(t):p=SelectParser();p.feed(t);return p.options
+          def norm(s):return ''.join(c for c in unicodedata.normalize('NFKD',str(s or '')) if not unicodedata.combining(c)).upper().strip()
           s=requests.Session();s.headers.update({'User-Agent':'Mozilla/5.0 (Raio-X Territorial public-open-data sync audit)','Accept-Language':'pt-BR,pt;q=0.9'})
-          r=s.get(url,timeout=30,allow_redirects=True);r.raise_for_status();action=r.url
-          view=re.search(r'name="javax.faces.ViewState"[^>]*value="([^"]+)"',r.text)
-          if not view:raise SystemExit('NO_VIEWSTATE')
-          vs=html.unescape(view.group(1)); opts=parse_opts(r.text)
-          print('DATA_LAST',re.findall(r'Data da Última Geração:\s*([^<]+)',r.text)[:1])
-          print('UF_OPTIONS',opts.get('selectUf'))
-          mg=[v for v,t in opts.get('selectUf',[]) if norm(t) in ('MG','MINAS GERAIS')]
-          if not mg:raise SystemExit('MG_OPTION_NOT_FOUND')
-          mg=mg[0];print('MG_VALUE',mg)
-
-          ajax={
-            'javax.faces.partial.ajax':'true','javax.faces.source':'selectUf','javax.faces.partial.execute':'selectUf',
-            'javax.faces.partial.render':'selectMunicipio','javax.faces.behavior.event':'change','javax.faces.partial.event':'change',
-            'formConsultaPublica':'formConsultaPublica','selectUf':mg,'selectMunicipio':'','javax.faces.ViewState':vs
-          }
-          rr=s.post(action,data=ajax,headers={'Faces-Request':'partial/ajax','X-Requested-With':'XMLHttpRequest'},timeout=30)
-          print('AJAX',rr.status_code,'bytes',len(rr.content),'type',rr.headers.get('content-type'))
-          # Partial-response contains escaped select markup inside CDATA.
-          body=html.unescape(rr.text)
-          m=re.search(r'<update id="selectMunicipio"><!\[CDATA\[(.*?)\]\]></update>',body,re.S)
-          frag=m.group(1) if m else body
-          mopts=parse_opts(frag).get('selectMunicipio',[])
-          print('MUNIC_COUNT',len(mopts),'SAMPLE',mopts[:8])
-          cur=[v for v,t in mopts if norm(t)=='CURVELO']
-          if not cur:
-              print('CURVELO_MATCHES',[(v,t) for v,t in mopts if 'CURVEL' in norm(t)])
-              raise SystemExit('CURVELO_OPTION_NOT_FOUND')
-          cur=cur[0];print('CURVELO_VALUE',cur)
+          r=s.get('https://sncr.serpro.gov.br/sncr-web/consultaPublica.jsf',timeout=30,allow_redirects=True);r.raise_for_status();action=r.url
+          vs=html.unescape(re.search(r'name="javax.faces.ViewState"[^>]*value="([^"]+)"',r.text).group(1));opts=parse_opts(r.text)
+          mg=[v for v,t in opts['selectUf'] if norm(t)=='MINAS GERAIS'][0]
+          ajax={'javax.faces.partial.ajax':'true','javax.faces.source':'selectUf','javax.faces.partial.execute':'selectUf','javax.faces.partial.render':'selectMunicipio','javax.faces.behavior.event':'change','javax.faces.partial.event':'change','formConsultaPublica':'formConsultaPublica','selectUf':mg,'selectMunicipio':'','javax.faces.ViewState':vs}
+          rr=s.post(action,data=ajax,headers={'Faces-Request':'partial/ajax','X-Requested-With':'XMLHttpRequest'},timeout=30);body=html.unescape(rr.text)
+          m=re.search(r'<update id="selectMunicipio"><!\[CDATA\[(.*?)\]\]></update>',body,re.S);frag=m.group(1) if m else body
+          cur=[v for v,t in parse_opts(frag).get('selectMunicipio',[]) if norm(t)=='CURVELO'][0]
           vs2=re.search(r'<update id="javax.faces.ViewState"><!\[CDATA\[(.*?)\]\]></update>',rr.text,re.S)
           if vs2:vs=html.unescape(vs2.group(1))
-
-          data={'formConsultaPublica':'formConsultaPublica','selectUf':mg,'selectMunicipio':cur,'botaoDownload':'','javax.faces.ViewState':vs}
-          dl=s.post(action,data=data,timeout=60,allow_redirects=True)
-          print('DOWNLOAD',dl.status_code,'bytes',len(dl.content),'type',dl.headers.get('content-type'),'disp',dl.headers.get('content-disposition'),'url',dl.url)
-          txt=''
-          ctype=(dl.headers.get('content-type') or '').lower()
-          if 'csv' in ctype or 'text/' in ctype or dl.content[:3] in (b'\xef\xbb\xbf',):
-              for enc in ('utf-8-sig','latin1'):
-                  try:txt=dl.content.decode(enc);break
-                  except Exception:pass
-          if txt:
-              print('CSV_HEAD',txt[:2000].replace('\n',' | '))
-              rows=list(csv.reader(io.StringIO(txt),delimiter=';'))
-              print('CSV_ROWS',len(rows),'HEADER',rows[:1])
-              hits=[]
-              for row in rows[1:]:
-                  joined=' | '.join(row)
-                  n=norm(joined)
-                  if 'LAGOA BONITA' in n or '14,795' in joined or '14.795' in joined:
-                      hits.append(row)
-              print('TARGET_HITS',hits[:30])
+          print('SOURCE_DATE',re.findall(r'Data da Última Geração:\s*([^<]+)',r.text)[:1],'MG',mg,'CURVELO',cur)
+          dl=s.post(action,data={'formConsultaPublica':'formConsultaPublica','selectUf':mg,'selectMunicipio':cur,'botaoDownload':'','javax.faces.ViewState':vs},timeout=60,allow_redirects=True)
+          ctype=(dl.headers.get('content-type') or '').lower();disp=dl.headers.get('content-disposition') or ''
+          print('DOWNLOAD',dl.status_code,'bytes',len(dl.content),'type',ctype,'disp',disp,'url',dl.url)
+          is_csv=('csv' in ctype) or ('attachment' in disp.lower() and '.csv' in disp.lower())
+          if is_csv:
+              txt=dl.content.decode('utf-8-sig','replace');rows=list(csv.reader(io.StringIO(txt),delimiter=';'));print('CSV_ROWS',len(rows),'HEADER',rows[:1])
+              hits=[row for row in rows[1:] if 'LAGOA BONITA' in norm(' | '.join(row)) or any(x.strip().replace(',','.') in ('14.795','14.7950') for x in row)]
+              print('TARGET_HITS',hits[:40])
           else:
-              print('NONCSV_HEAD',dl.text[:2000].replace('\n',' ') if 'html' in ctype else dl.content[:300])
+              clean=re.sub(r'<script.*?</script>|<style.*?</style>',' ',dl.text,flags=re.S|re.I);clean=re.sub(r'<[^>]+>',' ',clean);clean=html.unescape(re.sub(r'\s+',' ',clean))
+              for key in ('captcha','obrigat','erro','selec','download','geração','geracao','mensagem'):
+                  pos=norm(clean).find(norm(key))
+                  if pos>=0:print('PAGE_MESSAGE',key,clean[max(0,pos-220):pos+700])
+              for pat in (r'h-captcha[^<]{0,500}',r'data-sitekey="[^"]+"',r'name="[^"]*captcha[^"]*"[^>]*'):
+                  print('CAPTCHA_MARKERS',re.findall(pat,dl.text,re.I)[:10])
           PY
