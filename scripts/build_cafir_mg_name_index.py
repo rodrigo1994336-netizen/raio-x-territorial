@@ -4,6 +4,7 @@ import gzip
 import json
 import re
 import shutil
+import time
 import unicodedata
 import urllib.request
 from collections import Counter, defaultdict
@@ -44,9 +45,19 @@ def dec(b):
     return b.decode('latin1','replace').strip()
 
 
-def get(url):
-    req=urllib.request.Request(url,headers={'User-Agent':'Raio-X-Territorial/CAFIR-NameIndex-V1'})
-    with urllib.request.urlopen(req,timeout=240) as r:return r.read()
+def get(url,retries=7):
+    last=None
+    for attempt in range(retries):
+        try:
+            req=urllib.request.Request(url,headers={'User-Agent':'Raio-X-Territorial/CAFIR-NameIndex-V1','Accept':'text/csv,*/*'})
+            with urllib.request.urlopen(req,timeout=180) as r:return r.read()
+        except Exception as exc:
+            last=exc
+            if attempt+1<retries:
+                pause=min(18,2.0*(attempt+1))
+                print(f'DOWNLOAD_RETRY attempt={attempt+1}/{retries} wait={pause}s error={type(exc).__name__}:{str(exc)[:180]}',flush=True)
+                time.sleep(pause)
+    raise last
 
 
 def shard_for(a):
@@ -83,19 +94,21 @@ def main():
         stats.update(total=total,active=active,named=named,bad=bad)
         print(part,total,active,named,bad,flush=True)
     manifest={}
+    indexed_records=0
     for key,rows in sorted(shards.items()):
         rows.sort(key=lambda x:(x[0],x[2],x[3] if x[3] is not None else -1,x[4],x[5]))
         p=out/f'{key}.jsonl.gz'
         with gzip.open(p,'wt',encoding='utf-8',compresslevel=9) as f:
             for r in rows:f.write(json.dumps(r,ensure_ascii=False,separators=(',',':'))+'\n')
+        indexed_records+=len(rows)
         manifest[key]={'records':len(rows),'bytes':p.stat().st_size,'file':p.name}
         print('SHARD',key,len(rows),p.stat().st_size,flush=True)
     meta={
       'source':'Receita Federal / CAFIR - compartilhamento público oficial',
       'dav_root':DAV,'snapshot':SNAPSHOT,'uf':'MG','generated_at_utc':datetime.now(timezone.utc).isoformat(),
       'record_contract':'[normalized_alias,display_name,municipality_normalized,area_tenths_ha,incra_code,nirf]',
-      'active_records':stats['active'],'active_named_records':stats['named'],'files':files,'shards':manifest,
-      'coverage_statement':'All active MG CAFIR records with a usable denomination in snapshot D60901 are represented in exactly one alias shard. This is CAFIR-record coverage, not CAR->name coverage.',
+      'active_records':stats['active'],'active_named_records':stats['named'],'indexed_named_records':indexed_records,'files':files,'shards':manifest,
+      'coverage_statement':'All active MG CAFIR records with a usable denomination and searchable normalized alias (>=2 chars) in snapshot D60901 are represented in exactly one alias shard. This is CAFIR-record coverage, not CAR->name coverage.',
       'personal_data_fields_in_index':False,
     }
     (out/'meta.json').write_text(json.dumps(meta,ensure_ascii=False,indent=2),encoding='utf-8')
