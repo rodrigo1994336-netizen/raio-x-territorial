@@ -1,0 +1,51 @@
+name: V44 Step 2 Consulta Query
+on:
+  push:
+    branches: [ v44-step2-consulta-query ]
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Query official public CAR flow
+        shell: bash
+        run: |
+          set -euo pipefail
+          REF='MG-3120904-DFB380BECD7A4323AD8AA68FA14D011F'
+          mkdir -p out oldjs
+          curl -sSL --fail 'https://consulta.car.gov.br/config/env.json' -o out/env.json
+          python - <<'PY'
+          import json
+          x=json.load(open('out/env.json'))
+          print(json.dumps(x,ensure_ascii=False,indent=2))
+          open('out/backend.txt','w').write(str(x.get('urlBackend','')).rstrip('/'))
+          open('out/base-sicar.txt','w').write(str(x.get('urlBaseSicar','')).rstrip('/'))
+          PY
+          BACKEND=$(cat out/backend.txt); SICAR=$(cat out/base-sicar.txt)
+          echo "BACKEND=$BACKEND" > out/proof.txt
+          echo "SICAR=$SICAR" >> out/proof.txt
+          curl -sSL --fail "$BACKEND/totalizer/getDeatilsByIdentifier/$REF" -o out/detail.json
+          echo '=== DETAIL ===' >> out/proof.txt; cat out/detail.json >> out/proof.txt; echo >> out/proof.txt
+          curl -sSL --fail "$SICAR/consultar/$REF" -o out/sicar.html
+          echo '=== SICAR HTML HEAD ===' >> out/proof.txt; head -c 30000 out/sicar.html >> out/proof.txt; echo >> out/proof.txt
+          python - <<'PY'
+          from pathlib import Path
+          from urllib.parse import urljoin
+          import re,subprocess
+          base=Path('out/base-sicar.txt').read_text().strip()+'/'
+          h=Path('out/sicar.html').read_text(errors='ignore')
+          srcs=re.findall(r'<script[^>]+src=["\']([^"\']+)',h,re.I)
+          Path('out/sicar-scripts.txt').write_text('\n'.join(urljoin(base,s) for s in srcs))
+          print('SCRIPTS',srcs)
+          for i,u in enumerate(urljoin(base,s) for s in srcs[-20:]):
+              subprocess.run(['curl','-sSL','--fail','--connect-timeout','5','--max-time','15',u,'-o',f'oldjs/{i:02d}.js'],check=False)
+          PY
+          grep -RnioE '.{0,220}(demonstrativo|nome.?do.?im[oó]vel|nome.?imovel|cod_imovel|numero.?registro|consultar|gerar.?pdf|pdf|api|rest).{0,420}' oldjs | head -700 > out/old-clues.txt || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: v44-step2-consulta-query
+          path: out
+          retention-days: 3
