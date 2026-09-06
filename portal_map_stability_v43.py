@@ -34,7 +34,13 @@ if start_i < 0 or end_i < 0 or html.find(parcel_start, start_i + 1) >= 0:
 parcel_reconcile = r"""if(!rxParcelLayer)rxParcelLayer=L.layerGroup().addTo(m);const rxNextParcels=new Set();const rxParcelStyleFor=f=>(window.rxParcelStyle?window.rxParcelStyle(f):{color:'#48d995',weight:1.4,fillColor:'#48d995',fillOpacity:.075});const rxParcelKey=(f,i)=>{const p=propertyFromFeature(f);return String(p.car_code||f?.id||('anon:'+i+':'+(p.municipality||'')+':'+(p.area_ha??'')))};const rxGeomSig=f=>{try{return JSON.stringify(f?.geometry?.coordinates||[]).length}catch(e){return 0}};const rxBuildParcel=(f,key)=>{const group=L.geoJSON(f,{style:rxParcelStyleFor,onEachFeature:(ff,l)=>{l.bindTooltip('',{sticky:true});l.on('click',e=>{if(e.originalEvent)L.DomEvent.stopPropagation(e.originalEvent);const live=l.feature||ff,p=propertyFromFeature(live);if(typeof showProperty==='function')showProperty(p,live.geometry)})}});group.__rxGeomSig=rxGeomSig(f);group.eachLayer(l=>{const p=propertyFromFeature(f);l.feature=f;l.setTooltipContent?.(`<b>${p.municipality||'Imóvel rural'}</b><br>${p.area_ha??'—'} ha`)});group.addTo(rxParcelLayer);rxParcelIndex.set(key,group);return group};(d.features||[]).forEach((f,i)=>{const key=rxParcelKey(f,i);rxNextParcels.add(key);let group=rxParcelIndex.get(key),sig=rxGeomSig(f);if(!group){rxBuildParcel(f,key);return}if(group.__rxGeomSig!==sig){const fresh=rxBuildParcel(f,key);try{rxParcelLayer.removeLayer(group)}catch(e){}rxParcelIndex.set(key,fresh);return}group.eachLayer(l=>{l.feature=f;try{l.setStyle?.(rxParcelStyleFor(f))}catch(e){}const p=propertyFromFeature(f);try{l.setTooltipContent?.(`<b>${p.municipality||'Imóvel rural'}</b><br>${p.area_ha??'—'} ha`)}catch(e){}})});for(const [key,group] of [...rxParcelIndex.entries()]){if(rxNextParcels.has(key))continue;try{rxParcelLayer.removeLayer(group)}catch(e){}rxParcelIndex.delete(key)}"""
 html = html[:start_i] + parcel_reconcile + html[end_i:]
 
-# Names: stable marker reconciliation + intentionally lower phone density.
+# Names: V43 originally replaced the whole render function for incremental marker
+# reconciliation. V44 introduced a stricter semantic split between VALIDATED_PROPERTY_NAME
+# and REFERENCE. Replacing that renderer would silently reintroduce the old truth bug.
+# Therefore V44 keeps its own renderer intact; this module only applies density/clear/zoom
+# stability around it. The legacy renderer replacement remains available only when V44 is
+# not present.
+v44_name_truth = 'RX_PROPERTY_NAMES_V44_TRUTH_UI' in html
 once(
     "let nameLayer=null,timer=null,lastKey='',seq=0;",
     "let nameLayer=null,timer=null,lastKey='',seq=0,nameIndex=new Map();",
@@ -50,17 +56,25 @@ once(
     "function clearNames(){const m=getMap();if(m&&nameLayer){try{m.removeLayer(nameLayer)}catch(e){}}nameLayer=null;nameIndex.clear();sourceBadge('')}",
     'v43_5_name_clear_injection_point_missing',
 )
-name_pattern = re.compile(r"function render\(items,z\)\{.*?return rendered\}\s*async function refresh", re.S)
-if len(name_pattern.findall(html)) != 1:
-    raise RuntimeError('v43_5_name_reconcile_injection_point_missing')
-name_render = r"""function render(items,z){const m=getMap();if(!m)return 0;if(!nameLayer)nameLayer=L.layerGroup().addTo(m);const limit=limitFor(z),next=new Set();let rendered=0;const mkIcon=x=>{const label=esc(x.name),low=z<=12?' rx-name-lowzoom':'';return L.divIcon({className:'rx-farm-name-icon',html:`<div class=\"rx-farm-name-label${low}\" title=\"${label}\">${label}</div>`,iconSize:[1,1],iconAnchor:[0,0]})};(items||[]).slice(0,limit).forEach(x=>{const lat=Number(x?.center?.lat),lon=Number(x?.center?.lon);if(!Number.isFinite(lat)||!Number.isFinite(lon)||!x?.name)return;const key=String(x.registry||x.car_code||x.name)+'|'+lat.toFixed(5)+'|'+lon.toFixed(5);next.add(key);let mk=nameIndex.get(key);if(!mk){mk=L.marker([lat,lon],{icon:mkIcon(x),keyboard:true,riseOnHover:true});mk.__rxName=x;mk.on('click',()=>openNamedProperty(mk.__rxName));mk.addTo(nameLayer);nameIndex.set(key,mk)}else{mk.__rxName=x;mk.setLatLng([lat,lon]);mk.setIcon(mkIcon(x))}const tip=`${esc(x.name)}${x.municipality?' · '+esc(x.municipality):''}${x.uf?' / '+esc(x.uf):''}${x.registry?' · Matrícula '+esc(x.registry):''}`;if(mk.getTooltip?.())mk.setTooltipContent(tip);else mk.bindTooltip(tip,{direction:'top',offset:[0,-8]});rendered++});for(const [key,mk] of [...nameIndex.entries()]){if(next.has(key))continue;try{nameLayer.removeLayer(mk)}catch(e){}nameIndex.delete(key)}return rendered}
+if v44_name_truth:
+    # Preserve V44's isValidated/openValidatedProperty/openReference renderer verbatim.
+    once(
+        "const m=getMap();if(!m||dossierOpen())return;const z=m.getZoom();if(z<11){clearNames();return}",
+        "const m=getMap();if(!m||dossierOpen())return;const z=m.getZoom();if(z<(mobileMap()?12:11)){clearNames();return}",
+        'v43_5_v44_name_zoom_injection_point_missing',
+    )
+else:
+    name_pattern = re.compile(r"function render\(items,z\)\{.*?return rendered\}\s*async function refresh", re.S)
+    if len(name_pattern.findall(html)) != 1:
+        raise RuntimeError('v43_5_name_reconcile_injection_point_missing')
+    name_render = r"""function render(items,z){const m=getMap();if(!m)return 0;if(!nameLayer)nameLayer=L.layerGroup().addTo(m);const limit=limitFor(z),next=new Set();let rendered=0;const mkIcon=x=>{const label=esc(x.name),low=z<=12?' rx-name-lowzoom':'';return L.divIcon({className:'rx-farm-name-icon',html:`<div class=\"rx-farm-name-label${low}\" title=\"${label}\">${label}</div>`,iconSize:[1,1],iconAnchor:[0,0]})};(items||[]).slice(0,limit).forEach(x=>{const lat=Number(x?.center?.lat),lon=Number(x?.center?.lon);if(!Number.isFinite(lat)||!Number.isFinite(lon)||!x?.name)return;const key=String(x.registry||x.car_code||x.name)+'|'+lat.toFixed(5)+'|'+lon.toFixed(5);next.add(key);let mk=nameIndex.get(key);if(!mk){mk=L.marker([lat,lon],{icon:mkIcon(x),keyboard:true,riseOnHover:true});mk.__rxName=x;mk.on('click',()=>openNamedProperty(mk.__rxName));mk.addTo(nameLayer);nameIndex.set(key,mk)}else{mk.__rxName=x;mk.setLatLng([lat,lon]);mk.setIcon(mkIcon(x))}const tip=`${esc(x.name)}${x.municipality?' · '+esc(x.municipality):''}${x.uf?' / '+esc(x.uf):''}${x.registry?' · Matrícula '+esc(x.registry):''}`;if(mk.getTooltip?.())mk.setTooltipContent(tip);else mk.bindTooltip(tip,{direction:'top',offset:[0,-8]});rendered++});for(const [key,mk] of [...nameIndex.entries()]){if(next.has(key))continue;try{nameLayer.removeLayer(mk)}catch(e){}nameIndex.delete(key)}return rendered}
   async function refresh"""
-html = name_pattern.sub(lambda _: name_render, html, count=1)
-once(
-    "async function refresh(){const m=getMap();if(!m||dossierOpen())return;const z=m.getZoom();if(z<11){clearNames();return}",
-    "async function refresh(){const m=getMap();if(!m||dossierOpen())return;const z=m.getZoom();if(z<(mobileMap()?12:11)){clearNames();return}",
-    'v43_5_name_zoom_injection_point_missing',
-)
+    html = name_pattern.sub(lambda _: name_render, html, count=1)
+    once(
+        "async function refresh(){const m=getMap();if(!m||dossierOpen())return;const z=m.getZoom();if(z<11){clearNames();return}",
+        "async function refresh(){const m=getMap();if(!m||dossierOpen())return;const z=m.getZoom();if(z<(mobileMap()?12:11)){clearNames();return}",
+        'v43_5_name_zoom_injection_point_missing',
+    )
 
 # Automatic regional context is secondary on phones. Desktop swaps the new set
 # before removing the old set to avoid a visible blank frame.
@@ -91,7 +105,7 @@ once(
 once(
     "if(markerLayer)mm.removeLayer(markerLayer);markerLayer=L.layerGroup().addTo(mm);const interests=[];",
     "const previousMarkers=markerLayer;markerLayer=L.layerGroup();const interests=[];",
-    'v43_5_rare_swap_injection_point_missing',
+    'v43_5_rare_swap_start_missing',
 )
 once(
     "lastCount=(d.features||[]).length;q('#rxRareCount').textContent=String(lastCount);",
@@ -136,4 +150,4 @@ MOBILE_CLEANUP = r'''
 html = html.replace('</body>', MOBILE_CLEANUP + '</body>')
 portal_v8.PORTAL_HTML = html
 portal_v8.APP_PORTAL_VERSION = '0.43.5-v43-snapshot-first'
-print('RX_MAP_STABILITY_V43=V43_5_incremental_layers_mobile_hierarchy', flush=True)
+print('RX_MAP_STABILITY_V43=V43_5_incremental_layers_mobile_hierarchy_v44_name_truth_safe', flush=True)
