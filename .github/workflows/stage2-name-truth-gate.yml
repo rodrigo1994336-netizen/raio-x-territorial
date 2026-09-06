@@ -2,12 +2,18 @@ name: Stage 2 Name Truth Gate
 
 on:
   push:
-    branches: [ v44-step2-cafir-mg-metrics-fast, main ]
+    branches: [ v44-step2-finalize, main ]
     paths:
       - property_identity_runtime.py
       - property_names_viewport_v30.py
       - portal_property_names_v30.py
+      - cafir_name_search_v44.py
+      - portal_cafir_inverse_v44.py
+      - portal_advanced_name_v40.py
+      - data/cafir/name_shards/MG/**
       - .github/workflows/stage2-name-truth-gate.yml
+  pull_request:
+    branches: [ main ]
   workflow_dispatch:
 
 jobs:
@@ -21,7 +27,7 @@ jobs:
           python-version: '3.12'
       - name: Compile changed Python modules
         run: |
-          python -m py_compile property_identity_runtime.py property_names_viewport_v30.py portal_property_names_v30.py
+          python -m py_compile property_identity_runtime.py property_names_viewport_v30.py portal_property_names_v30.py cafir_name_search_v44.py portal_cafir_inverse_v44.py portal_advanced_name_v40.py
       - name: Enforce name truth contract
         run: |
           python - <<'PY'
@@ -30,6 +36,9 @@ jobs:
           identity=Path('property_identity_runtime.py').read_text()
           viewport=Path('property_names_viewport_v30.py').read_text()
           ui=Path('portal_property_names_v30.py').read_text()
+          inverse=Path('portal_cafir_inverse_v44.py').read_text()
+          inverse_runtime=Path('cafir_name_search_v44.py').read_text()
+          legacy=Path('portal_advanced_name_v40.py').read_text()
 
           # Live OSM and raw SIGEF are references, never property identities.
           assert "'reference_kind':'OSM_LIVE'" in identity
@@ -75,5 +84,38 @@ jobs:
           assert 'd.property.name=x.name' not in ui
           assert 'Denominação validada · Origem:' in ui
 
+          # Inverse search is CAFIR-first and never names a CAR by inference.
+          assert "'type':'cafir'" in inverse_runtime
+          assert "'car_code':None" in inverse_runtime
+          assert "'panel_name_eligible':False" in inverse_runtime
+          assert "x?.type==='cafir'" in inverse
+          assert 'CAR não vinculado automaticamente' in inverse
+          assert 'd.property.name=x.name' not in legacy
+          assert 'REFERENCE_ONLY_CENTROID' in legacy
+
           print('RX_STAGE2_NAME_TRUTH_GATE=PASS')
+          PY
+      - name: Verify direct CAFIR inverse-search benchmark from materialized official index
+        run: |
+          python - <<'PY'
+          import gzip,json
+          from pathlib import Path
+          root=Path('data/cafir/name_shards/MG')
+          meta=json.loads((root/'meta.json').read_text(encoding='utf-8'))
+          assert meta['snapshot']=='D60901'
+          assert meta['active_records']==1281097
+          assert meta['active_named_records']==1280741
+          assert meta['indexed_named_records']==1280710
+          assert meta['unsearchable_normalized_names']==31
+          assert meta['personal_data_fields_in_index'] is False
+          found=[]
+          with gzip.open(root/'L.jsonl.gz','rt',encoding='utf-8') as f:
+              for line in f:
+                  row=json.loads(line)
+                  alias,name,municipality,area_tenth,incra,nirf=row
+                  if alias=='LAGOA BONITA' and municipality=='CURVELO':
+                      found.append(row)
+          exact=[r for r in found if r[1].upper()=='SITIO LAGOA BONITA' and r[3]==119 and r[4]=='0000192269636' and r[5]=='72558199']
+          assert exact, found[:20]
+          print('RX_STAGE2_CAFIR_INVERSE=PASS','matches=',len(found),'benchmark=',exact[0])
           PY
