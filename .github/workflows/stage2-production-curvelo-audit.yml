@@ -1,6 +1,6 @@
 name: Stage 2 Production Curvelo Audit
 
-# rerun after production PRODES display fix 7838e9c
+# reused as read-only production audit for Stage 3 composition
 on:
   push:
     branches: [ v44-step2-finalize ]
@@ -40,6 +40,18 @@ jobs:
           pdfinfo audit/report.pdf > audit/pdfinfo.txt
           pdftoppm -png -r 140 -f 1 -l 40 audit/report.pdf audit/pages/page >/dev/null 2>&1
 
+      - name: Print Stage 3 composition evidence
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          text=Path('audit/report.txt').read_text(encoding='utf-8',errors='ignore')
+          keys=('área do imóvel','area do imovel','consolid','vegetação','vegetacao','regenera','app','preservação permanente','preservacao permanente','recompor','recomposição','recomposicao','reserva legal')
+          for line in text.splitlines():
+              low=line.lower()
+              if any(k in low for k in keys):
+                  print(line.rstrip())
+          PY
+
       - name: Build focused validation summary
         run: |
           python - <<'PY'
@@ -56,12 +68,7 @@ jobs:
             'prodes_post2019_ha_visible': '0.027909' in low or '0,027909' in low,
             'prodes_post2019_pct_visible': '0.1886' in low or '0,1886' in low,
           }
-          summary={
-            'pdf_bytes':Path('audit/report.pdf').stat().st_size,
-            'page_png_count':len(list(Path('audit/pages').glob('*.png'))),
-            'checks':checks,
-            'all_focused_checks_pass':all(checks.values()),
-          }
+          summary={'pdf_bytes':Path('audit/report.pdf').stat().st_size,'page_png_count':len(list(Path('audit/pages').glob('*.png'))),'checks':checks,'all_focused_checks_pass':all(checks.values())}
           Path('audit/summary.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2),encoding='utf-8')
           print(json.dumps(summary,ensure_ascii=False,indent=2))
           PY
