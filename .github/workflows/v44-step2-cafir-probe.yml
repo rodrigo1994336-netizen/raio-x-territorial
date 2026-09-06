@@ -1,0 +1,96 @@
+name: V44 Step 2 CAFIR Probe
+
+on:
+  push:
+    branches: [ v44-step2-cafir-probe ]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Download CAFIR and dictionary
+        shell: bash
+        run: |
+          set -euo pipefail
+          CAFIR='https://arquivos.receitafederal.gov.br/index.php/s/RRmcpB2tf5cXskz/download'
+          DICT='https://arquivos.receitafederal.gov.br/index.php/s/EEB7HTqbzasD4oS/download'
+          curl -L --fail --retry 2 --connect-timeout 15 --max-time 360 "$CAFIR" -o cafir.bin
+          curl -L --fail --retry 2 --connect-timeout 15 --max-time 120 "$DICT" -o dict.bin || true
+          {
+            echo '=== FILES ==='
+            ls -lh cafir.bin dict.bin 2>/dev/null || true
+            file cafir.bin dict.bin 2>/dev/null || true
+            echo '=== CAFIR MAGIC ==='
+            xxd -l 64 cafir.bin
+            echo '=== DICT MAGIC ==='
+            xxd -l 64 dict.bin 2>/dev/null || true
+          } | tee probe.txt
+      - name: Inspect archive/text and target names
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p work
+          if unzip -t cafir.bin >/dev/null 2>&1; then
+            echo 'CAFIR_IS_ZIP=1' | tee -a probe.txt
+            unzip -l cafir.bin | head -80 | tee -a probe.txt
+            unzip -q cafir.bin -d work
+          elif tar -tf cafir.bin >/dev/null 2>&1; then
+            echo 'CAFIR_IS_TAR=1' | tee -a probe.txt
+            tar -tf cafir.bin | head -80 | tee -a probe.txt
+            tar -xf cafir.bin -C work
+          else
+            cp cafir.bin work/cafir.data
+          fi
+          if unzip -t dict.bin >/dev/null 2>&1; then unzip -q dict.bin -d work/dict; else mkdir -p work/dict; cp dict.bin work/dict/dict.data 2>/dev/null || true; fi
+          echo '=== WORK FILES ===' | tee -a probe.txt
+          find work -maxdepth 3 -type f -printf '%p %s bytes\n' | head -100 | tee -a probe.txt
+          echo '=== TARGET SEARCH ===' | tee -a probe.txt
+          python - <<'PY' | tee -a probe.txt
+          from pathlib import Path
+          pats=['SÍTIO LAGOA BONITA','SITIO LAGOA BONITA','LAGOA BONITA','CURVELO','MG-3120904-DFB380BECD7A4323AD8AA68FA14D011F']
+          for p in Path('work').rglob('*'):
+              if not p.is_file() or p.stat().st_size>400_000_000: continue
+              b=p.read_bytes()
+              s=''
+              for enc in ('utf-8','latin1','cp1252'):
+                  try:s=b.decode(enc);break
+                  except: pass
+              if not s: continue
+              hits=[]
+              for pat in pats:
+                  n=s.upper().count(pat.upper())
+                  if n: hits.append((pat,n))
+              if hits:
+                  print('FILE',p,'HITS',hits)
+                  shown=0
+                  for i,line in enumerate(s.splitlines()):
+                      u=line.upper()
+                      if any(pat.upper() in u for pat in pats):
+                          print('LINE',i+1,line[:1200])
+                          shown+=1
+                          if shown>=20: break
+          PY
+          echo '=== HEADS ===' | tee -a probe.txt
+          python - <<'PY' | tee -a probe.txt
+          from pathlib import Path
+          for p in Path('work').rglob('*'):
+              if p.is_file() and p.stat().st_size<400_000_000:
+                  b=p.read_bytes()[:8192]
+                  s=''
+                  for enc in ('utf-8','latin1','cp1252'):
+                      try:s=b.decode(enc);break
+                      except: pass
+                  if s:
+                      print('\nFILE',p)
+                      print('\n'.join(s.splitlines()[:12]))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: v44-step2-cafir-probe
+          path: probe.txt
+          retention-days: 7
