@@ -29,7 +29,6 @@ jobs:
           python - <<'PY'
           from pathlib import Path
           widths=(8,9,13,55,2,56,40,2,40,8,1,8,1)
-          # CAFIR fixed-width AREA_TOTAL is 8,1 with implicit decimal: 000000251 = 25.1 ha.
           vals=('87654321','000000251','3100000000002','Fazenda CAFIR Brasil','AT','RODOVIA TESTE','ZONA RURAL','BA','BARREIRAS','47800000','N','20260901','S')
           line=''.join(str(v)[:w].ljust(w) for v,w in zip(vals,widths))
           Path('/tmp/rxnames/cafir.part').write_bytes((line+'\n').encode('iso-8859-1'))
@@ -40,7 +39,7 @@ jobs:
             --cafir-file /tmp/rxnames/cafir.part \
             --cafir-csv /tmp/rxnames/cafir.csv \
             --source-date 2026-09-01
-      - name: Validate exact, nationwide area match, conflict and privacy minimization
+      - name: Validate exact nationwide fallback conflict and privacy minimization
         shell: bash
         run: |
           set -euo pipefail
@@ -56,13 +55,21 @@ jobs:
           c=n.lookup_by_sncr('3100000000006')
           assert c['chosen']['name']=='Fazenda CAFIR CSV' and c['chosen']['cib']=='AB12345678', c
 
-          go=n.lookup_unique_by_location_area(ibge_code='5208707',area_ha='25.1234')
-          assert go['chosen']['name']=='Fazenda Única Nacional', go
-          pa=n.lookup_unique_by_location_area(ibge_code='1501402',area_ha='30.0000')
-          assert pa['chosen'] is None and pa['conflict'] is True, pa
+          go=n.lookup_unique_by_location_area(ibge_code='5208707',uf='GO',municipality='GOIÂNIA',area_ha='25.1234')
+          assert go['chosen']['name']=='Fazenda Única Nacional' and go['match_basis']=='ibge_area', go
+          pa=n.lookup_unique_by_location_area(ibge_code='1501402',uf='PA',municipality='BELÉM',area_ha='30.0000')
+          assert pa['chosen'] is None and pa['conflict'] is True and pa['match_basis']=='ibge_area', pa
+
+          # CAFIR fixed-width has no IBGE column. A real CAR still supplies IBGE+UF+municipality;
+          # after zero exact-IBGE candidates, the registry must safely fall back to UF+municipality
+          # and tolerate CAFIR's one-decimal area rounding (25.1234 CAR -> 25.1 CAFIR).
+          ba=n.lookup_unique_by_location_area(ibge_code='2903201',uf='BA',municipality='BARREIRAS',area_ha='25.1234')
+          assert ba['chosen']['name']=='Fazenda CAFIR Brasil', ba
+          assert ba['match_basis']=='uf_municipality_area' and ba['area_tolerance_ha']==0.051, ba
 
           st=n.registry_status()
           assert st['available'] and st['records']==6, st
+          assert set(st['ufs_present'])=={'BA','GO','MG','PA','RS'} and st['national_ready'] is False, st
 
           con=sqlite3.connect('/tmp/rxnames/names.sqlite3')
           cols={r[1].lower() for r in con.execute('pragma table_info(property_names)')}
