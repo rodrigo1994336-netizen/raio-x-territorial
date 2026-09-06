@@ -5,12 +5,15 @@ import subprocess
 import sys
 import time
 import urllib.parse
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
 
 import measure_stage2_high_confidence as measurement
+
+_WFS_GEOM_ATTR: str | None = None
 
 
 def curl_get(url: str, timeout: int = 120, retries: int = 7) -> bytes:
@@ -43,15 +46,52 @@ def curl_get(url: str, timeout: int = 120, retries: int = 7) -> bytes:
     raise last or RuntimeError('curl transport failed')
 
 
-def wfs1_page(bbox: tuple[float, float, float, float], start: int, count: int = 5000) -> list[dict]:
-    """Use the proven SICAR WFS 1.0 transport for statewide CAR enumeration.
+def wfs_geometry_attr() -> str:
+    """Discover the SICAR geometry attribute from WFS 1.0 DescribeFeatureType."""
+    global _WFS_GEOM_ATTR
+    if _WFS_GEOM_ATTR:
+        return _WFS_GEOM_ATTR
+    params = {
+        'service': 'WFS',
+        'version': '1.0.0',
+        'request': 'DescribeFeatureType',
+        'typeName': measurement.TYPENAME,
+    }
+    url = measurement.WFS + '?' + urllib.parse.urlencode(params)
+    raw = curl_get(url, timeout=120, retries=5)
+    try:
+        root = ET.fromstring(raw)
+    except ET.ParseError as exc:
+        snippet = ' '.join(raw.decode('utf-8', 'replace')[:500].split())
+        raise RuntimeError(f'SICAR_WFS1_DESCRIBE_INVALID_XML: {snippet}') from exc
+    for elem in root.iter():
+        if not elem.tag.endswith('element'):
+            continue
+        name = (elem.attrib.get('name') or '').strip()
+        typ = (elem.attrib.get('type') or '').strip()
+        ref = (elem.attrib.get('ref') or '').strip()
+        probe = f'{typ} {ref}'.lower()
+        if name and ('gml:' in probe or 'geometrypropertytype' in probe or 'surfacepropertytype' in probe or 'polygonpropertytype' in probe):
+            _WFS_GEOM_ATTR = name
+            print(f'SICAR_WFS1_GEOMETRY_ATTRIBUTE={name}', flush=True)
+            return name
+    raise RuntimeError('SICAR_WFS1_GEOMETRY_ATTRIBUTE_NOT_FOUND')
 
-    Only transport robustness is handled here. The WFS query itself, 98% geometry
-    rule, SIGEF bridge, CAFIR resolution, denominator/accounting and frozen 25% stop
-    threshold are unchanged. A 2xx HTML/XML/proxy body is treated as a transport
-    failure and retried instead of being misread as a measured empty page.
+
+def wfs1_page(bbox: tuple[float, float, float, float], start: int, count: int = 5000) -> list[dict]:
+    """Use SICAR WFS 1.0 for the frozen statewide CAR enumeration.
+
+    SICAR WFS 1.0 rejects BBOX and CQL_FILTER as simultaneous KVP parameters. To
+    preserve the exact same spatial tile and AT/PE/SU population, the BBOX predicate
+    is expressed inside the single CQL_FILTER. Only transport/query encoding changes;
+    the measurement algorithm and frozen thresholds remain untouched.
     """
     west, south, east, north = bbox
+    geom_attr = wfs_geometry_attr()
+    spatial_status_filter = (
+        f"BBOX({geom_attr},{west:.12g},{south:.12g},{east:.12g},{north:.12g},'EPSG:4674') "
+        "AND status_imovel IN ('AT','PE','SU')"
+    )
     params = {
         'service': 'WFS',
         'version': '1.0.0',
@@ -59,8 +99,7 @@ def wfs1_page(bbox: tuple[float, float, float, float], start: int, count: int = 
         'typeName': measurement.TYPENAME,
         'outputFormat': 'application/json',
         'srsName': 'EPSG:4674',
-        'bbox': f'{west},{south},{east},{north},EPSG:4674',
-        'CQL_FILTER': "status_imovel IN ('AT','PE','SU')",
+        'CQL_FILTER': spatial_status_filter,
         'maxFeatures': str(count),
         'startIndex': str(start),
     }
@@ -72,7 +111,7 @@ def wfs1_page(bbox: tuple[float, float, float, float], start: int, count: int = 
             raw = curl_get(url, timeout=180, retries=3)
             text = raw.decode('utf-8', 'replace').lstrip('\ufeff\r\n\t ')
             if not text.startswith('{'):
-                snippet = ' '.join(text[:400].split())
+                snippet = ' '.join(text[:500].split())
                 raise RuntimeError(f'SICAR_WFS1_NON_JSON_BODY: {snippet}')
             data = json.loads(text)
             if not isinstance(data, dict):
