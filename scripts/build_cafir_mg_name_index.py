@@ -83,7 +83,11 @@ def main():
             if not name:continue
             named+=1
             a=alias(name)
-            if len(a)<2:continue
+            if not a:
+                # A non-empty display name that normalizes to no alphanumeric text is not
+                # searchable as a name; retain accounting explicitly rather than hiding it.
+                stats['unsearchable_normalized_name']+=1
+                continue
             area_raw=r[8:17].decode('ascii','ignore')
             incra=r[17:30].decode('ascii','ignore').strip()
             nirf=r[0:8].decode('ascii','ignore').strip()
@@ -107,8 +111,9 @@ def main():
       'source':'Receita Federal / CAFIR - compartilhamento público oficial',
       'dav_root':DAV,'snapshot':SNAPSHOT,'uf':'MG','generated_at_utc':datetime.now(timezone.utc).isoformat(),
       'record_contract':'[normalized_alias,display_name,municipality_normalized,area_tenths_ha,incra_code,nirf]',
-      'active_records':stats['active'],'active_named_records':stats['named'],'indexed_named_records':indexed_records,'files':files,'shards':manifest,
-      'coverage_statement':'All active MG CAFIR records with a usable denomination and searchable normalized alias (>=2 chars) in snapshot D60901 are represented in exactly one alias shard. This is CAFIR-record coverage, not CAR->name coverage.',
+      'active_records':stats['active'],'active_named_records':stats['named'],'indexed_named_records':indexed_records,
+      'unsearchable_normalized_names':stats['unsearchable_normalized_name'],'files':files,'shards':manifest,
+      'coverage_statement':'Every active MG CAFIR row with a usable alphanumeric denomination in snapshot D60901 is represented in exactly one alias shard. Rows whose display name normalizes to no searchable alphanumeric text are counted separately. This is CAFIR-record coverage, not CAR->name coverage.',
       'personal_data_fields_in_index':False,
     }
     (out/'meta.json').write_text(json.dumps(meta,ensure_ascii=False,indent=2),encoding='utf-8')
