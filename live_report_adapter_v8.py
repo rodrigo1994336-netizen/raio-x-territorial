@@ -21,17 +21,35 @@ def _fmt(v,suffix='',digits=2):
 
 
 def _patch_prodes_truth(payload:dict,result:dict):
-    """Expose the already-validated V44 PRODES two-lens truth in the active V8 PDF path.
-
-    This changes presentation/integration only. Areas are produced by derive_prodes_lens,
-    which uses exact CAR intersections plus geometry union and the frozen 31/07/2019 cut.
-    """
+    """Expose the validated V44 PRODES two-lens truth in the active V8 PDF path."""
     env=payload.setdefault('environment',{})
     pd=env.setdefault('prodes',{})
+    prodes_result=result.get('prodes') or {}
+    original=list(pd.get('rows') or [])
+    canonical={
+        'Histórico PRODES completo','Recorte pós-31/07/2019',
+        'Triagem para crédito rural','Base regulatória','Método de área PRODES'
+    }
+    original=[r for r in original if not r or str(r[0]) not in canonical]
+
+    # Source failure is never converted into zero/absence.
+    if prodes_result.get('ok') is not True:
+        unavailable='NÃO CONSULTADO / FONTE INDISPONÍVEL'
+        pd['lens']={'status':'INDISPONÍVEL','historical':None,'post_2019_07_31':None}
+        pd['rows']=[
+            ['Histórico PRODES completo',unavailable],
+            ['Recorte pós-31/07/2019',unavailable],
+        ]+original
+        pd['meaning']='A fonte PRODES não respondeu nesta emissão. Indisponibilidade não é tratada como ausência de ocorrência. '+str(pd.get('meaning') or '')
+        rules=payload.setdefault('interpretation_rules',[])
+        rule='Fonte PRODES indisponível nunca é interpretada como zero ocorrência ou ausência de desmatamento.'
+        if rule not in rules: rules.append(rule)
+        return payload
+
     car=result.get('car') or {}
     props=car.get('properties') or {}
     lens=derive_prodes_lens(
-        result.get('prodes') or {},
+        prodes_result,
         props.get('m_fiscal'),
         car_geometry=car.get('geometry'),
         car_area_ha=props.get('area'),
@@ -44,27 +62,25 @@ def _patch_prodes_truth(payload:dict,result:dict):
     def pct_text(v):
         return '—' if v is None else f'{float(v):.4f}% do CAR'
 
-    original=list(pd.get('rows') or [])
-    canonical={
-        'Histórico PRODES completo','Recorte pós-31/07/2019',
-        'Triagem para crédito rural','Base regulatória','Método de área PRODES'
-    }
-    original=[r for r in original if not r or str(r[0]) not in canonical]
+    credit_short=(
+        'Há detecção pós-corte; conferir MCR e documentação ambiental. Não implica impedimento automático.'
+        if credit.get('mcr_check_required') else
+        'Sem detecção pós-corte nesta consulta; manter as demais verificações ambientais aplicáveis.'
+    )
     pd['rows']=[
         ['Histórico PRODES completo',
          f"{hist.get('occurrence_count',0)} ocorrência(s) • {float(hist.get('area_unique_ha') or 0):.6f} ha únicos • {pct_text(hist.get('pct_car'))} • anos: {', '.join(str(x) for x in hist.get('years') or []) or '—'}"],
         ['Recorte pós-31/07/2019',
          f"{post.get('occurrence_count',0)} ocorrência(s) • {float(post.get('area_unique_ha') or 0):.6f} ha únicos • {pct_text(post.get('pct_car'))} • anos: {', '.join(str(x) for x in post.get('years') or []) or '—'}"],
-        ['Triagem para crédito rural',credit.get('reading') or '—'],
-        ['Base regulatória',credit.get('regulatory_basis') or '—'],
-        ['Método de área PRODES','Interseção geométrica exata com o CAR + união das geometrias por lente; sobreposições não são somadas em duplicidade.'],
+        ['Triagem para crédito rural',credit_short],
+        ['Base regulatória','MCR 2-9: verificar supressão de vegetação nativa após 31/07/2019.'],
+        ['Método de área PRODES','Interseção exata com o CAR + união por lente; sobreposições não são somadas em duplicidade.'],
     ]+original
     pd['meaning']=str(lens.get('explanation') or '')+' '+str(pd.get('meaning') or '')
     payload['credit_screening']=credit
 
-    # The legacy base payload initializes this KPI to zero. If no broader territorial
-    # constraint union has replaced it, use the known historical PRODES union rather
-    # than rendering a false 0 / 0% beside the PRODES result.
+    # Legacy base payload starts this KPI at zero. Only fill it from PRODES when no
+    # broader territorial-constraint union is already present.
     try:
         current=float(env.get('unique_problem_area_ha') or 0)
     except Exception:
