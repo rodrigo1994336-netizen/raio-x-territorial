@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 import time
+import urllib.parse
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -42,12 +44,12 @@ def curl_get(url: str, timeout: int = 120, retries: int = 7) -> bytes:
 
 
 def wfs1_page(bbox: tuple[float, float, float, float], start: int, count: int = 5000) -> list[dict]:
-    """Use the already-proven SICAR WFS 1.0 transport for statewide CAR enumeration.
+    """Use the proven SICAR WFS 1.0 transport for statewide CAR enumeration.
 
-    This deliberately replaces only the SICAR page transport used by the frozen
-    Stage-2 measurement. The 98% geometry rule, SIGEF bridge, CAFIR resolution,
-    denominator/accounting and the frozen 25% stop threshold remain untouched.
-    GeoServer supports startIndex as a paging extension on this WFS 1.0 endpoint.
+    Only transport robustness is handled here. The WFS query itself, 98% geometry
+    rule, SIGEF bridge, CAFIR resolution, denominator/accounting and frozen 25% stop
+    threshold are unchanged. A 2xx HTML/XML/proxy body is treated as a transport
+    failure and retried instead of being misread as a measured empty page.
     """
     west, south, east, north = bbox
     params = {
@@ -62,8 +64,38 @@ def wfs1_page(bbox: tuple[float, float, float, float], start: int, count: int = 
         'maxFeatures': str(count),
         'startIndex': str(start),
     }
-    data = measurement.jget(measurement.WFS, params, timeout=180)
-    return data.get('features') or []
+    url = measurement.WFS + '?' + urllib.parse.urlencode(params)
+    last: Exception | None = None
+    payload_attempts = 7
+    for attempt in range(payload_attempts):
+        try:
+            raw = curl_get(url, timeout=180, retries=3)
+            text = raw.decode('utf-8', 'replace').lstrip('\ufeff\r\n\t ')
+            if not text.startswith('{'):
+                snippet = ' '.join(text[:400].split())
+                raise RuntimeError(f'SICAR_WFS1_NON_JSON_BODY: {snippet}')
+            data = json.loads(text)
+            if not isinstance(data, dict):
+                raise RuntimeError(f'SICAR_WFS1_UNEXPECTED_JSON_TYPE: {type(data).__name__}')
+            if data.get('error') or data.get('exceptions') or data.get('ExceptionReport'):
+                raise RuntimeError(f'SICAR_WFS1_SOURCE_ERROR: {str(data)[:800]}')
+            features = data.get('features')
+            if features is None:
+                raise RuntimeError(f'SICAR_WFS1_MISSING_FEATURES: {str(data)[:800]}')
+            if not isinstance(features, list):
+                raise RuntimeError(f'SICAR_WFS1_FEATURES_NOT_LIST: {type(features).__name__}')
+            return features
+        except Exception as exc:
+            last = exc
+            if attempt + 1 < payload_attempts:
+                pause = min(20.0, 2.0 * (attempt + 1))
+                print(
+                    f'SICAR_WFS1_PAYLOAD_RETRY start={start} attempt={attempt+1}/{payload_attempts} '
+                    f'wait={pause:.1f}s error={last}',
+                    flush=True,
+                )
+                time.sleep(pause)
+    raise last or RuntimeError('SICAR WFS 1.0 payload validation failed')
 
 
 # Transport-only substitutions. Do not relax the frozen Stage-2 protocol here.
