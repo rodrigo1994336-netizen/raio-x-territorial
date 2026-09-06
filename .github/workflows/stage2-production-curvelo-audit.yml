@@ -1,0 +1,73 @@
+name: Stage 2 Production Curvelo Audit
+
+on:
+  push:
+    branches: [ v44-step2-finalize ]
+    paths:
+      - '.github/workflows/stage2-production-curvelo-audit.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CAR_CODE: MG-3120904-DFB380BECD7A4323AD8AA68FA14D011F
+      REPORT_BASE: https://raio-x-territorial-app.onrender.com
+    steps:
+      - name: Fetch production PDF
+        run: |
+          set -euo pipefail
+          mkdir -p audit/pages
+          curl --fail --show-error --silent --location --retry 3 --retry-delay 8 --max-time 1200 \
+            "${REPORT_BASE}/v1/reports/property/${CAR_CODE}" \
+            -o audit/report.pdf
+          test -s audit/report.pdf
+          file audit/report.pdf
+
+      - name: Extract and render
+        run: |
+          set -euo pipefail
+          if ! command -v pdftotext >/dev/null || ! command -v pdftoppm >/dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq poppler-utils
+          fi
+          pdftotext -layout audit/report.pdf audit/report.txt
+          pdfinfo audit/report.pdf > audit/pdfinfo.txt
+          pdftoppm -png -r 140 -f 1 -l 40 audit/report.pdf audit/pages/page >/dev/null 2>&1
+
+      - name: Build focused validation summary
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import json,re
+          text=Path('audit/report.txt').read_text(encoding='utf-8',errors='ignore')
+          low=' '.join(text.lower().split())
+          checks={
+            'reference_car_visible': 'mg-3120904-dfb380becd7a4323ad8aa68fa14d011f' in low,
+            'false_known_name_absent': 'sítio lagoa bonita' not in low and 'sitio lagoa bonita' not in low,
+            'benchmark_name_absent': 'fazenda benchmark curvelo' not in low,
+            'prodes_historical_ha_visible': '14.496704' in low or '14,496704' in low,
+            'prodes_historical_pct_visible': '97.9838' in low or '97,9838' in low,
+            'prodes_post2019_ha_visible': '0.027909' in low or '0,027909' in low,
+            'prodes_post2019_pct_visible': '0.1886' in low or '0,1886' in low,
+          }
+          summary={
+            'pdf_bytes':Path('audit/report.pdf').stat().st_size,
+            'page_png_count':len(list(Path('audit/pages').glob('*.png'))),
+            'checks':checks,
+            'all_focused_checks_pass':all(checks.values()),
+          }
+          Path('audit/summary.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2),encoding='utf-8')
+          print(json.dumps(summary,ensure_ascii=False,indent=2))
+          PY
+
+      - name: Upload production audit artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: stage2-production-curvelo-audit
+          path: audit/
+          retention-days: 7
