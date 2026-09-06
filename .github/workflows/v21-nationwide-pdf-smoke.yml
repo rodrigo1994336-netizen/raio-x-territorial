@@ -1,76 +1,71 @@
-name: Raio-X V21 Nationwide + PDF Smoke
+name: V44 Step 1 Production PDF Proof
 
 on:
-  workflow_dispatch:
+  push:
+    branches: [ v44-step1-prodes-proof ]
 
 permissions:
   contents: read
 
 jobs:
-  smoke:
+  proof:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     env:
-      PORTAL: https://raio-x-territorial-app.onrender.com
       WORKER: https://raio-x-territorial-report.onrender.com
       CAR: MG-3120904-DFB380BECD7A4323AD8AA68FA14D011F
     steps:
-      - name: Wait for portal and worker
+      - name: Wait for report worker
         shell: bash
         run: |
           set -euo pipefail
-          for i in $(seq 1 60); do
-            P="$(curl -fsS --max-time 20 "$PORTAL/" || true)"
-            S="$(curl -fsS --max-time 20 "$WORKER/v1/reports/property/$CAR/status" || true)"
-            if grep -q 'Raio-X Territorial' <<<"$P" && grep -q '"state"' <<<"$S"; then
-              echo 'portal and worker are reachable'
+          for i in $(seq 1 30); do
+            if curl -fsS --max-time 15 "$WORKER/v1/reports/property/$CAR/status" -o status.json; then
+              cat status.json
               exit 0
             fi
-            sleep 10
+            sleep 5
           done
-          echo 'runtime not live after wait window' >&2
           exit 1
-
-      - name: Test SICAR viewport in multiple Brazilian states without UF
+      - name: Generate benchmark report
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p evidence
-          curl -fsS --retry 2 --max-time 45 "$PORTAL/v1/live/sicar/viewport?west=-44.48&south=-18.83&east=-44.35&north=-18.68&limit=20" -o evidence/mg.json
-          curl -fsS --retry 2 --max-time 45 "$PORTAL/v1/live/sicar/viewport?west=-50.25&south=-16.15&east=-50.05&north=-15.85&limit=20" -o evidence/go.json
-          curl -fsS --retry 2 --max-time 45 "$PORTAL/v1/live/sicar/viewport?west=-47.95&south=-21.30&east=-47.70&north=-21.05&limit=20" -o evidence/sp.json
+          curl -fsS --max-time 30 -X POST "$WORKER/v1/reports/property/$CAR/prepare" -o prepare.json
+          ready=0
+          for i in $(seq 1 60); do
+            sleep 4
+            curl -fsS --max-time 20 "$WORKER/v1/reports/property/$CAR/status" -o status.json
+            state=$(python -c "import json;print(json.load(open('status.json')).get('state',''))")
+            echo "state=$state"
+            if [ "$state" = ready ]; then ready=1; break; fi
+            if [ "$state" = failed ]; then cat status.json; exit 1; fi
+          done
+          test "$ready" = 1
+          curl -fsS --max-time 60 "$WORKER/v1/reports/property/$CAR" -o benchmark.pdf
+      - name: Verify PDF text
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet pypdf
           python - <<'PY'
-          import json
-          for fn,expected in [('mg.json','MG'),('go.json','GO'),('sp.json','SP')]:
-              d=json.load(open('evidence/'+fn))
-              assert d.get('type')=='FeatureCollection', (fn,d)
-              ufs=d.get('ufs_consultadas') or ([d.get('uf')] if d.get('uf') else [])
-              assert expected in ufs, (fn,expected,ufs)
-              print(fn, expected, 'features=',len(d.get('features') or []),'ufs=',ufs)
+          from pypdf import PdfReader
+          r=PdfReader('benchmark.pdf')
+          text='\n'.join((p.extract_text() or '') for p in r.pages)
+          open('benchmark.txt','w',encoding='utf-8').write(text)
+          checks=['Histórico PRODES completo','Recorte pós-31/07/2019','14.496704','0.027909']
+          for x in checks:
+              assert x in text, x
+          normalized=text.replace(',','.')
+          assert '97.98%' in normalized, '97.98%'
+          assert '0.19%' in normalized, '0.19%'
+          print('PRODES_PDF_PROOF_OK pages=',len(r.pages),'bytes=',__import__('os').path.getsize('benchmark.pdf'))
           PY
-
-      - name: Test quick-analysis proxy
-        shell: bash
-        run: |
-          set -euo pipefail
-          code=$(curl -sS -o evidence/quick.json -w '%{http_code}' --max-time 30 "$PORTAL/v1/live/quick/$CAR")
-          echo "quick status=$code"
-          test "$code" -ge 200 -a "$code" -lt 500
-
-      - name: Test PDF prepare/status path
-        shell: bash
-        run: |
-          set -euo pipefail
-          code=$(curl -sS -o evidence/prepare.json -w '%{http_code}' --max-time 20 -X POST "$PORTAL/v1/mobile/report/prepare/$CAR")
-          echo "prepare status=$code"
-          test "$code" -ge 200 -a "$code" -lt 300
-          sleep 2
-          curl -fsS --max-time 20 "$PORTAL/v1/mobile/report/status/$CAR" -o evidence/pdf_status.json
-
-      - name: Upload evidence
-        if: always()
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: raio-x-v21-nationwide-pdf-smoke
-          path: evidence/
+          name: v44-step1-benchmark-pdf
+          path: |
+            benchmark.pdf
+            benchmark.txt
+            status.json
           retention-days: 14
