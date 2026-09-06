@@ -1,0 +1,23 @@
+name: V44 Step 2 CAFIR Layout
+on:
+  push:
+    branches: [ v44-step2-cafir-layout ]
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Fetch official layout
+        run: |
+          set -euo pipefail
+          U='https://arquivos.receitafederal.gov.br/public.php/dav/files/RRmcpB2tf5cXskz/Layout%20Campos%20Dados%20Abertos%20Cafir.pdf'
+          curl -sS --fail "$U" -o layout.pdf
+          file layout.pdf
+          ls -l layout.pdf
+      - uses: actions/upload-artifact@v4
+        with:
+          name: v44-step2-cafir-layout
+          path: layout.pdf
+          retention-days: 3
