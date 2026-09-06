@@ -1,0 +1,71 @@
+name: V44 Step 1 Final Production PDF Proof
+
+on:
+  push:
+    branches: [ v44-step1-final-pdf-proof ]
+
+permissions:
+  contents: read
+
+jobs:
+  proof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      WORKER: https://raio-x-territorial-report.onrender.com
+      CAR: MG-3120904-DFB380BECD7A4323AD8AA68FA14D011F
+    steps:
+      - name: Wake worker
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 30); do
+            if curl -fsS --max-time 15 "$WORKER/v1/reports/property/$CAR/status" -o status.json; then cat status.json; exit 0; fi
+            sleep 5
+          done
+          exit 1
+      - name: Generate fresh benchmark report
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS --max-time 30 -X POST "$WORKER/v1/reports/property/$CAR/prepare" -o prepare.json
+          ready=0
+          for i in $(seq 1 60); do
+            sleep 4
+            curl -fsS --max-time 20 "$WORKER/v1/reports/property/$CAR/status" -o status.json
+            state=$(python -c "import json;print(json.load(open('status.json')).get('state',''))")
+            echo "state=$state"
+            if [ "$state" = ready ]; then ready=1; break; fi
+            if [ "$state" = failed ]; then cat status.json; exit 1; fi
+          done
+          test "$ready" = 1
+          curl -fsS --max-time 60 "$WORKER/v1/reports/property/$CAR" -o benchmark.pdf
+      - name: Verify every PRODES mention is exact and non-contradictory
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet pypdf
+          python - <<'PY'
+          import os
+          from pypdf import PdfReader
+          r=PdfReader('benchmark.pdf')
+          text='\n'.join((p.extract_text() or '') for p in r.pages)
+          open('benchmark.txt','w',encoding='utf-8').write(text)
+          normalized=text.replace(',','.')
+          for required in ('Histórico PRODES completo','Recorte pós-31/07/2019','14.496704','97.98%','0.027909','0.19%'):
+              assert required in normalized, required
+          assert 'soma aproximada' not in text.lower(), 'stale approximate summary remains'
+          assert 'area_sum_ha' not in text
+          # Executive narrative must itself carry exact values, not only the technical table.
+          assert 'PRODES histórico: 4 ocorrência(s), 14.496704 ha de interseção única (97.98% do CAR)' in normalized
+          assert 'Recorte pós-31/07/2019: 1 ocorrência(s), 0.027909 ha de interseção única (0.19% do CAR)' in normalized
+          print('PRODES_FINAL_PDF_PROOF_OK pages=',len(r.pages),'bytes=',os.path.getsize('benchmark.pdf'))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: v44-step1-final-benchmark-pdf
+          path: |
+            benchmark.pdf
+            benchmark.txt
+            status.json
+          retention-days: 14
