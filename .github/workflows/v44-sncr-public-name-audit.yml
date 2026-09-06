@@ -14,25 +14,24 @@ jobs:
         run: |
           set -euo pipefail
           python - <<'PY'
-          import requests,re,json,html
-          from bs4 import BeautifulSoup
+          import requests,re,html
+          from html.parser import HTMLParser
+
+          class P(HTMLParser):
+              def handle_starttag(self,tag,attrs):
+                  d=dict(attrs)
+                  if tag in ('form','input','select','option','button','a'):
+                      keep={k:d.get(k) for k in ('id','name','type','value','action','method','href','onclick') if d.get(k) is not None}
+                      if keep: print('TAG',tag,keep)
+
           url='https://sncr.serpro.gov.br/sncr-web/consultaPublica.jsf'
           s=requests.Session();s.headers.update({'User-Agent':'Mozilla/5.0 (Raio-X Territorial public-source audit)'})
           r=s.get(url,timeout=30,allow_redirects=True)
           print('GET',r.status_code,r.url,'bytes',len(r.content),'type',r.headers.get('content-type'))
           print('COOKIES',s.cookies.get_dict())
-          soup=BeautifulSoup(r.text,'html.parser')
-          forms=soup.find_all('form')
-          print('FORMS',len(forms))
-          for fi,f in enumerate(forms):
-              print('FORM',fi,'id',f.get('id'),'name',f.get('name'),'action',f.get('action'),'method',f.get('method'))
-              for x in f.find_all(['input','select','button','a']):
-                  name=x.get('name'); xid=x.get('id'); typ=x.get('type'); val=x.get('value'); txt=' '.join(x.stripped_strings)
-                  if name or xid or txt:
-                      print('FIELD',x.name,'id=',xid,'name=',name,'type=',typ,'value=',val,'text=',txt[:180])
-          # print lines that hint municipality/UF/export/csv
+          P().feed(r.text)
           for i,line in enumerate(r.text.splitlines(),1):
               l=line.lower()
-              if any(k in l for k in ['municip','estado','uf','csv','export','consultar','pesquisar','download','arquivo']):
-                  print('HIT',i,re.sub(r'\s+',' ',html.unescape(line))[:1200])
+              if any(k in l for k in ['municip','estado','uf','csv','export','consultar','pesquisar','download','arquivo','javax.faces','viewstate','primefaces','remotecommand']):
+                  print('HIT',i,re.sub(r'\s+',' ',html.unescape(line))[:1600])
           PY
