@@ -15,10 +15,8 @@ VIEWPORTS = (
     (1440, 900, "1440"),
 )
 
-# These strings intentionally mirror the CURRENT customer-facing UI. The
-# summary/boundary formatter is pt-BR, while table rows still carry dot-decimal
-# strings from panel_table_rows(). This smoke records that truth rather than
-# silently normalizing the product during QA.
+# Exact customer-facing strings in the current candidate. Summary/boundary
+# values use pt-BR formatting while table rows still carry dot decimals.
 EXPECTED = (
     "Sobreposição com outros CARs",
     "0 CAR(s) · 0,0000 ha · 0,00%",
@@ -54,19 +52,28 @@ async def wait_runtime(page):
 async def open_curvelo(page):
     await page.locator("#q").fill(CAR)
     await page.locator("#go").click()
-    card = page.locator(f'.rx46-card[data-car="{CAR}"]')
-    await card.wait_for(state="visible", timeout=60000)
+    await page.locator(f'.rx46-card[data-car="{CAR}"]').wait_for(state="visible", timeout=60000)
     await page.locator('[data-rx46-action="full"]').click()
-    panel = page.locator(f'.rx45-panel-card[data-car="{CAR}"]')
-    await panel.wait_for(state="visible", timeout=15000)
-    await page.wait_for_function(
-        "typeof window.rxV47LoadIntegrity==='function'",
-        timeout=10000,
-    )
-    await page.evaluate("window.rxV47LoadIntegrity()")
-    await page.locator(f'.rx45-panel-card[data-car="{CAR}"] .rx45-integrity-table').wait_for(
-        state="visible", timeout=60000
-    )
+    await page.locator(f'.rx45-panel-card[data-car="{CAR}"]').wait_for(state="visible", timeout=15000)
+
+    # V46 intentionally normalizes the V45 panel through 1300 ms. Attaching the
+    # V47 section before that can target a node that is about to be replaced.
+    await page.wait_for_timeout(1550)
+    await page.wait_for_function("typeof window.rxV47LoadIntegrity==='function'", timeout=10000)
+
+    table_selector = f'.rx45-panel-card[data-car="{CAR}"] .rx45-integrity-table'
+    # Finite retry only. Each attempt schedules the V47 extension against the
+    # current panel node; no product polling/observer is introduced.
+    for _ in range(6):
+        if await page.locator(table_selector).count():
+            try:
+                await page.locator(table_selector).wait_for(state="visible", timeout=1200)
+                return
+            except Exception:
+                pass
+        await page.evaluate("window.rxV47LoadIntegrity()")
+        await page.wait_for_timeout(1350)
+    await page.locator(table_selector).wait_for(state="visible", timeout=10000)
 
 
 async def current_panel(page):
@@ -92,9 +99,6 @@ async def run_viewport(browser, width: int, height: int, label: str):
     await wait_runtime(page)
     await open_curvelo(page)
 
-    # Re-acquire locators after asynchronous V45/V47 enrichment. The product is
-    # allowed to replace panel DOM while data settles; the capture must follow
-    # the current node instead of holding a stale element handle.
     panel = await current_panel(page)
     panel_text = await panel.inner_text()
     assert "Curvelo" in panel_text and CAR in panel_text, (label, panel_text[:1200])
@@ -108,18 +112,18 @@ async def run_viewport(browser, width: int, height: int, label: str):
     assert "consultando composição" not in folded, text
     assert not errors, errors
 
-    # Scroll via the live DOM node and then re-acquire once more. This survives
-    # the scheduled late-enrichment replacements that previously detached the
-    # Playwright locator between validation and screenshot.
+    # Scroll using the current DOM and re-acquire before each capture, because
+    # late enrichment is allowed to replace panel nodes.
     await page.evaluate(
         """car=>{
-          const el=document.querySelector(`.rx45-panel-card[data-car="${CSS.escape(car)}"] .rx45-integrity-slot`);
+          const sel=`.rx45-panel-card[data-car="${CSS.escape(car)}"] .rx45-integrity-slot`;
+          const el=document.querySelector(sel);
           if(!el) throw new Error('V47 integrity slot missing before screenshot');
           el.scrollIntoView({block:'center',inline:'nearest'});
         }""",
         CAR,
     )
-    await page.wait_for_timeout(350)
+    await page.wait_for_timeout(300)
     integrity = await current_integrity(page)
     text_after = await integrity.inner_text()
     assert "0 CAR(s) · 0,0000 ha · 0,00%" in text_after, text_after
