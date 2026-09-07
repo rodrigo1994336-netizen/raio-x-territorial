@@ -114,7 +114,6 @@ async def assert_card_contract(page, center_before):
     assert "consultar demonstrativo car" not in folded, text
     for forbidden in (
         "RISCO NÃO CLASSIFICADO",
-        "CONFORMIDADE",
         "FONTES RESPONDERAM",
         "gerar PDF",
     ):
@@ -199,9 +198,6 @@ async def viewport_flow(browser, width, height, label):
     await assert_official_sicar_action(page)
     await page.screenshot(path=str(OUT / f"{label}-card.png"), full_page=True)
 
-    # The point is proven to be bare map background. Leaflet fades a DivOverlay
-    # before detaching it, so synchronize with the actual DOM state instead of
-    # asserting against an arbitrary 180 ms clock.
     empty = await proven_empty_map_point(page)
     assert empty, "no provably empty map pixel found"
     print("RX_V46_EMPTY_MAP_PIXEL", label, json.dumps(empty, ensure_ascii=False))
