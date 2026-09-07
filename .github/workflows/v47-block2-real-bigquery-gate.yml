@@ -47,4 +47,8 @@ jobs:
           pip install google-cloud-bigquery google-auth shapely pyproj
       - name: Confirm authorized admin schema, estimate cost, then run real V47 gate
         run: |
-          PYTHONPATH=. python scripts/v47_block2_real_bigquery_gate.py
+          PYTHONPATH=. python - <<'PY'
+          import runpy
+          import sicar_overlap_hardening_v47
+          runpy.run_path('scripts/v47_block2_real_bigquery_gate.py', run_name='__main__')
+          PY
