@@ -36,6 +36,20 @@ once(
     "v46_panel_type_render_missing",
 )
 
+# The CTA must materialize the truthful V45 shell synchronously from the data
+# already selected on the map. The authoritative /map-panel request remains the
+# asynchronous enrichment path; a slow upstream CAR must not leave the CTA blank.
+once(
+    " function render(p){const h=q('#rx43SnapshotHost');if(!h||!p)return;h.innerHTML=panelHtml(p);bind()}\n async function load(car){if(!car||busy)return;",
+    " function render(p){const h=q('#rx43SnapshotHost');if(!h||!p)return;h.innerHTML=panelHtml(p);bind()}\n window.rxV46RenderV45Immediate=function(p){if(!p)return;const ha=Number(p.area_ha),m2=Number(p.area_m2),defaults=[{id:'embargo',label:'Embargos',state:'not_consulted'},{id:'prodes',label:'PRODES',state:'not_consulted'},{id:'indigenous_land',label:'Terra Indígena',state:'not_consulted'},{id:'legal_reserve',label:'Reserva Legal',state:'not_consulted'},{id:'conservation_unit',label:'Un. Conservação',state:'not_consulted'},{id:'registry',label:'Matrícula',state:'not_consulted'},{id:'public_forest',label:'Floresta Pública',state:'not_consulted'},{id:'snci',label:'SNCI',state:'not_consulted'}],safe={...p,car_status:p.car_status||p.status,property_type:p.property_type||p.type,area_m2:Number.isFinite(m2)?m2:(Number.isFinite(ha)?ha*10000:null),risk:p.risk||{state:'not_classified',label:'RISCO NÃO CLASSIFICADO',detail:'As fontes de restrição ainda não foram consultadas neste painel rápido. Fonte não consultada não significa ausência de ocorrência.'},source_audit:p.source_audit||{responded:1,total:10,deep_sources_requested:false},compliance_sources:(p.compliance_sources&&p.compliance_sources.length)?p.compliance_sources:defaults};render(safe)};\n async function load(car){if(!car||busy)return;",
+    "v46_v45_immediate_renderer_missing",
+)
+once(
+    "function openFull(){if(!selected||typeof legacyOpen!=='function')return;closeAnchor();const payload={...selected,status:selected.status||selected.car_status,type:selected.type||selected.property_type,geometry:selected.geometry};window.current={...payload};legacyOpen(payload,payload.geometry);postOpen()}",
+    "function openFull(){if(!selected||typeof legacyOpen!=='function')return;closeAnchor();const payload={...selected,status:selected.status||selected.car_status,type:selected.type||selected.property_type,geometry:selected.geometry};window.current={...payload};legacyOpen(payload,payload.geometry);window.rxV46RenderV45Immediate?.(payload);postOpen()}",
+    "v46_cta_immediate_v45_missing",
+)
+
 # The card is enriched asynchronously after selection. If the user closes the
 # anchor while that request is still in flight, the late response must update the
 # selected geometry/data without resurrecting the dismissed popup.
@@ -85,11 +99,12 @@ once(
 
 html = html.replace(
     "</body>",
-    "<!-- RX_MAP_V46_PANEL_NORMALIZATION -->\n<!-- RX_MAP_V46_ANCHOR_STATE -->\n<!-- RX_MAP_V46_CLICK_PROPAGATION_GUARD -->\n<!-- RX_MAP_V46_DOM_EMPTY_CLOSE_GUARD -->\n</body>",
+    "<!-- RX_MAP_V46_PANEL_NORMALIZATION -->\n<!-- RX_MAP_V46_CTA_IMMEDIATE_V45 -->\n<!-- RX_MAP_V46_ANCHOR_STATE -->\n<!-- RX_MAP_V46_CLICK_PROPAGATION_GUARD -->\n<!-- RX_MAP_V46_DOM_EMPTY_CLOSE_GUARD -->\n</body>",
 )
 portal_v8.PORTAL_HTML = html
 
 print("RX_MAP_V46_PANEL_NORMALIZATION=dates_status_type_rendered_truthfully", flush=True)
+print("RX_MAP_V46_CTA_IMMEDIATE_V45=local_truth_shell_then_async_enrichment", flush=True)
 print("RX_MAP_V46_ANCHOR_STATE=late_enrichment_never_reopens_closed_card", flush=True)
 print("RX_MAP_V46_CLICK_PROPAGATION=parcel_click_never_closes_anchor", flush=True)
 print("RX_MAP_V46_DOM_EMPTY_CLOSE=bare_map_background_closes_anchor", flush=True)
