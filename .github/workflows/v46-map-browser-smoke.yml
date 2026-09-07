@@ -107,18 +107,20 @@ jobs:
               assert abs(center_before[0]-center_after[0])<1e-9 and abs(center_before[1]-center_after[1])<1e-9, (center_before,center_after)
               card=page.locator('.rx46-card')
               text=await card.inner_text()
+              folded=text.casefold()
               for required in ('CAR','Mapa KML','Consultar no SICAR (site oficial)','Área','Área (m²)','Status','Tipo','Condição','Módulos fiscais','Criação','Atualização','VER ANÁLISE COMPLETA'):
-                  assert required in text,(required,text)
-              assert 'Consultar demonstrativo CAR' not in text,text
+                  assert required.casefold() in folded,(required,text)
+              assert 'consultar demonstrativo car' not in folded,text
               for forbidden in ('RISCO NÃO CLASSIFICADO','CONFORMIDADE','FONTES RESPONDERAM','gerar PDF'):
-                  assert forbidden.lower() not in text.lower(),(forbidden,text)
+                  assert forbidden.casefold() not in folded,(forbidden,text)
               assert await page.locator('.rx46-anchor-popup .leaflet-popup-tip').count()==1
               box=await card.bounding_box(); assert box and 195<=box['width']<=235,box
               assert await page.locator('.rx45-panel-card').count()==0,'V45 opened before CTA'
               title=(await page.locator('.rx46-title').inner_text()).strip()
-              assert title and title!='IMÓVEL RURAL',title
+              assert title and title.casefold()!='imóvel rural',title
               dates=await page.locator('.rx46-field').all_inner_texts()
-              date_fields=[x for x in dates if x.startswith('Criação') or x.startswith('Atualização')]
+              date_fields=[x for x in dates if x.casefold().startswith('criação') or x.casefold().startswith('atualização')]
+              assert len(date_fields)==2,date_fields
               for x in date_fields:
                   val=x.split('\n')[-1].strip()
                   assert val=='—' or re.fullmatch(r'\d{2}/\d{2}/\d{4}',val),x
@@ -190,7 +192,7 @@ jobs:
                   assert b0 and b1 and abs(b0['y']-b1['y'])<5,(b0,b1)
               if width<=720:
                   host=await page.locator('#rx43SnapshotHost').bounding_box()
-                  sel=await page.locator('.rx46-selection path').first.bounding_box()
+                  sel=await page.locator('.rx46-selection').first.bounding_box()
                   assert host and sel,(host,sel)
                   free_bottom=host['y']
                   visible_h=max(0,min(sel['y']+sel['height'],free_bottom)-max(sel['y'],0))
