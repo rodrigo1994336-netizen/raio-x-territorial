@@ -36,7 +36,7 @@ jobs:
               exit 1
             fi
             html="$(curl -fsS http://127.0.0.1:8000/ 2>/dev/null || true)"
-            if printf '%s' "$html" | grep -q 'RX_MAP_V46_TWO_LEVEL'; then
+            if [[ "$html" == *"RX_MAP_V46_TWO_LEVEL"* ]]; then
               ready=1
               printf '%s' "$html" > artifacts/runtime-ready.html
               echo "RX_V46_DEFERRED_MARKER=READY attempt=$i"
