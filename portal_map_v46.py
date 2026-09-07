@@ -188,8 +188,8 @@ once(
     "v46_viewport_url_missing",
 )
 once(
-    "u.searchParams.set('limit','80');const r=await fetch(u);const d=await r.json();",
-    "u.searchParams.set('limit','200');u.searchParams.set('zoom',String(z));const pack=window.rx46ViewportRequest?await window.rx46ViewportRequest(u):null;const r=pack?pack.response:await fetch(u);const d=pack?pack.data:await r.json();",
+    "u.searchParams.set('limit',window.rxFieldMode?'35':'80');const r=await (window.rxFieldFetch?window.rxFieldFetch(u,window.rxFieldMode?6500:10000):fetch(u));const d=await r.json();",
+    "u.searchParams.set('limit',window.rxFieldMode?'120':'200');u.searchParams.set('zoom',String(z));const pack=window.rx46ViewportRequest?await window.rx46ViewportRequest(u):null;const r=pack?pack.response:await (window.rxFieldFetch?window.rxFieldFetch(u,window.rxFieldMode?6500:10000):fetch(u));const d=pack?pack.data:await r.json();",
     "v46_viewport_fetch_patch_missing",
 )
 
