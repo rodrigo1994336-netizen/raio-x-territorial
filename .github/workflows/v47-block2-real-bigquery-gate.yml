@@ -1,0 +1,44 @@
+name: V47 Block 2 Real BigQuery Gate
+
+on:
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  real-national-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      RX_BIGQUERY_PROJECT: metodo-afp-plataforma
+      RX_ADMIN_MUNICIPALITY_TABLE: basedosdados.br_geobr_mapas.municipio
+      RX_ADMIN_UF_TABLE: basedosdados.br_geobr_mapas.estado
+      # A missing repo variable falls back to a 10 GiB hard ceiling per executed query.
+      RX_BIGQUERY_MAX_BYTES_BILLED: ${{ vars.RX_BIGQUERY_MAX_BYTES_BILLED || '10737418240' }}
+      RX_V47_SAMPLE_UFS: ${{ vars.RX_V47_SAMPLE_UFS || 'AM,BA,MT,MG,PR' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Reject missing OIDC configuration
+        shell: bash
+        run: |
+          test -n "${{ vars.GCP_WIF_PROVIDER }}" || { echo 'GCP_WIF_PROVIDER ausente'; exit 2; }
+          test -n "${{ vars.GCP_BIGQUERY_SERVICE_ACCOUNT }}" || { echo 'GCP_BIGQUERY_SERVICE_ACCOUNT ausente'; exit 2; }
+      - name: Authenticate to Google Cloud without a long-lived key
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_BIGQUERY_SERVICE_ACCOUNT }}
+      - name: Install V47 real-gate dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install google-cloud-bigquery google-auth shapely pyproj
+      - name: Confirm authorized admin schema, estimate cost, then run real V47 gate
+        run: |
+          PYTHONPATH=. python scripts/v47_block2_real_bigquery_gate.py

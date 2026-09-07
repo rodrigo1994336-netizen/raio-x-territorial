@@ -22,7 +22,7 @@ def _load_report_after_report_api():
                 import anm_fast_v29  # noqa: F401
                 import report_perf_v24  # noqa: F401
                 import core_retry_fast_v29  # noqa: F401
-                import report_v18_patch  # noqa: F401
+                import report_v19_patch  # noqa: F401
                 import report_visual_identity_v28  # noqa: F401
                 import report_extras_perf_v30  # noqa: F401
                 import landuse_profile_v39  # noqa: F401
@@ -81,6 +81,8 @@ def _load_portal_deferred():
 
                 import portal_experience_v43  # noqa: F401
                 import portal_map_panel_v45  # noqa: F401
+                import portal_car_integrity_v47  # noqa: F401
+                import portal_car_integrity_ui_v47  # noqa: F401
                 import portal_map_stability_v43  # noqa: F401
                 import portal_map_polish_v43  # noqa: F401
                 import portal_search_resilient_v43  # noqa: F401
@@ -103,6 +105,7 @@ def _load_portal_deferred():
                     '/sw.js',
                     '/v1/live/snapshot/{car_code}',
                     '/v1/live/map-panel/{car_code}',
+                    '/v1/live/car-integrity/{car_code}',
                     '/v1/live/sicar/viewport-v46',
                     '/v1/live/property-identity/{car_code}',
                     '/v1/live/property-names/viewport',
@@ -122,6 +125,8 @@ def _load_portal_deferred():
                     raise RuntimeError('v43_experience_not_loaded')
                 if 'RX_MAP_PANEL_V45' not in portal_v8.PORTAL_HTML:
                     raise RuntimeError('v45_map_panel_not_loaded')
+                if 'RX_CAR_INTEGRITY_V47' not in portal_v8.PORTAL_HTML:
+                    raise RuntimeError('v47_car_integrity_ui_not_loaded')
                 if 'RX_MAP_PANEL_SELECTION_V45' not in portal_v8.PORTAL_HTML:
                     raise RuntimeError('v45_map_panel_selection_bridge_not_loaded')
                 if 'RX_MAP_V46_TWO_LEVEL' not in portal_v8.PORTAL_HTML:
