@@ -55,7 +55,11 @@ def _panel_sync(car_code: str) -> dict[str, Any]:
     props = car.get("properties") or {}
     identity = resolve_property_identity_sync(code)
     identity_ok = bool(identity.get("ok"))
-    name_eligible = identity_ok and bool(identity.get("panel_name_eligible")) and bool(identity.get("name"))
+    name_eligible = (
+        identity_ok
+        and bool(identity.get("panel_name_eligible"))
+        and bool(identity.get("name"))
+    )
 
     area_ha = _num(_first(props, "area", "num_area", "area_ha"))
     modules = _num(_first(props, "m_fiscal", "mod_fiscal", "modulos_fiscais"))
@@ -69,7 +73,11 @@ def _panel_sync(car_code: str) -> dict[str, Any]:
 
     refs = identity.get("geographic_reference_names") or []
     if not refs:
-        refs = [x.get("name") for x in (identity.get("candidates") or []) if x.get("name")]
+        refs = [
+            x.get("name")
+            for x in (identity.get("candidates") or [])
+            if x.get("name")
+        ]
     refs = list(dict.fromkeys(str(x).strip() for x in refs if str(x).strip()))[:3]
 
     sources = [
@@ -102,7 +110,9 @@ def _panel_sync(car_code: str) -> dict[str, Any]:
         "car_code": code,
         "validated_name": identity.get("name") if name_eligible else None,
         "validated_name_state": "validated" if name_eligible else "unresolved",
-        "validated_name_source": identity.get("origin_label") or identity.get("source") if name_eligible else None,
+        "validated_name_source": (
+            identity.get("origin_label") or identity.get("source")
+        ) if name_eligible else None,
         "municipality": municipality,
         "uf": uf,
         "area_ha": area_ha,
@@ -181,7 +191,7 @@ body.rx43-dossier-open #panel{background:transparent!important;pointer-events:no
    const named=!!p.validated_name;
    const name=named?p.validated_name:'IMÓVEL RURAL — DENOMINAÇÃO NÃO VALIDADA';
    const refs=(p.geographic_references||[]).filter(Boolean);
-   const ref=refs.length?`<div class="rx45-reference"><strong>REFERÊNCIA GEOGRÁFICA</strong><br>${refs.map(esc).join(' · ')}<br><span>Contexto cartográfico. Não é denominação do CAR.</span></div>`:'';
+   const ref=refs.length?`<div class="rx45-reference"><strong>REFERÊNCIA GEOGRÁFICA / CADASTRAL</strong><br>${refs.map(esc).join(' · ')}<br><span>Contexto cartográfico. Não é denominação do CAR.</span></div>`:'';
    const dates=[p.created_at?`Cadastro: ${esc(text(p.created_at))}`:'',p.updated_at?`Atualização: ${esc(text(p.updated_at))}`:''].filter(Boolean).join(' · ')||'Datas não informadas nesta fonte';
    return `<div class="rx45-panel-card" data-car="${esc(p.car_code)}"><div class="rx45-top"><div class="rx45-title"><div class="rx45-eyebrow">${named?'DENOMINAÇÃO VALIDADA':'IDENTIDADE DO IMÓVEL'}</div><h2>${esc(name)}</h2><div class="rx45-place">${esc(text(p.municipality))}${p.uf?' / '+esc(p.uf):''}</div><div class="rx45-code">CAR ${esc(p.car_code)}</div><div class="rx45-name-note">${named?esc(p.validated_name_source||'Denominação validada por protocolo de identidade.'):'Nenhuma referência OSM/SIGEF é promovida automaticamente a nome do imóvel.'}</div></div><button class="rx45-close" id="rx45Close" aria-label="Fechar">×</button></div><div class="rx45-grid"><div class="rx45-kpi"><small>Área CAR</small><b>${fmt(p.area_ha,4)} ha</b></div><div class="rx45-kpi"><small>Área</small><b>${fmt(p.area_m2,2)} m²</b></div><div class="rx45-kpi"><small>Módulos fiscais</small><b>${fmt(p.fiscal_modules,2)}</b></div><div class="rx45-kpi"><small>Situação CAR</small><b>${esc(text(p.car_status))}</b></div><div class="rx45-kpi wide"><small>Datas</small><b>${dates}</b></div></div><section class="rx45-section"><h4>Cadastro</h4><div class="rx45-row"><b>Condição</b><span>${esc(text(p.condition))}</span></div><div class="rx45-row"><b>Tipo do imóvel</b><span>${esc(text(p.property_type))}</span></div></section><section class="rx45-section"><h4>Auditoria de fontes</h4>${sourceRows(p.sources)}</section>${ref}<div class="rx45-actions"><button class="primary" id="rx45Full">ANÁLISE COMPLETA</button><button id="rx45Kml">KML</button><button id="rx45Png">PNG</button><button id="rx45Pdf">PDF</button></div></div>`;
  }
@@ -200,7 +210,18 @@ body.rx43-dossier-open #panel{background:transparent!important;pointer-events:no
  function render(p){const h=q('#rx43SnapshotHost');if(!h||!p)return;h.innerHTML=panelHtml(p);bind()}
  async function load(car){if(!car||busy)return;if(car===activeCar&&activeData){render(activeData);return}busy=true;try{const r=await fetch(`/v1/live/map-panel/${encodeURIComponent(car)}`),d=await r.json();if(r.ok&&d?.ok){activeCar=car;activeData=d;render(d)}}catch(e){}finally{busy=false}}
  function inspect(){const car=currentCar();const h=q('#rx43SnapshotHost');if(!car||!h)return;if(h.querySelector('.rx45-panel-card'))return;load(car)}
- function install(){const panel=q('#panel');if(panel)panel.setAttribute('aria-label','Painel compacto e auditado do imóvel');const obs=new MutationObserver(()=>queueMicrotask(inspect));obs.observe(document.body,{subtree:true,childList:true});setTimeout(inspect,250)}
+ function settle(car){[40,500,1800,9500].forEach(ms=>setTimeout(()=>{if(currentCar()===car)load(car)},ms))}
+ function install(){
+   const panel=q('#panel');if(panel)panel.setAttribute('aria-label','Painel compacto e auditado do imóvel');
+   const base=window.showProperty;
+   if(typeof base==='function'&&!window.__rx45ShowWrapped){
+     window.__rx45ShowWrapped=true;
+     const wrapped=function(p,g){const result=base(p,g);const car=String(p?.car_code||'').trim().toUpperCase();if(car)settle(car);return result};
+     window.showProperty=wrapped;
+     try{showProperty=wrapped}catch(e){}
+   }
+   setTimeout(inspect,250);
+ }
  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',install);else install();
 })();
 </script>
@@ -209,4 +230,4 @@ body.rx43-dossier-open #panel{background:transparent!important;pointer-events:no
 
 portal_v8.PORTAL_HTML = portal_v8.PORTAL_HTML.replace("</body>", V45_PANEL_UI + "</body>")
 
-print("RX_MAP_PANEL_V45=compact_audited_identity_sources_kml_png", flush=True)
+print("RX_MAP_PANEL_V45=compact_audited_identity_sources_kml_png_no_global_observer", flush=True)
