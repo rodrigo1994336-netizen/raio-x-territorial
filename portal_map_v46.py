@@ -217,7 +217,7 @@ V46_UI = r'''
 <script id="rxMapV46Script">
 (function(){
  const q=s=>document.querySelector(s);
- const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot',"'":'&#39;'}[c]));
+ const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
  const mapRef=()=>{try{return (typeof map!=='undefined'&&map&&map.getBounds)?map:null}catch(e){return null}};
  const fmt=(v,d=2)=>{const n=Number(String(v??'').replace(',','.'));return Number.isFinite(n)?n.toLocaleString('pt-BR',{minimumFractionDigits:d,maximumFractionDigits:d}):'—'};
  const txt=v=>(v===null||v===undefined||v==='')?'—':String(v);
