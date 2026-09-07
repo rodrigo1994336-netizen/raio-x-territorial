@@ -26,11 +26,14 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p artifacts
+          export PYTHONPATH="$PWD${PYTHONPATH:+:$PYTHONPATH}"
+          echo "RX_V46_SMOKE_PYTHONPATH=$PYTHONPATH"
           uvicorn portal_api:app --host 127.0.0.1 --port 8000 > /tmp/rx-v46.log 2>&1 &
           echo $! > /tmp/rx-v46.pid
           ready=0
           for i in $(seq 1 90); do
             if ! kill -0 "$(cat /tmp/rx-v46.pid)" 2>/dev/null; then
+              echo "runtime exited before deferred marker" > artifacts/runtime-start-failure.txt
               echo "::error::V46 runtime encerrou antes de ficar pronto. O browser smoke NÃO foi executado."
               tail -n 300 /tmp/rx-v46.log || true
               exit 1
@@ -45,6 +48,7 @@ jobs:
             sleep 1
           done
           if [ "$ready" -ne 1 ]; then
+            echo "deferred marker RX_MAP_V46_TWO_LEVEL missing after 90 seconds" > artifacts/runtime-start-failure.txt
             echo "::error::RX_V46_BROWSER_SMOKE_NOT_EXECUTED: o portal respondeu, mas o marcador deferred RX_MAP_V46_TWO_LEVEL não apareceu em até 90s. Falhando fechado; não existe skip silencioso."
             tail -n 300 /tmp/rx-v46.log || true
             exit 1
