@@ -64,9 +64,21 @@ async def open_curvelo(page):
         timeout=10000,
     )
     await page.evaluate("window.rxV47LoadIntegrity()")
-    table = panel.locator(".rx45-integrity-table")
-    await table.wait_for(state="visible", timeout=60000)
+    await page.locator(f'.rx45-panel-card[data-car="{CAR}"] .rx45-integrity-table').wait_for(
+        state="visible", timeout=60000
+    )
+
+
+async def current_panel(page):
+    panel = page.locator(f'.rx45-panel-card[data-car="{CAR}"]')
+    await panel.wait_for(state="visible", timeout=10000)
     return panel
+
+
+async def current_integrity(page):
+    integrity = page.locator(f'.rx45-panel-card[data-car="{CAR}"] .rx45-integrity-slot')
+    await integrity.wait_for(state="visible", timeout=10000)
+    return integrity
 
 
 async def run_viewport(browser, width: int, height: int, label: str):
@@ -78,14 +90,16 @@ async def run_viewport(browser, width: int, height: int, label: str):
 
     await page.goto(BASE, wait_until="domcontentloaded", timeout=30000)
     await wait_runtime(page)
-    panel = await open_curvelo(page)
+    await open_curvelo(page)
 
-    # Prove the selected dossier is the Curvelo benchmark, not merely a panel
-    # containing the V47 extension.
+    # Re-acquire locators after asynchronous V45/V47 enrichment. The product is
+    # allowed to replace panel DOM while data settles; the capture must follow
+    # the current node instead of holding a stale element handle.
+    panel = await current_panel(page)
     panel_text = await panel.inner_text()
     assert "Curvelo" in panel_text and CAR in panel_text, (label, panel_text[:1200])
 
-    integrity = panel.locator(".rx45-integrity-slot")
+    integrity = await current_integrity(page)
     text = await integrity.inner_text()
     folded = text.casefold()
     for expected in EXPECTED:
@@ -94,18 +108,36 @@ async def run_viewport(browser, width: int, height: int, label: str):
     assert "consultando composição" not in folded, text
     assert not errors, errors
 
-    await integrity.scroll_into_view_if_needed()
-    await page.wait_for_timeout(500)
+    # Scroll via the live DOM node and then re-acquire once more. This survives
+    # the scheduled late-enrichment replacements that previously detached the
+    # Playwright locator between validation and screenshot.
+    await page.evaluate(
+        """car=>{
+          const el=document.querySelector(`.rx45-panel-card[data-car="${CSS.escape(car)}"] .rx45-integrity-slot`);
+          if(!el) throw new Error('V47 integrity slot missing before screenshot');
+          el.scrollIntoView({block:'center',inline:'nearest'});
+        }""",
+        CAR,
+    )
+    await page.wait_for_timeout(350)
+    integrity = await current_integrity(page)
+    text_after = await integrity.inner_text()
+    assert "0 CAR(s) · 0,0000 ha · 0,00%" in text_after, text_after
+
     shot = OUT / f"v47-curvelo-{label}.png"
+    detail = OUT / f"v47-curvelo-{label}-integrity.png"
     await page.screenshot(path=str(shot), full_page=False)
+    integrity = await current_integrity(page)
+    await integrity.screenshot(path=str(detail))
 
     data = {
         "width": width,
         "height": height,
         "car": CAR,
-        "integrity_text": text,
+        "integrity_text": text_after,
         "errors": errors,
         "screenshot": str(shot),
+        "integrity_screenshot": str(detail),
     }
     print("RX_V47_CURVELO_VISUAL", json.dumps(data, ensure_ascii=False))
     await context.close()
