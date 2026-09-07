@@ -20,12 +20,24 @@ jobs:
           pip install fastapi httpx shapely pyproj pillow reportlab uvicorn
       - name: Compile V47 Block 2 modules
         run: |
-          python -m py_compile sicar_integrity_v47.py portal_car_integrity_v47.py portal_car_integrity_ui_v47.py report_engine_v9.py live_report_adapter_v19.py report_v19_patch.py scripts/v47_block2_integrity_gate.py
+          python -m py_compile sicar_integrity_v47.py sicar_overlap_hardening_v47.py portal_car_integrity_v47.py portal_car_integrity_ui_v47.py report_engine_v9.py live_report_adapter_v19.py report_v19_patch.py scripts/v47_block2_integrity_gate.py
       - name: Run deterministic geometry and PDF gate
         env:
           RX_RELEASE: OFF
         run: |
           PYTHONPATH=. python scripts/v47_block2_integrity_gate.py
+      - name: Verify hardened overlap contract
+        run: |
+          PYTHONPATH=. python - <<'PY'
+          import sicar_overlap_hardening_v47
+          import sicar_integrity_v47 as sicar
+          sql=sicar._overlap_sql()
+          assert 'SELECT ST_UNION_AGG(geometria) AS geometria' in sql
+          assert 'others AS' in sql and 'GROUP BY id_imovel' in sql
+          assert 'id_imovel!=@car_code' in sql
+          assert 'ST_AREA(ST_INTERSECTION(target.geometria, other.geometria)) > 0' in sql
+          print('RX_V47_OVERLAP_HARDENING_CONTRACT=PASS')
+          PY
       - name: V47 report runtime uses the shared integrity motor
         env:
           RX_RELEASE: OFF
