@@ -52,3 +52,6 @@ jobs:
           import sicar_overlap_hardening_v47
           runpy.run_path('scripts/v47_block2_real_bigquery_gate.py', run_name='__main__')
           PY
+      - name: Dump Curvelo client-facing values
+        run: |
+          PYTHONPATH=. python scripts/v47_curvelo_client_dump.py
