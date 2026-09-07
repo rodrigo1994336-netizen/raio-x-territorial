@@ -36,7 +36,21 @@ once(
     "v46_anchor_open_guard_missing",
 )
 
-html = html.replace("</body>", "<!-- RX_MAP_V46_ANCHOR_STATE -->\n</body>")
+# Leaflet can propagate a layer click to the map even after stopping the DOM
+# event. A parcel selection must never be interpreted as an empty-map click.
+once(
+    "l.on('click',e=>{if(e.originalEvent)L.DomEvent.stopPropagation(e.originalEvent);const live=l.feature||ff,p=propertyFromFeature(live);if(typeof window.rxV46SelectProperty==='function')window.rxV46SelectProperty(p,live.geometry,e.latlng);else if(typeof showProperty==='function')showProperty(p,live.geometry)})",
+    "l.on('click',e=>{if(e.originalEvent){try{e.originalEvent.__rx46ParcelClick=true;L.DomEvent.stop(e.originalEvent)}catch(x){L.DomEvent.stopPropagation(e.originalEvent)}}const live=l.feature||ff,p=propertyFromFeature(live);if(typeof window.rxV46SelectProperty==='function')window.rxV46SelectProperty(p,live.geometry,e.latlng);else if(typeof showProperty==='function')showProperty(p,live.geometry)})",
+    "v46_parcel_click_propagation_guard_missing",
+)
+once(
+    "map.on('click',()=>window.rxV46CloseAnchor?.());",
+    "map.on('click',e=>{if(e?.sourceTarget&&e.sourceTarget!==map)return;if(e?.originalEvent?.__rx46ParcelClick)return;window.rxV46CloseAnchor?.()});",
+    "v46_empty_map_click_guard_missing",
+)
+
+html = html.replace("</body>", "<!-- RX_MAP_V46_ANCHOR_STATE -->\n<!-- RX_MAP_V46_CLICK_PROPAGATION_GUARD -->\n</body>")
 portal_v8.PORTAL_HTML = html
 
 print("RX_MAP_V46_ANCHOR_STATE=late_enrichment_never_reopens_closed_card", flush=True)
+print("RX_MAP_V46_CLICK_PROPAGATION=parcel_click_never_closes_anchor", flush=True)
