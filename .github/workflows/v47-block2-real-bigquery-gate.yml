@@ -7,34 +7,40 @@ on:
 
 permissions:
   contents: read
-  id-token: write
 
 jobs:
   real-national-gate:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      RX_BIGQUERY_PROJECT: metodo-afp-plataforma
+      RX_BIGQUERY_PROJECT: ${{ secrets.GCP_PROJECT_ID }}
       RX_ADMIN_MUNICIPALITY_TABLE: basedosdados.br_geobr_mapas.municipio
       RX_ADMIN_UF_TABLE: basedosdados.br_geobr_mapas.estado
       # A missing repo variable falls back to a 10 GiB hard ceiling per executed query.
       RX_BIGQUERY_MAX_BYTES_BILLED: ${{ vars.RX_BIGQUERY_MAX_BYTES_BILLED || '10737418240' }}
       RX_V47_SAMPLE_UFS: ${{ vars.RX_V47_SAMPLE_UFS || 'AM,BA,MT,MG,PR' }}
+      # Keep national validation blocked until the dry-run cost has been reported to the owner.
+      RX_V47_NATIONAL_VALIDATION_APPROVED: '0'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Reject missing OIDC configuration
+      - name: Reject missing Google Cloud secret configuration
         shell: bash
+        env:
+          GCP_SA_KEY_PRESENT: ${{ secrets.GCP_SA_KEY }}
+          GCP_PROJECT_ID_PRESENT: ${{ secrets.GCP_PROJECT_ID }}
         run: |
-          test -n "${{ vars.GCP_WIF_PROVIDER }}" || { echo 'GCP_WIF_PROVIDER ausente'; exit 2; }
-          test -n "${{ vars.GCP_BIGQUERY_SERVICE_ACCOUNT }}" || { echo 'GCP_BIGQUERY_SERVICE_ACCOUNT ausente'; exit 2; }
-      - name: Authenticate to Google Cloud without a long-lived key
+          test -n "$GCP_SA_KEY_PRESENT" || { echo 'GCP_SA_KEY ausente'; exit 2; }
+          test -n "$GCP_PROJECT_ID_PRESENT" || { echo 'GCP_PROJECT_ID ausente'; exit 2; }
+      - name: Authenticate to Google Cloud from GitHub secret
         uses: google-github-actions/auth@v2
         with:
-          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
-          service_account: ${{ vars.GCP_BIGQUERY_SERVICE_ACCOUNT }}
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+          create_credentials_file: true
+          export_environment_variables: true
       - name: Install V47 real-gate dependencies
         run: |
           python -m pip install --upgrade pip
