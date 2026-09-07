@@ -39,7 +39,7 @@ jobs:
           assert 'livestock_pasture' in p['profile_codes'] and 'soy' in p['profile_codes'] and 'mixed_agro' in p['profile_codes']
           print('RX_CI_IMPORT_OK')
           PY
-      - name: V44 portal name-truth, inverse-search and reliability gate
+      - name: V46 portal two-level map, name-truth, inverse-search and reliability gate
         env:
           RX_RELEASE: V8_OPERATIONAL_ZERO_COST
           RX_PORTAL_RSS_BUDGET_MB: '220'
@@ -66,6 +66,7 @@ jobs:
               '/v1/live/property-identity/{car_code}',
               '/v1/live/property-names/viewport',
               '/v1/live/sicar/viewport',
+              '/v1/live/sicar/viewport-v46',
               '/v1/live/resolve',
               '/sw.js',
               '/v1/live/territorial-production/{car_code}',
@@ -76,11 +77,11 @@ jobs:
               '/v1/live/search/cafir-name/locate',
           )
           for path in required_routes:
-              assert path in paths, f'missing V44 route: {path}'
+              assert path in paths, f'missing V46 route: {path}'
           advanced_routes=[r for r in portal_v8.app.router.routes if getattr(r,'path',None)=='/v1/live/search/advanced']
           assert len(advanced_routes)==1
           assert getattr(advanced_routes[0].endpoint,'__name__','')=='advanced_search_v44'
-          assert str(portal_v8.APP_PORTAL_VERSION)=='0.43.8-v43-snapshot-first', portal_v8.APP_PORTAL_VERSION
+          assert str(portal_v8.APP_PORTAL_VERSION)=='0.46.0-v46-two-level-map', portal_v8.APP_PORTAL_VERSION
           html=portal_v8.PORTAL_HTML
           required=(
               'RX_EXPERIENCE_V43','SNAPSHOT DO IMÓVEL','VER ANÁLISE COMPLETA',
@@ -94,17 +95,19 @@ jobs:
               'RX_CONTEXT_DEFAULT_DISABLED_V43_6',"color:'#73b99a'",'RX_SEARCH_AUTO_V43_7',
               'RX_REPORT_IDENTITY_V43_8','/v1/mobile/report/open/',
               'referência(s) do OpenStreetMap','denominação(ões) validada(s)',
+              'RX_MAP_V46_TWO_LEVEL','rx46-anchor-popup','window.rxV46SelectProperty',
+              '/v1/live/sicar/viewport-v46','autoPan:false','window.rx46ViewportRequest',
           )
           absent=[x for x in required if x not in html]
-          assert not absent, f'missing V44 UI/action markers: {absent}'
+          assert not absent, f'missing V46 UI/action markers: {absent}'
           retired=(
               'RX_PORTAL_IDENTITY_V18','RX_MOBILE_DOSSIER_V20','RX_HUMAN_READING_V23',
               'RX_PREMIUM_UX_V35','RX_PREMIUM_INTERACTIONS_V36','RX_LAYOUT_GUARD_V37',
               'RX_PREMIUM_COPY_V38','RX_RELIABILITY_V40','rxPrefetchV40','loadingV40',
           )
           leaked=[x for x in retired if x in html]
-          assert not leaked, f'retired UI leaked into V44: {leaked}'
-          assert 'setTimeout(locateUser,350)' not in html, 'automatic geolocation prompt leaked into V44 startup'
+          assert not leaked, f'retired UI leaked into V46: {leaked}'
+          assert 'setTimeout(locateUser,350)' not in html, 'automatic geolocation prompt leaked into V46 startup'
           prod=Path('portal_territorial_production_v33.py').read_text()
           alerts=Path('portal_alerts.py').read_text()
           field=Path('portal_field_mode_v31.py').read_text()
@@ -120,6 +123,7 @@ jobs:
           polish=Path('portal_map_polish_v43.py').read_text()
           search=Path('portal_search_resilient_v43.py').read_text()
           site=Path('sitecustomize.py').read_text()
+          v46=Path('portal_map_v46.py').read_text()
           assert 'setInterval' not in prod and 'MutationObserver' not in prod
           assert 'route_only_no_legacy_tab_timer' in prod
           assert 'setInterval' not in alerts and 'MutationObserver' not in alerts
@@ -154,6 +158,7 @@ jobs:
           assert "portal_v8.APP_PORTAL_VERSION = '0.43.8-v43-snapshot-first'" in search
           assert 'RX_REPORT_IDENTITY_V43_8' in search and '/v1/mobile/report/open/' in search
           assert 'portal_cafir_inverse_v44' in site and 'v44_cafir_inverse_search_route_not_active' in site
+          assert 'portal_map_v46' in site and 'v46_two_level_map_not_loaded' in site
           assert 'advanced_search_v44' in inverse and '/v1/live/search/cafir-name/locate' in inverse
           assert "x?.type==='cafir'" in inverse and 'CAR não vinculado automaticamente' in inverse
           assert "'panel_name_eligible':False" in inverse_runtime and "'car_code':None" in inverse_runtime
@@ -162,6 +167,17 @@ jobs:
           assert 'Imóvel rural —' in html
           assert 'z<11' in html and 'span>1.50' in html
           assert all(uf in html for uf in ('AC','AM','BA','DF','GO','MG','MT','PA','PR','RS','SC','SP','TO'))
+
+          # V46 must preserve old polygons until the new set is ready, keep the
+          # selected property in a separate layer, and never reintroduce global polling.
+          assert '_V46_VIEWPORT_CACHE' in v46 and '_snap_bounds' in v46 and 'asyncio.gather' in v46
+          assert 'replaceSelectedLayer' in v46 and "let legacyOpen=null,popup=null,selectedLayer=null" in v46
+          assert "autoPan:false" in v46 and "window.rxV46CloseAnchor" in v46
+          assert "legacyOpen(payload,payload.geometry)" in v46
+          assert 'MutationObserver' not in v46 and 'setInterval(' not in v46
+          assert "setMapState('');return" in v46
+          assert "World_Transportation" in Path('portal_hybrid_basemap_v43.py').read_text()
+          assert "World_Boundaries_and_Places" in Path('portal_hybrid_basemap_v43.py').read_text()
 
           # OSM live remains geographic context even with exactly one point inside CAR.
           geom=mapping(box(-44.67,-19.18,-44.65,-19.16));bbox=[-44.67,-19.18,-44.65,-19.16]
@@ -193,7 +209,7 @@ jobs:
           assert not heavy, f'heavy modules leaked into portal: {heavy}'
           rss=portal_resource_guard_v27._rss_bytes()/1024/1024
           assert rss < 220, f'portal RSS too high in gate: {rss:.1f} MB'
-          print('RX_CI_PORTAL_V44_READY',len(paths),'rss_mb=',round(rss,1),'mutation_observers=',observer_count,'intervals=',interval_count,'version=',portal_v8.APP_PORTAL_VERSION,'name_truth=on','cafir_inverse=on','osm_reference_only=on','geolocation=explicit')
+          print('RX_CI_PORTAL_V46_READY',len(paths),'rss_mb=',round(rss,1),'mutation_observers=',observer_count,'intervals=',interval_count,'version=',portal_v8.APP_PORTAL_VERSION,'name_truth=on','cafir_inverse=on','osm_reference_only=on','two_level_map=on')
           PY
       - name: V41 report bounded-latency, CAR-composition and PRODES truth gate
         env:

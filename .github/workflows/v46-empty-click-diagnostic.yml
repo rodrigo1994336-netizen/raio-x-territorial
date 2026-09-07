@@ -1,0 +1,160 @@
+name: V46 Empty Click Diagnostic
+
+on:
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  empty-click-diagnostic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      RX_RELEASE: V8_OPERATIONAL_ZERO_COST
+      RX_PORTAL_RSS_BUDGET_MB: '220'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install runtime and Chromium
+        run: |
+          python -m pip install --upgrade pip
+          pip install fastapi httpx shapely pyproj pillow reportlab uvicorn "psycopg[binary]" "redis>=5,<7" "numpy>=2,<3" "rasterio>=1.4,<2" "PyJWT[crypto]>=2.10,<3" playwright
+          python -m playwright install --with-deps chromium
+      - name: Start V46 runtime
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          export PYTHONPATH="$PWD${PYTHONPATH:+:$PYTHONPATH}"
+          uvicorn portal_api:app --host 127.0.0.1 --port 8000 > /tmp/rx-v46-diag.log 2>&1 &
+          echo $! > /tmp/rx-v46-diag.pid
+          ready=0
+          for i in $(seq 1 90); do
+            if ! kill -0 "$(cat /tmp/rx-v46-diag.pid)" 2>/dev/null; then
+              tail -n 250 /tmp/rx-v46-diag.log || true
+              exit 1
+            fi
+            html="$(curl -fsS http://127.0.0.1:8000/ 2>/dev/null || true)"
+            if [[ "$html" == *"RX_MAP_V46_TWO_LEVEL"* && "$html" == *"RX_MAP_V46_DOM_EMPTY_CLOSE_GUARD"* ]]; then
+              ready=1
+              echo "RX_V46_DIAG_RUNTIME_READY attempt=$i"
+              break
+            fi
+            sleep 1
+          done
+          if [ "$ready" -ne 1 ]; then
+            echo "::error::V46 diagnostic runtime did not expose required markers"
+            tail -n 250 /tmp/rx-v46-diag.log || true
+            exit 1
+          fi
+      - name: Probe actual empty-map click
+        run: |
+          python - <<'PY'
+          import asyncio, json
+          from pathlib import Path
+          from playwright.async_api import async_playwright
+
+          OUT=Path('artifacts')
+          BASE='http://127.0.0.1:8000/'
+          DENSE={'lat':-18.4448863,'lon':-44.2181254,'zoom':13}
+
+          async def main():
+              async with async_playwright() as p:
+                  browser=await p.chromium.launch(headless=True)
+                  page=await browser.new_page(viewport={'width':375,'height':812})
+                  await page.goto(BASE,wait_until='domcontentloaded',timeout=30000)
+                  await page.wait_for_function("window.rxV46Installed===true",timeout=15000)
+                  await page.wait_for_function("typeof map!=='undefined' && !!map && !!map.getBounds",timeout=10000)
+                  await page.evaluate("p=>map.setView([p.lat,p.lon],p.zoom,{animate:false})",DENSE)
+                  await page.wait_for_function("document.querySelectorAll('.leaflet-overlay-pane path.leaflet-interactive').length>0",timeout=25000)
+
+                  paths=page.locator('.leaflet-overlay-pane path.leaflet-interactive')
+                  opened=False
+                  for i in range(min(await paths.count(),12)):
+                      b=await paths.nth(i).bounding_box()
+                      if not b or b['width']<=4 or b['height']<=4:
+                          continue
+                      try:
+                          await paths.nth(i).click(position={'x':max(2,min(b['width']/2,b['width']-2)),'y':max(2,min(b['height']/2,b['height']-2))},force=True)
+                          await page.wait_for_selector('.rx46-card',state='visible',timeout=4000)
+                          opened=True
+                          break
+                      except Exception:
+                          pass
+                  assert opened,'diagnostic could not open a V46 card'
+                  await page.wait_for_timeout(700)
+
+                  await page.evaluate("""()=>{
+                    window.__rx46Diag={closeCalls:0,clicks:[],mapClicks:[]};
+                    const base=window.rxV46CloseAnchor;
+                    window.rxV46CloseAnchor=function(){
+                      window.__rx46Diag.closeCalls++;
+                      window.__rx46Diag.lastCloseAt=performance.now();
+                      return base?.apply(this,arguments);
+                    };
+                    document.addEventListener('click',e=>{
+                      const t=e.target;
+                      window.__rx46Diag.clicks.push({
+                        tag:t?.tagName||null,id:t?.id||null,cls:String(t?.className||''),
+                        inMap:!!t?.closest?.('#map'),interactive:!!t?.closest?.('.leaflet-interactive'),
+                        popup:!!t?.closest?.('.leaflet-popup'),control:!!t?.closest?.('.leaflet-control')
+                      });
+                    },true);
+                    map.on('click',e=>{
+                      window.__rx46Diag.mapClicks.push({
+                        sourceTargetIsMap:e?.sourceTarget===map,
+                        sourceTargetType:e?.sourceTarget?.constructor?.name||null,
+                        originalTag:e?.originalEvent?.target?.tagName||null,
+                        originalId:e?.originalEvent?.target?.id||null,
+                        originalClass:String(e?.originalEvent?.target?.className||'')
+                      });
+                    });
+                  }""")
+
+                  empty=await page.evaluate("""()=>{
+                    const mapEl=document.querySelector('#map'),r=mapEl?.getBoundingClientRect();
+                    if(!r)return null;
+                    const fx=[.08,.16,.24,.32,.40,.48,.56,.64,.72,.80,.88,.94];
+                    const fy=[.12,.22,.32,.42,.52,.62,.72,.82,.90];
+                    for(const yy of fy)for(const xx of fx){
+                      const x=r.left+r.width*xx,y=r.top+r.height*yy,el=document.elementFromPoint(x,y);
+                      if(!el||!el.closest('#map'))continue;
+                      if(el.closest('.leaflet-popup,.leaflet-control,.leaflet-interactive'))continue;
+                      return {x,y,tag:el.tagName,id:el.id||null,cls:String(el.className||'')};
+                    }
+                    return null;
+                  }""")
+                  assert empty,'no proven empty pixel'
+                  before={'cardCount':await page.locator('.rx46-card').count(),'popupCount':await page.locator('.rx46-anchor-popup').count()}
+                  await page.mouse.click(empty['x'],empty['y'])
+                  await page.wait_for_timeout(350)
+                  after={'cardCount':await page.locator('.rx46-card').count(),'popupCount':await page.locator('.rx46-anchor-popup').count()}
+                  probe=await page.evaluate("()=>window.__rx46Diag")
+                  await page.screenshot(path=str(OUT/'empty-click-after.png'),full_page=True)
+
+                  await page.evaluate("()=>window.rxV46CloseAnchor?.()")
+                  await page.wait_for_timeout(120)
+                  manual={'cardCount':await page.locator('.rx46-card').count(),'popupCount':await page.locator('.rx46-anchor-popup').count()}
+                  probe_after_manual=await page.evaluate("()=>window.__rx46Diag")
+                  await page.screenshot(path=str(OUT/'manual-close-after.png'),full_page=True)
+
+                  result={'empty':empty,'before':before,'afterActualClick':after,'probe':probe,'afterManualClose':manual,'probeAfterManual':probe_after_manual}
+                  OUT.joinpath('empty-click-diagnostic.json').write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')
+                  print('RX_V46_EMPTY_CLICK_DIAGNOSTIC='+json.dumps(result,ensure_ascii=False))
+                  await browser.close()
+                  assert after['cardCount']==0,'actual proven-empty click still did not close card; see diagnostic JSON'
+
+          asyncio.run(main())
+          PY
+      - name: Runtime log on failure
+        if: failure()
+        run: tail -n 250 /tmp/rx-v46-diag.log || true
+      - name: Upload diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v46-empty-click-diagnostic-${{ github.run_id }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 7
