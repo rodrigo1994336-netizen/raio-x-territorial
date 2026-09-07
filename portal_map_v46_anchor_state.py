@@ -12,6 +12,30 @@ def once(old: str, new: str, error: str) -> None:
     html = html.replace(old, new, 1)
 
 
+# V45 renders its fast panel asynchronously and may render again after V46's
+# compatibility timers. Therefore dates/status/type must be normalized in the
+# panel renderer itself, not only by a later DOM pass.
+once(
+    " const text=v=>(v===null||v===undefined||v==='')?'Não informado':String(v);\n const currentCar=()=>String((window.current||{}).car_code||'').trim().toUpperCase();",
+    " const text=v=>(v===null||v===undefined||v==='')?'Não informado':String(v);\n const rx46PanelDate=v=>{const m=String(v||'').match(/(\\d{4})-(\\d{2})-(\\d{2})/);return m?`${m[3]}/${m[2]}/${m[1]}`:text(v)};\n const rx46PanelStatus=v=>{const raw=String(v||'').trim(),dict={AT:'Ativo',PE:'Pendente',CA:'Cancelado',SU:'Suspenso',IN:'Inativo'},label=dict[raw.toUpperCase()]||(raw.length>3?raw:'Situação informada'),low=label.toLowerCase();return {raw,label,cls:/ativ/.test(low)?'active':/pendent/.test(low)?'pending':/cancel|suspens|inativ/.test(low)?'bad':''}};\n const rx46PanelType=v=>{const raw=String(v||'').trim(),dict={IRU:'Imóvel Rural',AST:'Assentamento',PCT:'Povos e Comunidades Tradicionais'};return dict[raw.toUpperCase()]||(raw.length>3?raw:'Tipo informado')};\n const currentCar=()=>String((window.current||{}).car_code||'').trim().toUpperCase();",
+    "v46_panel_normalization_helpers_missing",
+)
+once(
+    "   const dates=[p.created_at?`Cadastro: ${esc(text(p.created_at))}`:'',p.updated_at?`Atualização: ${esc(text(p.updated_at))}`:''].filter(Boolean).join(' · ')||'Datas não informadas nesta fonte';",
+    "   const dates=[p.created_at?`Cadastro: ${esc(rx46PanelDate(p.created_at))}`:'',p.updated_at?`Atualização: ${esc(rx46PanelDate(p.updated_at))}`:''].filter(Boolean).join(' · ')||'Datas não informadas nesta fonte';",
+    "v46_panel_date_render_missing",
+)
+once(
+    '<div class="rx45-kpi"><small>Situação CAR</small><b>${esc(text(p.car_status))}</b></div>',
+    '<div class="rx45-kpi"><small>Situação CAR</small><b data-rx46="1"><span class="rx46-status-seal ${rx46PanelStatus(p.car_status).cls}">${esc(rx46PanelStatus(p.car_status).label)}</span>${rx46PanelStatus(p.car_status).raw&&rx46PanelStatus(p.car_status).raw!==rx46PanelStatus(p.car_status).label?`<span class="rx46-code-mini">${esc(rx46PanelStatus(p.car_status).raw)}</span>`:\'\'}</b></div>',
+    "v46_panel_status_render_missing",
+)
+once(
+    '<div class="rx45-row"><b>Tipo do imóvel</b><span>${esc(text(p.property_type))}</span></div>',
+    '<div class="rx45-row"><b>Tipo do imóvel</b><span data-rx46="1">${esc(rx46PanelType(p.property_type))}</span></div>',
+    "v46_panel_type_render_missing",
+)
+
 # The card is enriched asynchronously after selection. If the user closes the
 # anchor while that request is still in flight, the late response must update the
 # selected geometry/data without resurrecting the dismissed popup.
@@ -59,9 +83,13 @@ once(
     "v46_dom_empty_map_close_guard_missing",
 )
 
-html = html.replace("</body>", "<!-- RX_MAP_V46_ANCHOR_STATE -->\n<!-- RX_MAP_V46_CLICK_PROPAGATION_GUARD -->\n<!-- RX_MAP_V46_DOM_EMPTY_CLOSE_GUARD -->\n</body>")
+html = html.replace(
+    "</body>",
+    "<!-- RX_MAP_V46_PANEL_NORMALIZATION -->\n<!-- RX_MAP_V46_ANCHOR_STATE -->\n<!-- RX_MAP_V46_CLICK_PROPAGATION_GUARD -->\n<!-- RX_MAP_V46_DOM_EMPTY_CLOSE_GUARD -->\n</body>",
+)
 portal_v8.PORTAL_HTML = html
 
+print("RX_MAP_V46_PANEL_NORMALIZATION=dates_status_type_rendered_truthfully", flush=True)
 print("RX_MAP_V46_ANCHOR_STATE=late_enrichment_never_reopens_closed_card", flush=True)
 print("RX_MAP_V46_CLICK_PROPAGATION=parcel_click_never_closes_anchor", flush=True)
 print("RX_MAP_V46_DOM_EMPTY_CLOSE=bare_map_background_closes_anchor", flush=True)
