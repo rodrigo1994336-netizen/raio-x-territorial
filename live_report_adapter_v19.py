@@ -7,6 +7,7 @@ import live_report_adapter_v18 as v18
 import live_report_adapter_v17 as v17
 import live_report_adapter_v13 as v13
 from report_engine_v9 import build_premium_property_report_v9
+import sicar_overlap_hardening_v47  # applies narrow CAR-overlap dedup patch
 from sicar_integrity_v47 import panel_table_rows, query_car_integrity_v47
 
 
@@ -32,8 +33,6 @@ def _patch_car_integrity_v47(payload: dict, integrity: dict):
     car = payload.setdefault("car", {})
     env = payload.setdefault("environment", {})
 
-    # Remove environmental-composition artifacts from the retired V17/WFS
-    # contract. Other SICAR cadastral facts remain untouched.
     car["fields"] = [
         row for row in list(car.get("fields") or [])
         if not str((row or [""])[0]).startswith("Composição CAR —")
@@ -95,8 +94,6 @@ def _patch_car_integrity_v47(payload: dict, integrity: dict):
     return payload
 
 
-# V13 is the payload assembly point used by the current V18 chain. Override only
-# the fourth extra and its patch function; all other V17/V18 behavior is kept.
 v13._extras = _extras_v47
 v13._patch_car_details = _patch_car_integrity_v47
 v18.build_premium_property_report_v8 = build_premium_property_report_v9
