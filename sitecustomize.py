@@ -87,6 +87,7 @@ def _load_portal_deferred():
                 import portal_cafir_inverse_v44  # noqa: F401
                 import portal_hybrid_basemap_v43  # noqa: F401
                 import portal_map_panel_selection_v45  # noqa: F401
+                import portal_map_v46  # noqa: F401
 
                 import portal_resource_guard_v27  # noqa: F401
                 import portal_feature_smoke  # noqa: F401
@@ -101,6 +102,7 @@ def _load_portal_deferred():
                     '/sw.js',
                     '/v1/live/snapshot/{car_code}',
                     '/v1/live/map-panel/{car_code}',
+                    '/v1/live/sicar/viewport-v46',
                     '/v1/live/property-identity/{car_code}',
                     '/v1/live/property-names/viewport',
                     '/v1/live/territorial-production/{car_code}',
@@ -121,8 +123,10 @@ def _load_portal_deferred():
                     raise RuntimeError('v45_map_panel_not_loaded')
                 if 'RX_MAP_PANEL_SELECTION_V45' not in portal_v8.PORTAL_HTML:
                     raise RuntimeError('v45_map_panel_selection_bridge_not_loaded')
-                if str(portal_v8.APP_PORTAL_VERSION) != '0.43.8-v43-snapshot-first':
-                    raise RuntimeError('v43_8_release_identity_not_loaded')
+                if 'RX_MAP_V46_TWO_LEVEL' not in portal_v8.PORTAL_HTML:
+                    raise RuntimeError('v46_two_level_map_not_loaded')
+                if str(portal_v8.APP_PORTAL_VERSION) != '0.46.0-v46-two-level-map':
+                    raise RuntimeError('v46_release_identity_not_loaded')
                 if 'RX_MAP_STABILITY_V43_5' not in portal_v8.PORTAL_HTML:
                     raise RuntimeError('v43_5_map_stability_not_loaded')
                 if 'RX_MAP_POLISH_V43_6' not in portal_v8.PORTAL_HTML:
@@ -151,17 +155,17 @@ def _load_portal_deferred():
                 if heavy:
                     raise RuntimeError('heavy_modules_loaded_on_portal:' + ','.join(heavy))
                 guard.mark_ready()
-                print(f'RX_PORTAL_V45_EXTENSION=loaded_deferred routes:{len(ready)} snapshot:on compact_panel:on selection_bridge:on audited_identity:on kml:on png:on advanced_search:on cafir_inverse:on search_resilient:on names:on coverage:on map_stability:on map_polish:on hybrid_basemap:on named_pdf:on pdf_viewer:on browser_worker_wake:on version:{portal_v8.APP_PORTAL_VERSION}', flush=True)
+                print(f'RX_PORTAL_V46_EXTENSION=loaded_deferred routes:{len(ready)} two_level:on anchor_card:on cached_grid:on compact_panel:on selection_bridge:on audited_identity:on kml:on png:on advanced_search:on cafir_inverse:on search_resilient:on names:on coverage:on map_stability:on map_polish:on hybrid_basemap:on named_pdf:on pdf_viewer:on browser_worker_wake:on version:{portal_v8.APP_PORTAL_VERSION}', flush=True)
             except Exception as exc:
                 if guard is not None:
                     try:
                         guard.mark_failed(exc)
                     except Exception:
                         pass
-                print(f'RX_PORTAL_V45_EXTENSION=failed:{type(exc).__name__}:{str(exc)[:500]}', flush=True)
+                print(f'RX_PORTAL_V46_EXTENSION=failed:{type(exc).__name__}:{str(exc)[:500]}', flush=True)
             return
         time.sleep(0.05)
-    print('RX_PORTAL_V45_EXTENSION=timeout_waiting_portal_api', flush=True)
+    print('RX_PORTAL_V46_EXTENSION=timeout_waiting_portal_api', flush=True)
 
 
 if CORE_RUNTIME_READY:
