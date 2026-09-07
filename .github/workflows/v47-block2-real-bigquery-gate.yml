@@ -16,8 +16,8 @@ jobs:
       RX_BIGQUERY_PROJECT: ${{ secrets.GCP_PROJECT_ID }}
       RX_ADMIN_MUNICIPALITY_TABLE: basedosdados.br_geobr_mapas.municipio
       RX_ADMIN_UF_TABLE: basedosdados.br_geobr_mapas.estado
-      # 32 GiB hard ceiling per executed query after explicit cost review; still fail-closed above it.
-      RX_BIGQUERY_MAX_BYTES_BILLED: ${{ vars.RX_BIGQUERY_MAX_BYTES_BILLED || '34359738368' }}
+      # 40 GiB hard ceiling per executed query after explicit cost review; still fail-closed above it.
+      RX_BIGQUERY_MAX_BYTES_BILLED: ${{ vars.RX_BIGQUERY_MAX_BYTES_BILLED || '42949672960' }}
       RX_V47_SAMPLE_UFS: ${{ vars.RX_V47_SAMPLE_UFS || 'AM,BA,MT,MG,PR' }}
       # Keep national validation blocked until the dry-run cost has been reported to the owner.
       RX_V47_NATIONAL_VALIDATION_APPROVED: '0'
