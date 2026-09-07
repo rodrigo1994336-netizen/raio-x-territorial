@@ -258,6 +258,6 @@ V46_UI = r'''
 
 html = html.replace("</body>", V46_UI + "</body>")
 portal_v8.PORTAL_HTML = html
-portal_v8.APP_PORTAL_VERSION = "0.46.0-v46-two-level-map"
+portal_v8.APP_PORTAL_VERSION = "0.47.0-v47-search-name-truth-fill"
 
 print("RX_MAP_V46=two_level_anchor_cached_grid_labels_truthful_panel_cta_only", flush=True)

@@ -83,7 +83,7 @@ jobs:
           advanced_routes=[r for r in portal_v8.app.router.routes if getattr(r,'path',None)=='/v1/live/search/advanced']
           assert len(advanced_routes)==1
           assert getattr(advanced_routes[0].endpoint,'__name__','')=='advanced_search_v44'
-          assert str(portal_v8.APP_PORTAL_VERSION)=='0.46.0-v46-two-level-map', portal_v8.APP_PORTAL_VERSION
+          assert str(portal_v8.APP_PORTAL_VERSION)=='0.47.0-v47-search-name-truth-fill', portal_v8.APP_PORTAL_VERSION
           html=portal_v8.PORTAL_HTML
           required=(
               'RX_EXPERIENCE_V43','SNAPSHOT DO IMÓVEL','VER ANÁLISE COMPLETA',

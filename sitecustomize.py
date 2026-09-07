@@ -128,7 +128,7 @@ def _load_portal_deferred():
                     raise RuntimeError('v46_two_level_map_not_loaded')
                 if 'RX_MAP_V46_ANCHOR_STATE' not in portal_v8.PORTAL_HTML:
                     raise RuntimeError('v46_anchor_state_guard_not_loaded')
-                if str(portal_v8.APP_PORTAL_VERSION) != '0.46.0-v46-two-level-map':
+                if str(portal_v8.APP_PORTAL_VERSION) != '0.47.0-v47-search-name-truth-fill':
                     raise RuntimeError('v46_release_identity_not_loaded')
                 if 'RX_MAP_STABILITY_V43_5' not in portal_v8.PORTAL_HTML:
                     raise RuntimeError('v43_5_map_stability_not_loaded')

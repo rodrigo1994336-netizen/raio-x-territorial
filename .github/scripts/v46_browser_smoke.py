@@ -20,6 +20,9 @@ async def js(page, expr, arg=None):
 
 
 async def wait_runtime(page):
+    # The boot guard reloads once. Do not type a search into the document that
+    # is about to be replaced, or the input vanishes before the button click.
+    await page.wait_for_function("sessionStorage.getItem('rx-v26-ready-reload')==='1' && !document.querySelector('#rxBootGuard')", timeout=15000)
     await page.wait_for_function("window.rxV46Installed===true", timeout=15000)
     await page.wait_for_function(
         "typeof map!=='undefined' && !!map && !!map.getBounds", timeout=10000
