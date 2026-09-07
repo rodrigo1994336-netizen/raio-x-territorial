@@ -49,8 +49,19 @@ once(
     "v46_empty_map_click_guard_missing",
 )
 
-html = html.replace("</body>", "<!-- RX_MAP_V46_ANCHOR_STATE -->\n<!-- RX_MAP_V46_CLICK_PROPAGATION_GUARD -->\n</body>")
+# Some bare-map clicks terminate at the map container without producing the
+# expected Leaflet synthetic click. Guarantee the UX contract at the DOM layer too:
+# only true map background closes the card; popups, controls and interactive map
+# features are ignored.
+once(
+    "document.addEventListener('click',action,true);",
+    "document.addEventListener('click',action,true);document.addEventListener('click',e=>{const t=e.target;if(!t?.closest?.('#map'))return;if(t.closest('.leaflet-popup,.leaflet-control,.leaflet-interactive'))return;window.rxV46CloseAnchor?.()},true);",
+    "v46_dom_empty_map_close_guard_missing",
+)
+
+html = html.replace("</body>", "<!-- RX_MAP_V46_ANCHOR_STATE -->\n<!-- RX_MAP_V46_CLICK_PROPAGATION_GUARD -->\n<!-- RX_MAP_V46_DOM_EMPTY_CLOSE_GUARD -->\n</body>")
 portal_v8.PORTAL_HTML = html
 
 print("RX_MAP_V46_ANCHOR_STATE=late_enrichment_never_reopens_closed_card", flush=True)
 print("RX_MAP_V46_CLICK_PROPAGATION=parcel_click_never_closes_anchor", flush=True)
+print("RX_MAP_V46_DOM_EMPTY_CLOSE=bare_map_background_closes_anchor", flush=True)
