@@ -27,20 +27,48 @@ jobs:
         run: |
           python - <<'PY'
           import asyncio, os, pathlib, re
-          from playwright.async_api import async_playwright
+          from playwright.async_api import async_playwright, Error as PlaywrightError
 
           BASE=os.environ['BASE_URL']
           CAR0=os.environ['CAR_UNVALIDATED']
           CAR1=os.environ['CAR_VALIDATED']
           out=pathlib.Path('smoke-artifacts'); out.mkdir(exist_ok=True)
 
+          async def stabilize(page):
+              for _ in range(5):
+                  try:
+                      await page.wait_for_load_state('domcontentloaded', timeout=30000)
+                      await page.wait_for_function("typeof window.showProperty === 'function'", timeout=30000)
+                      await page.wait_for_selector('#map', timeout=30000)
+                      await page.wait_for_timeout(1200)
+                      await page.evaluate("() => document.readyState")
+                      return
+                  except PlaywrightError as e:
+                      if 'Execution context was destroyed' not in str(e) and 'Navigation' not in str(e):
+                          raise
+                      await page.wait_for_timeout(800)
+              raise AssertionError('page_never_stabilized_after_navigation')
+
           async def wait_boot(page):
               await page.goto(BASE, wait_until='domcontentloaded', timeout=90000)
-              await page.wait_for_function("typeof window.showProperty === 'function'", timeout=45000)
-              await page.wait_for_selector('#map', timeout=30000)
+              await stabilize(page)
+
+          async def stable_eval(page, expression, arg=None):
+              last=None
+              for _ in range(5):
+                  try:
+                      if arg is None:
+                          return await page.evaluate(expression)
+                      return await page.evaluate(expression, arg)
+                  except PlaywrightError as e:
+                      last=e
+                      if 'Execution context was destroyed' not in str(e) and 'Navigation' not in str(e):
+                          raise
+                      await stabilize(page)
+              raise last
 
           async def panel_payload(page, car):
-              return await page.evaluate("""async car => {
+              return await stable_eval(page, """async car => {
                   const r=await fetch('/v1/live/map-panel/'+encodeURIComponent(car), {cache:'no-store'});
                   let d={}; try{d=await r.json()}catch(e){}
                   return {status:r.status, data:d};
@@ -50,7 +78,7 @@ jobs:
               payload=await panel_payload(page, car)
               assert payload['status']==200, payload
               d=payload['data']; assert d.get('ok') is True, d
-              await page.evaluate("""d => {
+              await stable_eval(page, """d => {
                   window.showProperty({
                     car_code:d.car_code,
                     municipality:d.municipality,
@@ -63,80 +91,111 @@ jobs:
                   }, d.geometry);
               }""", d)
               sel=f'.rx45-panel-card[data-car="{car}"]'
-              await page.wait_for_selector(sel, timeout=45000)
+              try:
+                  await page.wait_for_selector(sel, timeout=30000)
+              except Exception:
+                  state=await stable_eval(page, """() => ({
+                    href:location.href,
+                    wrapped:!!window.__rx45ShowWrapped,
+                    bridge:!!window.__rx45SelectionFixInstalled,
+                    windowCurrent:window.current?.car_code||null,
+                    host:!!document.querySelector('#rx43SnapshotHost'),
+                    hostHtml:(document.querySelector('#rx43SnapshotHost')?.innerHTML||'').slice(0,500),
+                    body:document.body.className
+                  })""")
+                  print('V45_PANEL_TIMEOUT_STATE',state)
+                  await page.screenshot(path=str(out/f'timeout-{car}.png'), full_page=True)
+                  raise
               return d
 
           async def desktop(browser):
               ctx=await browser.new_context(viewport={'width':1440,'height':1000}, accept_downloads=True)
-              page=await ctx.new_page(); await wait_boot(page)
-              d0=await open_panel(page,CAR0)
-              assert not d0.get('validated_name'), d0.get('validated_name')
-              h2=(await page.locator('.rx45-title h2').inner_text()).strip()
-              assert h2=='IMÓVEL RURAL', h2
-              assert CAR0 in await page.locator('.rx45-code').inner_text()
-              assert 'CURVELO' in (await page.locator('.rx45-place').inner_text()).upper()
-              assert await page.locator('.rx45-risk').count()==1
-              assert 'RISCO NÃO CLASSIFICADO' in (await page.locator('.rx45-risk').inner_text()).upper()
-              assert await page.locator('.rx45-compliance .rx45-check').count()==8
-              labels=[(await page.locator('.rx45-compliance .rx45-check').nth(i).inner_text()).strip() for i in range(8)]
-              expected=['Embargos','PRODES','Terra Indígena','Reserva Legal','Un. Conservação','Matrícula','Floresta Pública','SNCI']
-              assert labels==expected, labels
-              assert await page.locator('.rx45-compliance .rx45-dot.probable_impediment').count()==0
-              assert await page.locator('.rx45-compliance .rx45-dot.not_consulted').count()==8
-              audit=(await page.locator('.rx45-audit-count').inner_text()).strip()
-              assert re.search(r'\d+ de \d+ fontes responderam',audit), audit
-              assert await page.locator('.rx45-actions .primary').count()==1
-              assert await page.locator('#rx45Pdf.rx45-pdf-link').count()==1
-              assert await page.locator('#rx45Kml').is_visible() and await page.locator('#rx45Png').is_visible()
-              refs=d0.get('geographic_references') or []
-              assert all(h2.casefold()!=str(x).strip().casefold() for x in refs)
+              page=await ctx.new_page()
+              page.on('pageerror', lambda e: print('PAGEERROR',e))
+              page.on('console', lambda m: print('CONSOLE',m.type,m.text) if m.type in ('error','warning') else None)
+              try:
+                  await wait_boot(page)
+                  d0=await open_panel(page,CAR0)
+                  assert not d0.get('validated_name'), d0.get('validated_name')
+                  h2=(await page.locator('.rx45-title h2').inner_text()).strip()
+                  assert h2=='IMÓVEL RURAL', h2
+                  assert CAR0 in await page.locator('.rx45-code').inner_text()
+                  assert 'CURVELO' in (await page.locator('.rx45-place').inner_text()).upper()
+                  assert await page.locator('.rx45-risk').count()==1
+                  assert 'RISCO NÃO CLASSIFICADO' in (await page.locator('.rx45-risk').inner_text()).upper()
+                  assert await page.locator('.rx45-compliance .rx45-check').count()==8
+                  labels=[(await page.locator('.rx45-compliance .rx45-check').nth(i).inner_text()).strip() for i in range(8)]
+                  expected=['Embargos','PRODES','Terra Indígena','Reserva Legal','Un. Conservação','Matrícula','Floresta Pública','SNCI']
+                  assert labels==expected, labels
+                  assert await page.locator('.rx45-compliance .rx45-dot.probable_impediment').count()==0
+                  assert await page.locator('.rx45-compliance .rx45-dot.not_consulted').count()==8
+                  audit=(await page.locator('.rx45-audit-count').inner_text()).strip()
+                  assert re.search(r'\d+ de \d+ fontes responderam',audit), audit
+                  assert await page.locator('.rx45-actions .primary').count()==1
+                  assert await page.locator('#rx45Pdf.rx45-pdf-link').count()==1
+                  assert await page.locator('#rx45Kml').is_visible() and await page.locator('#rx45Png').is_visible()
+                  refs=d0.get('geographic_references') or []
+                  assert all(h2.casefold()!=str(x).strip().casefold() for x in refs)
 
-              async with page.expect_download(timeout=15000) as info:
-                  await page.locator('#rx45Kml').click()
-              dl=await info.value; p=await dl.path(); raw=pathlib.Path(p).read_text('utf-8')
-              assert '<kml ' in raw and '<Placemark>' in raw and CAR0 in dl.suggested_filename
+                  async with page.expect_download(timeout=15000) as info:
+                      await page.locator('#rx45Kml').click()
+                  dl=await info.value; p=await dl.path(); raw=pathlib.Path(p).read_text('utf-8')
+                  assert '<kml ' in raw and '<Placemark>' in raw and CAR0 in dl.suggested_filename
 
-              async with page.expect_download(timeout=15000) as info:
-                  await page.locator('#rx45Png').click()
-              dl=await info.value; p=await dl.path(); raw=pathlib.Path(p).read_bytes()
-              assert raw.startswith(b'\x89PNG\r\n\x1a\n') and len(raw)>1000
+                  async with page.expect_download(timeout=15000) as info:
+                      await page.locator('#rx45Png').click()
+                  dl=await info.value; p=await dl.path(); raw=pathlib.Path(p).read_bytes()
+                  assert raw.startswith(b'\x89PNG\r\n\x1a\n') and len(raw)>1000
 
-              await page.evaluate("window.__rxPdfCalled=0; window.downloadPDF=()=>{window.__rxPdfCalled++}")
-              await page.locator('#rx45Pdf').click()
-              assert await page.evaluate('window.__rxPdfCalled')==1
-              await page.evaluate("window.__rxFullCalled=0; window.rxProgressiveAnalyze=()=>{window.__rxFullCalled++}")
-              await page.locator('#rx45Full').click()
-              assert await page.evaluate('window.__rxFullCalled')==1
+                  await stable_eval(page,"window.__rxPdfCalled=0; window.downloadPDF=()=>{window.__rxPdfCalled++}")
+                  await page.locator('#rx45Pdf').click()
+                  assert await stable_eval(page,'window.__rxPdfCalled')==1
+                  await stable_eval(page,"window.__rxFullCalled=0; window.rxProgressiveAnalyze=()=>{window.__rxFullCalled++}")
+                  await page.locator('#rx45Full').click()
+                  assert await stable_eval(page,'window.__rxFullCalled')==1
 
-              d1=await open_panel(page,CAR1)
-              assert d1.get('validated_name'), d1
-              h2=(await page.locator('.rx45-title h2').inner_text()).strip()
-              assert h2==str(d1['validated_name']).strip(), (h2,d1['validated_name'])
-              assert 'DENOMINAÇÃO VALIDADA' in (await page.locator('.rx45-eyebrow').inner_text()).upper()
-              await page.screenshot(path=str(out/'desktop.png'), full_page=True)
-              print('V45_DESKTOP_OK', {'unvalidated':CAR0,'validated':CAR1,'validated_name':d1['validated_name'],'audit':audit})
-              await ctx.close()
+                  d1=await open_panel(page,CAR1)
+                  assert d1.get('validated_name'), d1
+                  assert str(d1['validated_name']).strip()=='Fazenda Agnelical', d1['validated_name']
+                  h2=(await page.locator('.rx45-title h2').inner_text()).strip()
+                  assert h2==str(d1['validated_name']).strip(), (h2,d1['validated_name'])
+                  assert 'DENOMINAÇÃO VALIDADA' in (await page.locator('.rx45-eyebrow').inner_text()).upper()
+                  await page.screenshot(path=str(out/'desktop.png'), full_page=True)
+                  print('V45_DESKTOP_OK', {'unvalidated':CAR0,'validated':CAR1,'validated_name':d1['validated_name'],'audit':audit})
+              except Exception:
+                  await page.screenshot(path=str(out/'desktop-failure.png'), full_page=True)
+                  raise
+              finally:
+                  await ctx.close()
 
           async def mobile(browser):
               ctx=await browser.new_context(viewport={'width':390,'height':844}, is_mobile=True, has_touch=True)
-              page=await ctx.new_page(); await wait_boot(page)
-              await open_panel(page,CAR0)
-              map_box=await page.locator('#map').bounding_box(); host_box=await page.locator('#rx43SnapshotHost').bounding_box()
-              assert map_box and map_box['height']>500, map_box
-              assert host_box and host_box['y']>80, host_box
-              assert host_box['height'] < 0.82*844, host_box
-              assert await page.locator('.rx45-panel-card').is_visible()
-              assert await page.locator('#rx45Kml').is_visible() and await page.locator('#rx45Png').is_visible()
-              await page.screenshot(path=str(out/'mobile.png'), full_page=True)
-              print('V45_MOBILE_OK', {'map_box':map_box,'sheet_box':host_box})
-              await ctx.close()
+              page=await ctx.new_page()
+              try:
+                  await wait_boot(page)
+                  await open_panel(page,CAR0)
+                  map_box=await page.locator('#map').bounding_box(); host_box=await page.locator('#rx43SnapshotHost').bounding_box()
+                  assert map_box and map_box['height']>500, map_box
+                  assert host_box and host_box['y']>80, host_box
+                  assert host_box['height'] < 0.82*844, host_box
+                  assert await page.locator('.rx45-panel-card').is_visible()
+                  assert await page.locator('#rx45Kml').is_visible() and await page.locator('#rx45Png').is_visible()
+                  await page.screenshot(path=str(out/'mobile.png'), full_page=True)
+                  print('V45_MOBILE_OK', {'map_box':map_box,'sheet_box':host_box})
+              except Exception:
+                  await page.screenshot(path=str(out/'mobile-failure.png'), full_page=True)
+                  raise
+              finally:
+                  await ctx.close()
 
           async def main():
               async with async_playwright() as p:
                   browser=await p.chromium.launch(headless=True)
-                  await desktop(browser)
-                  await mobile(browser)
-                  await browser.close()
+                  try:
+                      await desktop(browser)
+                      await mobile(browser)
+                  finally:
+                      await browser.close()
               print('V45_PRODUCTION_BROWSER_SMOKE_OK')
 
           asyncio.run(main())
