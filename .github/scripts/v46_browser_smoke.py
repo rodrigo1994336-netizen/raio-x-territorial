@@ -198,6 +198,10 @@ async def viewport_flow(browser, width, height, label):
     await page.goto(BASE, wait_until="domcontentloaded", timeout=30000)
     await wait_runtime(page)
     await search_regression(page, label)
+    # Isolate the existing polygon-click flow from the name-result fixture's
+    # temporary SIGEF/result overlay and its lifetime timers.
+    await page.goto(BASE, wait_until="domcontentloaded", timeout=30000)
+    await wait_runtime(page)
     await set_dense(page)
     before = await map_center(page)
     await click_first_parcel(page)
@@ -300,8 +304,8 @@ async def movement_gate(browser):
 
 
 async def assert_parcel_fill(page):
-    fills = await js(page, """()=>[...document.querySelectorAll('.leaflet-overlay-pane path.leaflet-interactive')].filter(p=>p.getAttribute('fill')!=='none').map(p=>Number(getComputedStyle(p).fillOpacity))""")
-    assert fills and all(.15 <= x <= .25 for x in fills), fills
+    fills = await js(page, """()=>{const rows=[];map.eachLayer(l=>{if(l._path&&l.feature?.properties?.cod_imovel){const s=getComputedStyle(l._path);rows.push({fill:s.fill,opacity:Number(s.fillOpacity)})}});return rows}""")
+    assert fills and all(x['fill'] != 'none' and .15 <= x['opacity'] <= .25 for x in fills), fills
 
 
 async def search_regression(page, label):
@@ -356,3 +360,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
