@@ -19,8 +19,8 @@ jobs:
       # 40 GiB hard ceiling per executed query after explicit cost review; still fail-closed above it.
       RX_BIGQUERY_MAX_BYTES_BILLED: ${{ vars.RX_BIGQUERY_MAX_BYTES_BILLED || '42949672960' }}
       RX_V47_SAMPLE_UFS: ${{ vars.RX_V47_SAMPLE_UFS || 'AM,BA,MT,MG,PR' }}
-      # Keep national validation blocked until the dry-run cost has been reported to the owner.
-      RX_V47_NATIONAL_VALIDATION_APPROVED: '0'
+      # One explicit national validation run after the owner received the dry-run cost.
+      RX_V47_NATIONAL_VALIDATION_APPROVED: '1'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
