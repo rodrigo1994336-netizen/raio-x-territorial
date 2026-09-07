@@ -8,6 +8,7 @@ from typing import Any
 from fastapi import HTTPException
 
 import portal_v8
+import sicar_overlap_hardening_v47  # applies narrow CAR-overlap dedup patch before imports below
 from sicar_integrity_v47 import CAR_RE, panel_table_rows, query_car_integrity_v47
 
 app = portal_v8.app
@@ -36,9 +37,6 @@ def _query_sync(car_code: str) -> dict[str, Any]:
         out = dict(cached[1])
         out["cached"] = True
         return out
-    # Panel + PDF or repeated UI timers can converge on the same CAR. Only one
-    # BigQuery execution is allowed for a given CAR at a time; re-check cache
-    # after acquiring the per-CAR lock.
     with _lock_for(code):
         now = time.monotonic()
         cached = _CACHE.get(code)
@@ -63,8 +61,6 @@ async def car_integrity_v47(car_code: str):
     out = await asyncio.to_thread(_query_sync, car_code)
     if out.get("state") == "invalid":
         raise HTTPException(status_code=422, detail=out)
-    # Source/configuration outages are returned as a truthful payload instead of
-    # an HTTP error so the panel can render an explicit gray/unavailable state.
     return out
 
 
