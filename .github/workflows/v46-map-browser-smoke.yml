@@ -1,0 +1,222 @@
+name: V46 Map Browser Smoke
+
+on:
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  browser-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    env:
+      RX_RELEASE: V8_OPERATIONAL_ZERO_COST
+      RX_PORTAL_RSS_BUDGET_MB: '220'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install runtime and browser dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install fastapi httpx shapely pyproj pillow reportlab uvicorn "psycopg[binary]" "redis>=5,<7" "numpy>=2,<3" "rasterio>=1.4,<2" "PyJWT[crypto]>=2.10,<3" playwright
+          python -m playwright install --with-deps chromium
+      - name: Start V46 branch runtime
+        run: |
+          uvicorn portal_api:app --host 127.0.0.1 --port 8000 > /tmp/rx-v46.log 2>&1 &
+          echo $! > /tmp/rx-v46.pid
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:8000/ >/dev/null; then break; fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:8000/ | grep -q 'RX_MAP_V46_TWO_LEVEL'
+      - name: Selection card panel and 10-movement visual gate
+        run: |
+          mkdir -p artifacts
+          python - <<'PY'
+          import asyncio, json, os, re, time
+          from pathlib import Path
+          from playwright.async_api import async_playwright
+
+          BASE='http://127.0.0.1:8000/'
+          OUT=Path('artifacts')
+          DENSE={'lat':-18.4448863,'lon':-44.2181254,'zoom':13}
+          results={'viewports':{},'movements':[],'console':[]}
+
+          async def js(page, expr, arg=None):
+              if arg is None:
+                  return await page.evaluate(expr)
+              return await page.evaluate(expr, arg)
+
+          async def wait_runtime(page):
+              await page.wait_for_function("window.rxV46Installed===true", timeout=15000)
+              await page.wait_for_function("typeof map!=='undefined' && !!map && !!map.getBounds", timeout=10000)
+
+          async def set_dense(page):
+              await js(page, "p=>map.setView([p.lat,p.lon],p.zoom,{animate:false})", DENSE)
+              await page.wait_for_function("document.querySelectorAll('.leaflet-overlay-pane path.leaflet-interactive').length>0", timeout=25000)
+
+          async def map_center(page):
+              return await js(page, "()=>{const c=map.getCenter();return [c.lat,c.lng,map.getZoom()]}")
+
+          async def visible_parcels(page):
+              return await js(page, """()=>{const mr=document.querySelector('#map')?.getBoundingClientRect();if(!mr)return 0;return [...document.querySelectorAll('.leaflet-overlay-pane path.leaflet-interactive')].filter(p=>{const r=p.getBoundingClientRect();return r.width>1&&r.height>1&&r.right>mr.left&&r.left<mr.right&&r.bottom>mr.top&&r.top<mr.bottom}).length}""")
+
+          async def click_first_parcel(page):
+              paths=page.locator('.leaflet-overlay-pane path.leaflet-interactive')
+              n=await paths.count()
+              assert n>0,'no interactive CAR polygon to click'
+              for i in range(min(n,12)):
+                  try:
+                      b=await paths.nth(i).bounding_box()
+                      if b and b['width']>4 and b['height']>4:
+                          await paths.nth(i).click(position={'x':max(2,min(b['width']/2,b['width']-2)),'y':max(2,min(b['height']/2,b['height']-2))},force=True)
+                          await page.wait_for_selector('.rx46-card',state='visible',timeout=5000)
+                          return i
+                  except Exception:
+                      pass
+              raise AssertionError('could not click a visible CAR polygon')
+
+          async def assert_card_contract(page, center_before):
+              await page.wait_for_selector('.rx46-card',state='visible',timeout=6000)
+              await page.wait_for_timeout(700)
+              center_after=await map_center(page)
+              assert abs(center_before[0]-center_after[0])<1e-9 and abs(center_before[1]-center_after[1])<1e-9, (center_before,center_after)
+              card=page.locator('.rx46-card')
+              text=await card.inner_text()
+              for required in ('CAR','Mapa KML','Consultar demonstrativo CAR','Área','Área (m²)','Status','Tipo','Condição','Módulos fiscais','Criação','Atualização','VER ANÁLISE COMPLETA'):
+                  assert required in text,(required,text)
+              for forbidden in ('RISCO NÃO CLASSIFICADO','CONFORMIDADE','FONTES RESPONDERAM','gerar PDF'):
+                  assert forbidden.lower() not in text.lower(),(forbidden,text)
+              assert await page.locator('.rx46-anchor-popup .leaflet-popup-tip').count()==1
+              box=await card.bounding_box(); assert box and 195<=box['width']<=235,box
+              assert await page.locator('.rx45-panel-card').count()==0,'V45 opened before CTA'
+              title=(await page.locator('.rx46-title').inner_text()).strip()
+              assert title and title!='IMÓVEL RURAL',title
+              dates=await page.locator('.rx46-field').all_inner_texts()
+              date_fields=[x for x in dates if x.startswith('Criação') or x.startswith('Atualização')]
+              for x in date_fields:
+                  val=x.split('\n')[-1].strip()
+                  assert val=='—' or re.fullmatch(r'\d{2}/\d{2}/\d{4}',val),x
+              status=(await page.locator('.rx46-status').inner_text()).strip()
+              assert status not in {'AT','PE','CA','SU','IN'},status
+              type_text=' '.join(await page.locator('.rx46-field').all_inner_texts())
+              assert '\nIRU' not in type_text,type_text
+              return {'title':title,'text':text,'box':box}
+
+          async def open_full(page):
+              await page.locator('[data-rx46-action="full"]').click()
+              await page.wait_for_selector('.rx45-panel-card',state='visible',timeout=10000)
+              await page.wait_for_timeout(1000)
+              assert await page.locator('.rx46-card').count()==0
+              text=await page.locator('.rx45-panel-card').inner_text()
+              assert 'RISCO NÃO CLASSIFICADO' in text,text
+              assert 'Fonte não consultada não significa ausência de ocorrência' in text,text
+              assert 'fontes responderam' in text.lower(),text
+              assert 'VER ANÁLISE COMPLETA' in text
+              assert not re.search(r'20\d{2}-\d{2}-\d{2}T\d{2}:',text),text
+              return text
+
+          async def viewport_flow(browser,width,height,label):
+              context=await browser.new_context(viewport={'width':width,'height':height},accept_downloads=True)
+              page=await context.new_page()
+              errors=[]
+              page.on('pageerror',lambda exc: errors.append('pageerror:'+str(exc)))
+              page.on('console',lambda msg: errors.append(f'console:{msg.type}:{msg.text}') if msg.type=='error' else None)
+              await page.goto(BASE,wait_until='domcontentloaded',timeout=30000)
+              await wait_runtime(page); await set_dense(page)
+              before=await map_center(page)
+              await click_first_parcel(page)
+              card=await assert_card_contract(page,before)
+              await page.screenshot(path=str(OUT/f'{label}-card.png'),full_page=True)
+
+              # Clicking outside closes only the card, not the selected-property layer.
+              await page.locator('#map').click(position={'x':20,'y':max(40,min(height-40,height//2))},force=True)
+              await page.wait_for_timeout(150)
+              assert await page.locator('.rx46-card').count()==0,'outside click did not close card'
+              assert await page.locator('.rx46-selection').count()>=1,'selected property disappeared with card close'
+
+              # Reopen and request the full V45 panel explicitly.
+              before=await map_center(page)
+              await click_first_parcel(page)
+              await assert_card_contract(page,before)
+              await open_full(page)
+              await page.screenshot(path=str(OUT/f'{label}-panel.png'),full_page=True)
+
+              tools=page.locator('.rx45-tools .rx45-tool')
+              if width<=390 and await tools.count()>=2:
+                  b0=await tools.nth(0).bounding_box(); b1=await tools.nth(1).bounding_box()
+                  assert b0 and b1 and abs(b0['y']-b1['y'])<5,(b0,b1)
+              if width<=720:
+                  host=await page.locator('#rx43SnapshotHost').bounding_box()
+                  sel=await page.locator('.rx46-selection path').first.bounding_box()
+                  assert host and sel,(host,sel)
+                  free_bottom=host['y']
+                  visible_h=max(0,min(sel['y']+sel['height'],free_bottom)-max(sel['y'],0))
+                  assert visible_h>2,{'host':host,'selected':sel,'visible_above_panel':visible_h}
+              results['viewports'][label]={'card_title':card['title'],'errors':errors}
+              assert not errors,errors
+              await context.close()
+
+          async def movement_gate(browser):
+              context=await browser.new_context(viewport={'width':1440,'height':900})
+              page=await context.new_page(); errors=[]
+              page.on('pageerror',lambda exc: errors.append('pageerror:'+str(exc)))
+              page.on('console',lambda msg: errors.append(f'console:{msg.type}:{msg.text}') if msg.type=='error' else None)
+              await page.goto(BASE,wait_until='domcontentloaded',timeout=30000)
+              await wait_runtime(page); await set_dense(page)
+              assert await visible_parcels(page)>0
+              ops=[
+                  ('zoom_in',"map.setZoom(Math.min(14,map.getZoom()+1),{animate:false})"),
+                  ('pan_e',"map.panBy([220,0],{animate:false})"),
+                  ('pan_s',"map.panBy([0,170],{animate:false})"),
+                  ('zoom_out',"map.setZoom(Math.max(12,map.getZoom()-1),{animate:false})"),
+                  ('pan_w',"map.panBy([-260,0],{animate:false})"),
+                  ('zoom_in_2',"map.setZoom(Math.min(14,map.getZoom()+1),{animate:false})"),
+                  ('pan_ne',"map.panBy([170,-140],{animate:false})"),
+                  ('pan_sw',"map.panBy([-190,180],{animate:false})"),
+                  ('zoom_out_2',"map.setZoom(Math.max(12,map.getZoom()-1),{animate:false})"),
+                  ('zoom_in_3',"map.setZoom(Math.min(14,map.getZoom()+1),{animate:false})"),
+              ]
+              for idx,(name,code) in enumerate(ops,1):
+                  await js(page,code)
+                  samples=[]
+                  for _ in range(16):
+                      samples.append(await visible_parcels(page))
+                      await page.wait_for_timeout(100)
+                  await page.screenshot(path=str(OUT/f'movement-{idx:02d}-{name}.png'),full_page=True)
+                  rec={'step':idx,'operation':name,'samples':samples,'minimum_visible':min(samples)}
+                  results['movements'].append(rec)
+                  print('RX_V46_MOVEMENT',json.dumps(rec,ensure_ascii=False))
+                  assert min(samples)>0,rec
+              results['console']=errors
+              assert not errors,errors
+              await context.close()
+
+          async def main():
+              async with async_playwright() as p:
+                  browser=await p.chromium.launch(headless=True)
+                  await viewport_flow(browser,375,812,'375')
+                  await viewport_flow(browser,768,900,'768')
+                  await viewport_flow(browser,1440,900,'1440')
+                  await movement_gate(browser)
+                  await browser.close()
+              (OUT/'results.json').write_text(json.dumps(results,ensure_ascii=False,indent=2),encoding='utf-8')
+              print('RX_V46_BROWSER_SMOKE=PASS')
+
+          asyncio.run(main())
+          PY
+      - name: Runtime log on failure
+        if: failure()
+        run: |
+          echo '--- V46 runtime log ---'
+          tail -n 300 /tmp/rx-v46.log || true
+      - name: Upload V46 visual evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v46-map-browser-smoke-${{ github.run_id }}
+          path: artifacts/
+          if-no-files-found: warn
+          retention-days: 14
