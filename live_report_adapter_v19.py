@@ -32,65 +32,24 @@ async def _extras_v47(result: dict, car_code: str, out_dir: Path):
 def _patch_car_integrity_v47(payload: dict, integrity: dict):
     car = payload.setdefault("car", {})
     env = payload.setdefault("environment", {})
-
-    car["fields"] = [
-        row for row in list(car.get("fields") or [])
-        if not str((row or [""])[0]).startswith("Composição CAR —")
-    ]
-    env["layer_rows"] = [
-        row for row in list(env.get("layer_rows") or [])
-        if not str((row or [""])[0]).startswith("CAR —")
-    ]
-    payload["sources"] = [
-        src for src in list(payload.get("sources") or [])
-        if "sicar — composição" not in str(src.get("name") or "").casefold()
-    ]
-
+    car["fields"] = [row for row in list(car.get("fields") or []) if not str((row or [""])[0]).startswith("Composição CAR —")]
+    env["layer_rows"] = [row for row in list(env.get("layer_rows") or []) if not str((row or [""])[0]).startswith("CAR —")]
+    payload["sources"] = [src for src in list(payload.get("sources") or []) if "sicar — composição" not in str(src.get("name") or "").casefold()]
     payload["car_integrity_v47"] = integrity
     table = panel_table_rows(integrity) if integrity.get("ok") else []
-    env["car_integrity_table_rows"] = [
-        [row["information"], row["declared"], row["inside"], row["measured"]]
-        for row in table
-    ]
-
+    env["car_integrity_table_rows"] = [[row["information"], row["declared"], row["inside"], row["measured"]] for row in table]
     composition = []
     if integrity.get("ok"):
         for row in integrity.get("composition_rows") or []:
-            composition.append({
-                "label": row.get("label"),
-                "declared_ha": row.get("declared_ha"),
-                "inside_ha": row.get("inside_ha"),
-                "inside_pct": row.get("inside_pct"),
-                "measured_ha": row.get("measured_ha"),
-                "state": row.get("state"),
-                "discrepancy": row.get("discrepancy"),
-            })
+            composition.append({"label": row.get("label"), "declared_ha": row.get("declared_ha"), "inside_ha": row.get("inside_ha"), "inside_pct": row.get("inside_pct"), "measured_ha": row.get("measured_ha"), "state": row.get("state"), "discrepancy": row.get("discrepancy")})
             if row.get("measured_ha") is not None:
-                env.setdefault("layer_rows", []).append([
-                    f"CAR — {row.get('label')}",
-                    f"{float(row.get('measured_ha')):.4f} ha medidos",
-                    "Base dos Dados / SICAR · GRS80",
-                ])
+                env.setdefault("layer_rows", []).append([f"CAR — {row.get('label')}", f"{float(row.get('measured_ha')):.4f} ha medidos", "Base dos Dados / SICAR · GRS80"])
         car["environmental_composition"] = composition
         status = "CONSULTADA" if integrity.get("state") == "checked" else "PARCIAL"
-        payload.setdefault("sources", []).append({
-            "name": "Base dos Dados / SICAR — composição e consistência geométrica do CAR",
-            "description": (
-                f"Snapshot {integrity.get('snapshot') or 'não informado'}; áreas declaradas separadas de medição elipsoidal GRS80. "
-                "Sobreposição com outros CARs usa união de interseções de área positiva. "
-                "Residual de regeneração é apenas geométrico."
-            ),
-            "status": status,
-            "level": "ok" if status == "CONSULTADA" else "attention",
-        })
+        payload.setdefault("sources", []).append({"name": "Base dos Dados / SICAR — composição e consistência geométrica do CAR", "description": (f"Snapshot {integrity.get('snapshot') or 'não informado'}; áreas declaradas separadas de medição elipsoidal GRS80. Sobreposição com outros CARs usa união de interseções de área positiva. Residual de regeneração é apenas geométrico."), "status": status, "level": "ok" if status == "CONSULTADA" else "attention"})
     else:
         car["environmental_composition"] = []
-        payload.setdefault("sources", []).append({
-            "name": "Base dos Dados / SICAR — composição e consistência geométrica do CAR",
-            "description": f"Consulta indisponível nesta emissão: {integrity.get('detail') or 'sem detalhe'}. Nenhum zero foi inferido.",
-            "status": "INDISPONÍVEL",
-            "level": "attention",
-        })
+        payload.setdefault("sources", []).append({"name": "Base dos Dados / SICAR — composição e consistência geométrica do CAR", "description": f"Consulta indisponível nesta emissão: {integrity.get('detail') or 'sem detalhe'}. Nenhum zero foi inferido.", "status": "INDISPONÍVEL", "level": "attention"})
     return payload
 
 
