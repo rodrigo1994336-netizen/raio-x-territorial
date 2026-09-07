@@ -1,0 +1,79 @@
+name: V46 Map Browser Smoke
+
+on:
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  browser-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    env:
+      RX_RELEASE: V8_OPERATIONAL_ZERO_COST
+      RX_PORTAL_RSS_BUDGET_MB: '220'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install runtime and browser dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install fastapi httpx shapely pyproj pillow reportlab uvicorn "psycopg[binary]" "redis>=5,<7" "numpy>=2,<3" "rasterio>=1.4,<2" "PyJWT[crypto]>=2.10,<3" playwright
+          python -m playwright install --with-deps chromium
+      - name: Start V46 branch runtime and wait for deferred marker
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          export PYTHONPATH="$PWD${PYTHONPATH:+:$PYTHONPATH}"
+          echo "RX_V46_SMOKE_PYTHONPATH=$PYTHONPATH"
+          uvicorn portal_api:app --host 127.0.0.1 --port 8000 > /tmp/rx-v46.log 2>&1 &
+          echo $! > /tmp/rx-v46.pid
+          ready=0
+          for i in $(seq 1 90); do
+            if ! kill -0 "$(cat /tmp/rx-v46.pid)" 2>/dev/null; then
+              echo "runtime exited before deferred marker" > artifacts/runtime-start-failure.txt
+              echo "::error::V46 runtime encerrou antes de ficar pronto. O browser smoke NÃO foi executado."
+              tail -n 300 /tmp/rx-v46.log || true
+              exit 1
+            fi
+            html="$(curl -fsS http://127.0.0.1:8000/ 2>/dev/null || true)"
+            if [[ "$html" == *"RX_MAP_V46_TWO_LEVEL"* && "$html" == *"RX_MAP_V46_ANCHOR_STATE"* && "$html" == *"RX_MAP_V46_CLICK_PROPAGATION_GUARD"* && "$html" == *"RX_MAP_V46_DOM_EMPTY_CLOSE_GUARD"* ]]; then
+              ready=1
+              printf '%s' "$html" > artifacts/runtime-ready.html
+              echo "RX_V46_DEFERRED_MARKERS=READY attempt=$i"
+              break
+            fi
+            sleep 1
+          done
+          if [ "$ready" -ne 1 ]; then
+            echo "required V46 deferred markers missing after 90 seconds" > artifacts/runtime-start-failure.txt
+            echo "::error::RX_V46_BROWSER_SMOKE_NOT_EXECUTED: o portal respondeu, mas os marcadores V46 obrigatórios não apareceram em até 90s. Falhando fechado; não existe skip silencioso."
+            tail -n 300 /tmp/rx-v46.log || true
+            exit 1
+          fi
+      - name: Selection card panel and 10-movement visual gate
+        run: python .github/scripts/v46_browser_smoke.py
+      - name: Enforce browser smoke execution
+        if: always()
+        run: |
+          mkdir -p artifacts
+          if [ ! -f artifacts/browser-executed.txt ]; then
+            echo "::error::RX_V46_BROWSER_SMOKE_NOT_EXECUTED: Chromium não chegou a abrir. O job falha fechado; nenhum resultado skipped pode ser considerado aprovado."
+            exit 1
+          fi
+          echo "RX_V46_BROWSER_EXECUTION_GUARD=PASS"
+      - name: Runtime log on failure
+        if: failure()
+        run: |
+          echo '--- V46 runtime log ---'
+          tail -n 300 /tmp/rx-v46.log || true
+      - name: Upload V46 visual evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v46-map-browser-smoke-${{ github.run_id }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 14
