@@ -165,7 +165,10 @@ async def assert_official_sicar_action(page):
 async def open_full(page):
     await page.locator('[data-rx46-action="full"]').click()
     await page.wait_for_selector(".rx45-panel-card", state="visible", timeout=10000)
-    await page.wait_for_timeout(1000)
+    # V46 intentionally schedules normalization at 70/220/650/1300 ms so the
+    # final pass sees asynchronously rendered V45 content. Validate after that
+    # final product pass rather than against an earlier intermediate frame.
+    await page.wait_for_timeout(1450)
     assert await page.locator(".rx46-card").count() == 0
     text = await page.locator(".rx45-panel-card").inner_text()
     assert "RISCO NÃO CLASSIFICADO" in text, text
