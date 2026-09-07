@@ -15,24 +15,28 @@ VIEWPORTS = (
     (1440, 900, "1440"),
 )
 
+# These strings intentionally mirror the CURRENT customer-facing UI. The
+# summary/boundary formatter is pt-BR, while table rows still carry dot-decimal
+# strings from panel_table_rows(). This smoke records that truth rather than
+# silently normalizing the product during QA.
 EXPECTED = (
     "Sobreposição com outros CARs",
     "0 CAR(s) · 0,0000 ha · 0,00%",
     "Vegetação nativa",
     "Reserva legal",
     "APP",
-    "1,4547 ha",
-    "1,4556 ha · 100,00%",
+    "1.4547 ha",
+    "1.4556 ha · 100.00%",
     "Uso restrito",
     "Área consolidada",
-    "12,5701 ha",
-    "12,5778 ha · 100,00%",
+    "12.5701 ha",
+    "12.5778 ha · 100.00%",
     "Hidrografia",
     "Campo não publicado",
-    "0,4108 ha · 100,00%",
+    "0.4108 ha · 100.00%",
     "Regeneração",
     "Não é campo declarado",
-    "1,8155 ha · 12,26%",
+    "1.8155 ha · 12.26%",
     "Município: 0,0000 ha fora · 0,00%",
     "UF: 0,0000 ha fora · 0,00%",
 )
@@ -75,6 +79,11 @@ async def run_viewport(browser, width: int, height: int, label: str):
     await page.goto(BASE, wait_until="domcontentloaded", timeout=30000)
     await wait_runtime(page)
     panel = await open_curvelo(page)
+
+    # Prove the selected dossier is the Curvelo benchmark, not merely a panel
+    # containing the V47 extension.
+    panel_text = await panel.inner_text()
+    assert "Curvelo" in panel_text and CAR in panel_text, (label, panel_text[:1200])
 
     integrity = panel.locator(".rx45-integrity-slot")
     text = await integrity.inner_text()
