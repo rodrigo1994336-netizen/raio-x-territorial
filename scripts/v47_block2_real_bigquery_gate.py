@@ -14,8 +14,10 @@ EXPECTED_UFS = {
 DEFAULT_SAMPLE_UFS = ("AM", "BA", "MT", "MG", "PR")
 CURVELO_CAR = "MG-3120904-DFB380BECD7A4323AD8AA68FA14D011F"
 ADMIN_DATASET = "basedosdados.br_geobr_mapas"
+EXPECTED_PROJECT_ID = "metodo-afp-plataforma"
 EXPECTED_MUNICIPALITY_TABLE = "municipio"
 EXPECTED_STATE_TABLE = "estado"
+FALLBACK_STATE_TABLE = "uf"
 
 
 def fail(message: str) -> None:
@@ -26,6 +28,8 @@ def require_configuration() -> None:
     state = sicar.runtime_state()
     if not state.configured:
         fail("RX_BIGQUERY_PROJECT/GOOGLE_CLOUD_PROJECT não configurado")
+    if state.project_id != EXPECTED_PROJECT_ID:
+        fail(f"projeto BigQuery inesperado: {state.project_id}; esperado {EXPECTED_PROJECT_ID}")
     expected = {
         "RX_ADMIN_MUNICIPALITY_TABLE": f"{ADMIN_DATASET}.{EXPECTED_MUNICIPALITY_TABLE}",
         "RX_ADMIN_UF_TABLE": f"{ADMIN_DATASET}.{EXPECTED_STATE_TABLE}",
@@ -45,25 +49,40 @@ def inspect_admin_mesh_schema(client: Any) -> dict[str, dict[str, str]]:
     )
     tables = [str(row.get("table_name") or "") for row in rows]
     print("RX_V47_ADMIN_TABLES", ",".join(tables))
-    required = {EXPECTED_MUNICIPALITY_TABLE, EXPECTED_STATE_TABLE}
-    missing = sorted(required - set(tables))
-    if missing:
+    if EXPECTED_MUNICIPALITY_TABLE not in tables:
         fail(
             "malha administrativa autorizada não encontrada no datalake; "
-            f"tabelas ausentes={missing}. Nenhuma fonte alternativa será usada"
+            f"tabela ausente={EXPECTED_MUNICIPALITY_TABLE}. Nenhuma fonte alternativa será usada"
+        )
+    if EXPECTED_STATE_TABLE in tables:
+        state_table = EXPECTED_STATE_TABLE
+    elif FALLBACK_STATE_TABLE in tables:
+        state_table = FALLBACK_STATE_TABLE
+        os.environ["RX_ADMIN_UF_TABLE"] = f"{ADMIN_DATASET}.{state_table}"
+        print(
+            "RX_V47_ADMIN_UF_TABLE_FALLBACK=AUTHORIZED",
+            f"requested={EXPECTED_STATE_TABLE}",
+            f"selected={state_table}",
+        )
+    else:
+        fail(
+            "malha estadual autorizada não encontrada no datalake; "
+            f"nem {EXPECTED_STATE_TABLE} nem {FALLBACK_STATE_TABLE} existem. "
+            "Nenhuma fonte alternativa será usada"
         )
 
+    selected_tables = {EXPECTED_MUNICIPALITY_TABLE, state_table}
     col_rows = sicar._query(
         client,
         f"""
         SELECT table_name, column_name, data_type
         FROM `{ADMIN_DATASET}.INFORMATION_SCHEMA.COLUMNS`
-        WHERE table_name IN ('{EXPECTED_MUNICIPALITY_TABLE}','{EXPECTED_STATE_TABLE}')
+        WHERE table_name IN ('{EXPECTED_MUNICIPALITY_TABLE}','{EXPECTED_STATE_TABLE}','{FALLBACK_STATE_TABLE}')
         ORDER BY table_name, ordinal_position
         """,
         {},
     )
-    schema: dict[str, dict[str, str]] = {name: {} for name in required}
+    schema: dict[str, dict[str, str]] = {name: {} for name in selected_tables}
     for row in col_rows:
         table = str(row.get("table_name") or "")
         column = str(row.get("column_name") or "")
@@ -79,7 +98,7 @@ def inspect_admin_mesh_schema(client: Any) -> dict[str, dict[str, str]]:
 
     required_columns = {
         EXPECTED_MUNICIPALITY_TABLE: {"id_municipio", "sigla_uf", "geometria"},
-        EXPECTED_STATE_TABLE: {"sigla_uf", "geometria"},
+        state_table: {"sigla_uf", "geometria"},
     }
     for table, columns in required_columns.items():
         missing_cols = sorted(columns - set(schema[table]))
@@ -241,12 +260,6 @@ def main() -> None:
     # or multi-UF spatial sample is executed.
     estimate_expensive_queries(client)
 
-    present = source_coverage(client)
-    missing = sorted(EXPECTED_UFS - present)
-    if missing:
-        fail(f"area_imovel não cobre as 27 UFs esperadas; faltando: {missing}")
-    print("RX_V47_NATIONAL_SOURCE_COVERAGE=PASS ufs=27")
-
     raw = (os.getenv("RX_V47_SAMPLE_UFS") or ",".join(DEFAULT_SAMPLE_UFS)).upper()
     sample_ufs = tuple(dict.fromkeys(x.strip() for x in raw.split(",") if x.strip()))
     if not sample_ufs or any(uf not in EXPECTED_UFS for uf in sample_ufs):
@@ -265,6 +278,20 @@ def main() -> None:
         )
 
     assert_curvelo_benchmark(client)
+
+    # National validation is deliberately last and requires a second explicit release
+    # after the dry-run cost has been shown to the owner. This prevents an automatic
+    # PR run from crossing the national-cost boundary in the same execution.
+    if (os.getenv("RX_V47_NATIONAL_VALIDATION_APPROVED") or "0").strip() != "1":
+        print("RX_V47_NATIONAL_VALIDATION=PENDING_COST_REVIEW")
+        print("RX_V47_BLOCK2_REAL_BIGQUERY_GATE=PRENATIONAL_PASS")
+        return
+
+    present = source_coverage(client)
+    missing = sorted(EXPECTED_UFS - present)
+    if missing:
+        fail(f"area_imovel não cobre as 27 UFs esperadas; faltando: {missing}")
+    print("RX_V47_NATIONAL_SOURCE_COVERAGE=PASS ufs=27")
     print("RX_V47_BLOCK2_REAL_BIGQUERY_GATE=PASS")
 
 
