@@ -22,20 +22,38 @@ jobs:
           python -m pip install --upgrade pip
           pip install fastapi httpx shapely pyproj pillow reportlab uvicorn "psycopg[binary]" "redis>=5,<7" "numpy>=2,<3" "rasterio>=1.4,<2" "PyJWT[crypto]>=2.10,<3" playwright
           python -m playwright install --with-deps chromium
-      - name: Start V46 branch runtime
+      - name: Start V46 branch runtime and wait for deferred marker
         run: |
+          set -euo pipefail
+          mkdir -p artifacts
           uvicorn portal_api:app --host 127.0.0.1 --port 8000 > /tmp/rx-v46.log 2>&1 &
           echo $! > /tmp/rx-v46.pid
-          for i in $(seq 1 60); do
-            if curl -fsS http://127.0.0.1:8000/ >/dev/null; then break; fi
+          ready=0
+          for i in $(seq 1 90); do
+            if ! kill -0 "$(cat /tmp/rx-v46.pid)" 2>/dev/null; then
+              echo "::error::V46 runtime encerrou antes de ficar pronto. O browser smoke NÃO foi executado."
+              tail -n 300 /tmp/rx-v46.log || true
+              exit 1
+            fi
+            html="$(curl -fsS http://127.0.0.1:8000/ 2>/dev/null || true)"
+            if printf '%s' "$html" | grep -q 'RX_MAP_V46_TWO_LEVEL'; then
+              ready=1
+              printf '%s' "$html" > artifacts/runtime-ready.html
+              echo "RX_V46_DEFERRED_MARKER=READY attempt=$i"
+              break
+            fi
             sleep 1
           done
-          curl -fsS http://127.0.0.1:8000/ | grep -q 'RX_MAP_V46_TWO_LEVEL'
+          if [ "$ready" -ne 1 ]; then
+            echo "::error::RX_V46_BROWSER_SMOKE_NOT_EXECUTED: o portal respondeu, mas o marcador deferred RX_MAP_V46_TWO_LEVEL não apareceu em até 90s. Falhando fechado; não existe skip silencioso."
+            tail -n 300 /tmp/rx-v46.log || true
+            exit 1
+          fi
       - name: Selection card panel and 10-movement visual gate
         run: |
           mkdir -p artifacts
           python - <<'PY'
-          import asyncio, json, os, re, time
+          import asyncio, json, re
           from pathlib import Path
           from playwright.async_api import async_playwright
 
@@ -85,8 +103,9 @@ jobs:
               assert abs(center_before[0]-center_after[0])<1e-9 and abs(center_before[1]-center_after[1])<1e-9, (center_before,center_after)
               card=page.locator('.rx46-card')
               text=await card.inner_text()
-              for required in ('CAR','Mapa KML','Consultar demonstrativo CAR','Área','Área (m²)','Status','Tipo','Condição','Módulos fiscais','Criação','Atualização','VER ANÁLISE COMPLETA'):
+              for required in ('CAR','Mapa KML','Consultar no SICAR (site oficial)','Área','Área (m²)','Status','Tipo','Condição','Módulos fiscais','Criação','Atualização','VER ANÁLISE COMPLETA'):
                   assert required in text,(required,text)
+              assert 'Consultar demonstrativo CAR' not in text,text
               for forbidden in ('RISCO NÃO CLASSIFICADO','CONFORMIDADE','FONTES RESPONDERAM','gerar PDF'):
                   assert forbidden.lower() not in text.lower(),(forbidden,text)
               assert await page.locator('.rx46-anchor-popup .leaflet-popup-tip').count()==1
@@ -104,6 +123,22 @@ jobs:
               type_text=' '.join(await page.locator('.rx46-field').all_inner_texts())
               assert '\nIRU' not in type_text,type_text
               return {'title':title,'text':text,'box':box}
+
+          async def assert_official_sicar_action(page):
+              car=(await page.locator('.rx46-card').get_attribute('data-car') or '').strip()
+              assert car,'selected card has no CAR code'
+              await page.evaluate("""()=>{
+                window.__rx46Opened=[];
+                window.__rx46Copied=[];
+                window.open=(url,target,features)=>{window.__rx46Opened.push({url:String(url),target:String(target||''),features:String(features||'')});return null};
+                Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:(value)=>{window.__rx46Copied.push(String(value));return Promise.resolve()}}});
+              }""")
+              await page.locator('[data-rx46-action="demo"]').click()
+              await page.wait_for_timeout(120)
+              probe=await page.evaluate("()=>({opened:window.__rx46Opened||[],copied:window.__rx46Copied||[]})")
+              assert probe['opened'] and probe['opened'][-1]['url']=='https://consulta.car.gov.br/',probe
+              assert probe['opened'][-1]['target']=='_blank',probe
+              assert car in probe['copied'],(car,probe)
 
           async def open_full(page):
               await page.locator('[data-rx46-action="full"]').click()
@@ -129,6 +164,7 @@ jobs:
               before=await map_center(page)
               await click_first_parcel(page)
               card=await assert_card_contract(page,before)
+              await assert_official_sicar_action(page)
               await page.screenshot(path=str(OUT/f'{label}-card.png'),full_page=True)
 
               # Clicking outside closes only the card, not the selected-property layer.
@@ -197,6 +233,8 @@ jobs:
           async def main():
               async with async_playwright() as p:
                   browser=await p.chromium.launch(headless=True)
+                  OUT.joinpath('browser-executed.txt').write_text('chromium launched\n',encoding='utf-8')
+                  print('RX_V46_BROWSER_EXECUTED=YES')
                   await viewport_flow(browser,375,812,'375')
                   await viewport_flow(browser,768,900,'768')
                   await viewport_flow(browser,1440,900,'1440')
@@ -207,6 +245,15 @@ jobs:
 
           asyncio.run(main())
           PY
+      - name: Enforce browser smoke execution
+        if: always()
+        run: |
+          mkdir -p artifacts
+          if [ ! -f artifacts/browser-executed.txt ]; then
+            echo "::error::RX_V46_BROWSER_SMOKE_NOT_EXECUTED: Chromium não chegou a abrir. O job falha fechado; nenhum resultado skipped pode ser considerado aprovado."
+            exit 1
+          fi
+          echo "RX_V46_BROWSER_EXECUTION_GUARD=PASS"
       - name: Runtime log on failure
         if: failure()
         run: |
@@ -218,5 +265,5 @@ jobs:
         with:
           name: v46-map-browser-smoke-${{ github.run_id }}
           path: artifacts/
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 14
