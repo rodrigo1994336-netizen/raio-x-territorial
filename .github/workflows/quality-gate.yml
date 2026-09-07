@@ -56,6 +56,8 @@ jobs:
           assert portal_boot_guard_v26.STATE.get('ready'), portal_boot_guard_v26.STATE
           import portal_v8, portal_action_runtime_v25, portal_resource_guard_v27
           import property_identity_runtime as identity
+          import runpy
+          runpy.run_path('.github/scripts/v47_name_truth.py')
           import cafir_name_search_v44 as cafir_search
           from shapely.geometry import box, mapping
           paths={getattr(r,'path',None) for r in portal_v8.app.router.routes}

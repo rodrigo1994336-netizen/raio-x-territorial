@@ -50,14 +50,12 @@ jobs:
           assert 'nunca são promovidas automaticamente a denominação do CAR' in identity
 
           # Viewport items carry machine-readable semantics; no source-string guessing.
-          assert "'display_kind':'VALIDATED_PROPERTY_NAME'" in viewport
           assert "'display_kind':'REFERENCE'" in viewport
-          assert "'validation_status':'VALIDATED'" in viewport
-          assert "'panel_name_eligible':True" in viewport
           assert "'panel_name_eligible':False" in viewport
+          assert "'reference_kind':'OSM_AUDITED'" in viewport
+          assert "'panel_name_eligible':True" not in viewport
           assert "'reference_kind':'OSM_LIVE'" in viewport
           assert "'reference_kind':'SIGEF_CADASTRAL'" in viewport
-          assert "'map_anchor':'CAR_POLYGON'" in viewport
           assert "'car_code':car_code" in viewport
           assert 'validated_property_names_returned' in viewport
           assert 'reference_names_returned' in viewport

@@ -151,19 +151,21 @@ def _seed_identity(code:str,items:list[dict[str,Any]])->dict[str,Any]|None:
             'candidate_count':len(items),'osm_candidates_inside_car':len(conflict.get('names') or []),'osm_conflict':True,
             'conflicting_public_names':conflict.get('names') or [],
             'display_kind':'UNRESOLVED','validation_status':'AMBIGUOUS','panel_name_eligible':False,
-            'note':'Mais de uma denominação geográfica pública foi validada no CAR; nenhuma é promovida sem evidência adicional.'
+            'geographic_reference_names':conflict.get('names') or [],
+            'note':'Mais de uma referência geográfica pública foi encontrada no CAR; nenhuma valida sua denominação.'
         }
     item=seed.by_car(code)
     if not item:return None
     return {
-        'ok':True,'car_code':code,'name':item['name'],'source':seed.SOURCE,
+        'ok':True,'car_code':code,'name':None,'source':seed.SOURCE,
         'confidence':'medium','method':'audited_osm_point_inside_exact_car',
-        'display_kind':'VALIDATED_PROPERTY_NAME','validation_status':'VALIDATED','panel_name_eligible':True,
-        'map_anchor':'CAR_POLYGON','validation_scope':'SPATIAL_ASSOCIATION',
-        'origin_label':'OpenStreetMap auditado + cruzamento espacial CAR/SICAR',
+        'display_kind':'REFERENCE','validation_status':'UNVALIDATED','panel_name_eligible':False,
+        'reference_kind':'OSM_AUDITED','map_anchor':'GEOGRAPHIC_POINT',
+        'geographic_reference_names':[item['name']],
+        'origin_label':'OpenStreetMap auditado — referência geográfica não confirmada para o CAR',
         'osm_node_id':item.get('osm_id'),'osm_lat':item.get('lat'),'osm_lon':item.get('lon'),
         'evidence_count':1,'candidates':items[:5],'candidate_count':len(items),'osm_candidates_inside_car':1,
-        'note':'Denominação geográfica pública previamente auditada e associada ao código CAR exato por cruzamento espacial; não implica titularidade.'
+        'note':'Ponto OSM dentro do CAR, mesmo auditado, não valida a denominação pelo protocolo congelado da Etapa 2.'
     }
 
 

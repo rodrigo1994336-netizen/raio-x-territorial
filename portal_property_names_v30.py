@@ -61,7 +61,7 @@ UI = r'''
   }
   function openReference(x){
     clearOrigin();
-    const osm=x?.reference_kind==='OSM_LIVE';
+    const osm=['OSM_LIVE','OSM_AUDITED'].includes(x?.reference_kind);
     const msg=osm?'Referência geográfica do OpenStreetMap — não confirmada como denominação deste imóvel.':'Referência cadastral SIGEF/INCRA — ainda não vinculada a um CAR específico.';
     if(typeof toast==='function')toast(`${x?.name||'Referência'}: ${msg}`)
   }
@@ -73,12 +73,12 @@ UI = r'''
       const title=validated?`${label} — denominação validada para o CAR`:`${label} — referência não confirmada para o imóvel`;
       const icon=L.divIcon({className:'rx-farm-name-icon',html:`<div class="rx-farm-name-label${semantic}${low}" title="${title}">${label}</div>`,iconSize:[1,1],iconAnchor:[0,0]});
       const mk=L.marker([lat,lon],{icon,keyboard:true,riseOnHover:true});mk.on('click',()=>validated?openValidatedProperty(x):openReference(x));
-      const provenance=validated?(x.origin_label||x.source||'fonte validada'):(x.reference_kind==='OSM_LIVE'?'OpenStreetMap · referência geográfica não confirmada':'SIGEF/INCRA · referência cadastral não vinculada ao CAR');
+      const provenance=validated?(x.origin_label||x.source||'fonte validada'):(['OSM_LIVE','OSM_AUDITED'].includes(x.reference_kind)?'OpenStreetMap · referência geográfica não confirmada':'SIGEF/INCRA · referência cadastral não vinculada ao CAR');
       mk.bindTooltip(`${esc(x.name)}${x.municipality?' · '+esc(x.municipality):''}${x.uf?' / '+esc(x.uf):''}<br>${esc(provenance)}`,{direction:'top',offset:[0,-8]});nameLayer.addLayer(mk);rendered++
     });nameLayer.addTo(m);return rendered
   }
   function legend(items){
-    const a=items||[],v=a.filter(isValidated).length,osm=a.filter(x=>x?.display_kind==='REFERENCE'&&x?.reference_kind==='OSM_LIVE').length,sig=a.filter(x=>x?.display_kind==='REFERENCE'&&x?.reference_kind==='SIGEF_CADASTRAL').length;let rows=[];
+    const a=items||[],v=a.filter(isValidated).length,osm=a.filter(x=>x?.display_kind==='REFERENCE'&&['OSM_LIVE','OSM_AUDITED'].includes(x?.reference_kind)).length,sig=a.filter(x=>x?.display_kind==='REFERENCE'&&x?.reference_kind==='SIGEF_CADASTRAL').length;let rows=[];
     if(v)rows.push(`<div class="rx-legend-row rx-legend-valid">◆ ${v} denominação(ões) validada(s) — vinculada(s) ao CAR</div>`);
     if(osm)rows.push(`<div class="rx-legend-row rx-legend-ref">○ ${osm} referência(s) do OpenStreetMap — não confirmada(s) para o imóvel</div>`);
     if(sig)rows.push(`<div class="rx-legend-row rx-legend-ref">○ ${sig} referência(s) SIGEF/INCRA — não vinculada(s) ao CAR</div>`);

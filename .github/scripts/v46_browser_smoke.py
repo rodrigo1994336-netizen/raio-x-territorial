@@ -194,6 +194,7 @@ async def viewport_flow(browser, width, height, label):
     )
     await page.goto(BASE, wait_until="domcontentloaded", timeout=30000)
     await wait_runtime(page)
+    await search_regression(page, label)
     await set_dense(page)
     before = await map_center(page)
     await click_first_parcel(page)
@@ -289,9 +290,46 @@ async def movement_gate(browser):
         results["movements"].append(rec)
         print("RX_V46_MOVEMENT", json.dumps(rec, ensure_ascii=False))
         assert min(samples) > 0, rec
+        await assert_parcel_fill(page)
     results["console"] = errors
     assert not errors, errors
     await context.close()
+
+
+async def assert_parcel_fill(page):
+    fills = await js(page, """()=>[...document.querySelectorAll('.leaflet-overlay-pane path.leaflet-interactive')].filter(p=>p.getAttribute('fill')!=='none').map(p=>Number(getComputedStyle(p).fillOpacity))""")
+    assert fills and all(.15 <= x <= .25 for x in fills), fills
+
+
+async def search_regression(page, label):
+    car = 'MG-3120904-F3ED1E9DAC0042B8ADA898DC3EAF5A28'
+    await js(page, "()=>map.setView([-14,-52],4,{animate:false})")
+    await page.locator('#q').fill(car)
+    await page.locator('#go').click()
+    await page.locator(f'.rx46-card[data-car="{car}"]').wait_for(state='visible', timeout=60000)
+    async def assert_framed():
+        state = await js(page, """()=>{const g=window.current.geometry,b=L.geoJSON(g).getBounds();return {zoom:map.getZoom(),contains:map.getBounds().contains(b),geometry:g,property:window.current}}""")
+        assert state['zoom'] > 4 and state['contains'], state
+        assert await page.locator('.rx45-panel-card').count() == 0
+        assert await page.locator('.rx46-selection').count() > 0
+        return state
+    state = await assert_framed()
+    await page.screenshot(path=str(OUT / f'{label}-car-search.png'), full_page=True)
+    await js(page, "()=>{window.rxV46CloseAnchor();map.setView([-14,-52],4,{animate:false})}")
+    # Exercise the name-result UI using an explicit CAR result fixture carrying
+    # the real geometry just resolved above. This does not assert name coverage.
+    await page.route('**/v1/live/search/properties?*', lambda route: route.fulfill(json={
+        'items': [{'type': 'car', 'name': 'Resultado de busca de teste', 'car_code': car,
+                   'municipality': 'Curvelo', 'uf': 'MG', 'geometry': state['geometry']}]
+    }))
+    await page.locator('#q').fill('Resultado de busca de teste')
+    await page.locator('#go').click()
+    await page.locator('.rx-smart-item').first.click()
+    await page.locator(f'.rx46-card[data-car="{car}"]').wait_for(state='visible', timeout=60000)
+    await assert_framed()
+    await page.screenshot(path=str(OUT / f'{label}-name-search.png'), full_page=True)
+    await page.unroute('**/v1/live/search/properties?*')
+    await js(page, "()=>window.rxV46CloseAnchor()")
 
 
 async def main():
