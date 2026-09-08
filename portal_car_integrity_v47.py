@@ -9,6 +9,7 @@ from fastapi import HTTPException
 
 import portal_v8
 import sicar_overlap_hardening_v47  # applies narrow CAR-overlap dedup patch before imports below
+import sicar_canonical_snapshot_v48  # patches V47 lookup to immutable canonical snapshot per UF
 from sicar_integrity_v47 import CAR_RE, query_car_integrity_v47
 from sicar_integrity_display_v47 import panel_table_rows
 
@@ -70,4 +71,10 @@ async def car_integrity_v47(car_code: str):
 # additive wrapper order without changing the frozen V47 integrity engine.
 import portal_conformity_sinaflor_v48  # noqa: E402,F401
 
-print("RX_PORTAL_CAR_INTEGRITY_V47=lazy_basedosdados_fail_closed", flush=True)
+# Load the frozen V47 integrity UI now, then harden only its snapshot wording.
+# sitecustomize imports portal_car_integrity_ui_v47 again afterwards; Python's
+# module cache makes that second import a no-op.
+import portal_car_integrity_ui_v47  # noqa: E402,F401
+import portal_car_snapshot_ui_v48  # noqa: E402,F401
+
+print("RX_PORTAL_CAR_INTEGRITY_V47=canonical_uf_snapshot_fail_closed", flush=True)
