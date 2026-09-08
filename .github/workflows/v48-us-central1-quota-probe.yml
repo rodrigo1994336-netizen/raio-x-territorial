@@ -1,12 +1,6 @@
 name: V48 US Central1 Read-only Quota Probe
-# recovery-trigger-service-usage: 2026-09-08
 
 on:
-  push:
-    branches:
-      - ops/v48-budget-gate-probe-20260908
-    paths:
-      - .github/workflows/v48-us-central1-quota-probe.yml
   workflow_dispatch:
 
 permissions:
@@ -91,6 +85,40 @@ jobs:
           p.write_text(json.dumps(out, ensure_ascii=False, indent=2, sort_keys=True) + '\n', encoding='utf-8')
           print('RX_V48_SERVICE_USAGE_QUOTA_METRICS=' + str(len(metrics)))
           print('RX_V48_SERVICE_USAGE_QUOTA_READ=PASS')
+          PY
+
+      - name: Print governing us-central1 quota values
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          data = json.loads(Path('artifacts/v48_compute_quota_info_raw.json').read_text(encoding='utf-8'))
+          by_metric = {m.get('metric'): m for m in data['metrics']}
+
+          def get_bucket(metric, unit, region=None):
+              item = by_metric[metric]
+              limit = next(x for x in item['consumerQuotaLimits'] if x.get('unit') == unit)
+              for bucket in limit.get('quotaBuckets', []):
+                  dims = bucket.get('dimensions') or {}
+                  if region is None and not dims:
+                      return bucket
+                  if dims.get('region') == region:
+                      return bucket
+              raise SystemExit(f'quota bucket missing: {metric} {unit} {region}')
+
+          standard = get_bucket('compute.googleapis.com/cpus', '1/{project}/{region}', 'us-central1')
+          preemptible = get_bucket('compute.googleapis.com/preemptible_cpus', '1/{project}/{region}', 'us-central1')
+          global_cpu = get_bucket('compute.googleapis.com/cpus_all_regions', '1/{project}')
+          regional_limit = int(standard['effectiveLimit'])
+          global_limit = int(global_cpu['effectiveLimit'])
+          preemptible_limit = preemptible.get('effectiveLimit')
+          governing = min(regional_limit, global_limit)
+          print('RX_V48_US_CENTRAL1_STANDARD_CPU_LIMIT=' + str(regional_limit))
+          print('RX_V48_US_CENTRAL1_PREEMPTIBLE_CPU_LIMIT=' + (str(preemptible_limit) if preemptible_limit is not None else 'NOT_SEPARATELY_GRANTED'))
+          print('RX_V48_CPUS_ALL_REGIONS_LIMIT=' + str(global_limit))
+          print('RX_V48_SPOT_E2_STATIC_GOVERNING_LIMIT=' + str(governing))
+          print('RX_V48_E2_STANDARD_8_THEORETICAL_MAX_CONCURRENCY=' + str(governing // 8))
           PY
 
       - name: Upload raw quota evidence
