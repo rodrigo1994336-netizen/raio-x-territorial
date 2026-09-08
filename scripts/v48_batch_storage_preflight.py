@@ -31,16 +31,17 @@ PROJECT_PERMISSIONS = (
     "batch.jobs.list",
     "batch.jobs.delete",
     "serviceusage.services.use",
-    # Observed only. The GitHub orchestrator must not receive direct VM/disk
+    # Observed and explicitly forbidden for the orchestrator. Batch's service
+    # agent provisions Compute resources; GitHub must not get direct VM/disk
     # creation power merely to submit a Batch job.
     "compute.instances.create",
     "compute.disks.create",
 )
-# The orchestrator only validates/reads pilot artifacts. The runtime worker is
-# the writer and receives objectUser on the dedicated bucket separately.
-BUCKET_PERMISSIONS = (
+ORCHESTRATOR_BUCKET_PROBE_PERMISSIONS = (
     "storage.objects.get",
     "storage.objects.list",
+    "storage.objects.create",
+    "storage.objects.delete",
 )
 
 
@@ -116,11 +117,11 @@ def main() -> None:
         session,
         "GET",
         f"https://storage.googleapis.com/storage/v1/b/{quote(BUCKET, safe='')}/iam/testPermissions",
-        params=[("permissions", p) for p in BUCKET_PERMISSIONS],
+        params=[("permissions", p) for p in ORCHESTRATOR_BUCKET_PROBE_PERMISSIONS],
     )
     bucket_granted = set(bucket_iam_body.get("permissions") or []) if bucket_iam_http == 200 else set()
     print(f"RX_V48_PREFLIGHT_BUCKET_IAM_HTTP={bucket_iam_http}")
-    for permission in BUCKET_PERMISSIONS:
+    for permission in ORCHESTRATOR_BUCKET_PROBE_PERMISSIONS:
         key = permission.upper().replace(".", "_")
         print(f"RX_V48_PREFLIGHT_BUCKET_PERMISSION_{key}={'TRUE' if permission in bucket_granted else 'FALSE'}")
 
@@ -150,9 +151,14 @@ def main() -> None:
         "batch.jobs.delete",
         "serviceusage.services.use",
     }
-    hard_bucket = set(BUCKET_PERMISSIONS)
+    required_orchestrator_bucket = {"storage.objects.get", "storage.objects.list"}
+    forbidden_orchestrator_bucket = {"storage.objects.create", "storage.objects.delete"}
+    forbidden_direct_compute = {"compute.instances.create", "compute.disks.create"}
+
     missing_project = sorted(hard_project - granted)
-    missing_bucket = sorted(hard_bucket - bucket_granted)
+    missing_bucket = sorted(required_orchestrator_bucket - bucket_granted)
+    forbidden_bucket_present = sorted(forbidden_orchestrator_bucket & bucket_granted)
+    forbidden_compute_present = sorted(forbidden_direct_compute & granted)
     api_not_enabled_or_unreadable = sorted(
         name for name, result in api_results.items()
         if result.get("http") != 200 or result.get("state") != "ENABLED"
@@ -160,7 +166,7 @@ def main() -> None:
     location_ok = bucket_location.upper() == REGION.upper()
 
     result = {
-        "schema_version": "v48-batch-storage-preflight-3",
+        "schema_version": "v48-batch-storage-preflight-4",
         "project": PROJECT,
         "project_number": project_number,
         "caller_email": caller_email or None,
@@ -172,12 +178,16 @@ def main() -> None:
         "bucket_get_http": bucket_http,
         "bucket_location": bucket_location or None,
         "bucket_location_matches_batch_region": location_ok,
-        "bucket_permissions": {p: p in bucket_granted for p in BUCKET_PERMISSIONS},
+        "orchestrator_bucket_permissions": {
+            p: p in bucket_granted for p in ORCHESTRATOR_BUCKET_PROBE_PERMISSIONS
+        },
         "batch_list_http": batch_http,
         "runtime_service_account_test_http": sa_http,
         "can_act_as_runtime_service_account": can_act_as_runtime,
         "missing_hard_project_permissions": missing_project,
-        "missing_hard_bucket_permissions": missing_bucket,
+        "missing_orchestrator_bucket_permissions": missing_bucket,
+        "forbidden_orchestrator_bucket_permissions_present": forbidden_bucket_present,
+        "forbidden_direct_compute_permissions_present": forbidden_compute_present,
         "api_not_enabled_or_unreadable": api_not_enabled_or_unreadable,
         "mutation_performed": False,
     }
@@ -188,6 +198,8 @@ def main() -> None:
     ready = (
         not missing_project
         and not missing_bucket
+        and not forbidden_bucket_present
+        and not forbidden_compute_present
         and not api_not_enabled_or_unreadable
         and batch_http == 200
         and can_act_as_runtime
