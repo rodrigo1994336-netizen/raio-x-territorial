@@ -90,11 +90,11 @@ def main() -> None:
         "https://storage.googleapis.com/storage/v1/b",
         params={"project": PROJECT, "maxResults": 10, "fields": "items(name,location,storageClass),nextPageToken"},
     )
-    bucket_items = storage_body.get("items") or [] if storage_http == 200 else []
+    bucket_items = (storage_body.get("items") or []) if storage_http == 200 else []
     print(f"RX_V48_PREFLIGHT_STORAGE_LIST_HTTP={storage_http}")
     print(f"RX_V48_PREFLIGHT_STORAGE_VISIBLE_BUCKETS={len(bucket_items)}")
 
-    batch_http, batch_body = request_json(
+    batch_http, _batch_body = request_json(
         session,
         "GET",
         f"https://batch.googleapis.com/v1/projects/{PROJECT}/locations/{REGION}/jobs",
@@ -123,7 +123,8 @@ def main() -> None:
     }
     missing_hard = sorted(hard_required - granted)
     api_definitely_disabled = sorted(
-        name for name, result in api_results.items() if result.get("http") == 200 and result.get("state") != "ENABLED"
+        name for name, result in api_results.items()
+        if result.get("http") == 200 and result.get("state") != "ENABLED"
     )
 
     result = {
@@ -149,14 +150,14 @@ def main() -> None:
         "can_act_as_default_compute_service_account": can_act_as_default,
         "missing_hard_orchestration_permissions": missing_hard,
         "definitely_disabled_apis": api_definitely_disabled,
-        "mutation_performed": false if False else False,
+        "mutation_performed": False,
     }
     out = Path("artifacts/v48_batch_storage_preflight.json")
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
 
     ready = not missing_hard and not api_definitely_disabled and batch_http == 200 and can_act_as_default
-    print(f"RX_V48_PREFLIGHT_MUTATION_PERFORMED=FALSE")
+    print("RX_V48_PREFLIGHT_MUTATION_PERFORMED=FALSE")
     print(f"RX_V48_BATCH_STORAGE_PREFLIGHT={'PASS' if ready else 'FAIL_CLOSED'}")
     if not ready:
         raise SystemExit(2)
