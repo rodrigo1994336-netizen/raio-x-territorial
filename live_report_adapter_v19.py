@@ -8,7 +8,8 @@ import live_report_adapter_v17 as v17
 import live_report_adapter_v13 as v13
 from report_engine_v9 import build_premium_property_report_v9
 import sicar_overlap_hardening_v47  # applies narrow CAR-overlap dedup patch
-from sicar_integrity_v47 import panel_table_rows, query_car_integrity_v47
+from sicar_integrity_v47 import query_car_integrity_v47
+from sicar_integrity_display_v47 import format_number_ptbr, format_snapshot_ptbr, panel_table_rows
 
 
 async def _extras_v47(result: dict, car_code: str, out_dir: Path):
@@ -68,7 +69,7 @@ def _patch_car_integrity_v47(payload: dict, integrity: dict):
             if row.get("measured_ha") is not None:
                 env.setdefault("layer_rows", []).append([
                     f"CAR — {row.get('label')}",
-                    f"{float(row.get('measured_ha')):.4f} ha medidos",
+                    f"{format_number_ptbr(row.get('measured_ha'), 4)} ha medidos",
                     "Base dos Dados / SICAR · GRS80",
                 ])
         car["environmental_composition"] = composition
@@ -76,7 +77,7 @@ def _patch_car_integrity_v47(payload: dict, integrity: dict):
         payload.setdefault("sources", []).append({
             "name": "Base dos Dados / SICAR — composição e consistência geométrica do CAR",
             "description": (
-                f"Snapshot {integrity.get('snapshot') or 'não informado'}; áreas declaradas separadas de medição elipsoidal GRS80. "
+                f"Snapshot {format_snapshot_ptbr(integrity.get('snapshot'))}; áreas declaradas separadas de medição elipsoidal GRS80. "
                 "Sobreposição com outros CARs usa união de interseções de área positiva. "
                 "Residual de regeneração é apenas geométrico."
             ),

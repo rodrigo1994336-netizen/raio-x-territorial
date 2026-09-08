@@ -15,28 +15,30 @@ VIEWPORTS = (
     (1440, 900, "1440"),
 )
 
-# Exact customer-facing strings in the current candidate. Summary/boundary
-# values use pt-BR formatting while table rows still carry dot decimals.
 EXPECTED = (
-    "Sobreposição com outros CARs",
-    "0 CAR(s) · 0,0000 ha · 0,00%",
+    "Nenhuma inconsistência cadastral: o imóvel não se sobrepõe a outro CAR e está inteiramente dentro de Curvelo/MG.",
+    "Sobreposição CAR × CAR",
+    "0,0000 ha · 0,00% do imóvel",
+    "Município · Curvelo/MG",
+    "Estado · Minas Gerais (MG)",
+    "Dentro do limite",
+    "Snapshot SICAR: 04/08/2026",
     "Vegetação nativa",
     "Reserva legal",
+    "Nenhuma feição desta classe no imóvel",
     "APP",
-    "1.4547 ha",
-    "1.4556 ha · 100.00%",
+    "1,4547 ha",
+    "1,4556 ha · 100,00%",
     "Uso restrito",
     "Área consolidada",
-    "12.5701 ha",
-    "12.5778 ha · 100.00%",
+    "12,5701 ha",
+    "12,5778 ha · 100,00%",
     "Hidrografia",
     "Campo não publicado",
-    "0.4108 ha · 100.00%",
+    "0,4108 ha · 100,00%",
     "Regeneração",
     "Não é campo declarado",
-    "1.8155 ha · 12.26%",
-    "Município: 0,0000 ha fora · 0,00%",
-    "UF: 0,0000 ha fora · 0,00%",
+    "1,8155 ha · 12,26%",
 )
 
 
@@ -56,14 +58,10 @@ async def open_curvelo(page):
     await page.locator('[data-rx46-action="full"]').click()
     await page.locator(f'.rx45-panel-card[data-car="{CAR}"]').wait_for(state="visible", timeout=15000)
 
-    # V46 intentionally normalizes the V45 panel through 1300 ms. Attaching the
-    # V47 section before that can target a node that is about to be replaced.
     await page.wait_for_timeout(1550)
     await page.wait_for_function("typeof window.rxV47LoadIntegrity==='function'", timeout=10000)
 
     table_selector = f'.rx45-panel-card[data-car="{CAR}"] .rx45-integrity-table'
-    # Finite retry only. Each attempt schedules the V47 extension against the
-    # current panel node; no product polling/observer is introduced.
     for _ in range(6):
         if await page.locator(table_selector).count():
             try:
@@ -88,6 +86,31 @@ async def current_integrity(page):
     return integrity
 
 
+async def assert_mobile_no_truncation(page):
+    layout = await page.evaluate(
+        """car=>{
+          const root=document.querySelector(`.rx45-panel-card[data-car="${CSS.escape(car)}"] .rx45-integrity-slot`);
+          if(!root)return {missing:true};
+          const scroll=root.querySelector('.rx45-integrity-scroll');
+          const clipped=[...root.querySelectorAll('.rx45-integrity-table tbody th,.rx45-integrity-table tbody td,.rx45-integrity-check b,.rx45-integrity-check span')]
+            .filter(el=>el.getClientRects().length && el.scrollWidth>el.clientWidth+1)
+            .map(el=>({text:el.textContent,clientWidth:el.clientWidth,scrollWidth:el.scrollWidth}));
+          const thead=root.querySelector('.rx45-integrity-table thead');
+          return {
+            missing:false,
+            horizontalOverflow:scroll?scroll.scrollWidth-scroll.clientWidth:999,
+            clipped,
+            theadDisplay:thead?getComputedStyle(thead).display:null,
+          };
+        }""",
+        CAR,
+    )
+    assert not layout.get("missing"), layout
+    assert layout["horizontalOverflow"] <= 1, layout
+    assert not layout["clipped"], layout
+    assert layout["theadDisplay"] == "none", layout
+
+
 async def run_viewport(browser, width: int, height: int, label: str):
     context = await browser.new_context(viewport={"width": width, "height": height})
     page = await context.new_page()
@@ -110,10 +133,13 @@ async def run_viewport(browser, width: int, height: int, label: str):
         assert expected.casefold() in folded, (label, expected, text)
     assert "fonte indisponível" not in folded, text
     assert "consultando composição" not in folded, text
+    assert "indisponível" not in folded, text
+    assert "1.4556" not in text and "12.5778" not in text and "100.00%" not in text, text
     assert not errors, errors
 
-    # Scroll using the current DOM and re-acquire before each capture, because
-    # late enrichment is allowed to replace panel nodes.
+    if width <= 390:
+        await assert_mobile_no_truncation(page)
+
     await page.evaluate(
         """car=>{
           const sel=`.rx45-panel-card[data-car="${CSS.escape(car)}"] .rx45-integrity-slot`;
@@ -126,7 +152,7 @@ async def run_viewport(browser, width: int, height: int, label: str):
     await page.wait_for_timeout(300)
     integrity = await current_integrity(page)
     text_after = await integrity.inner_text()
-    assert "0 CAR(s) · 0,0000 ha · 0,00%" in text_after, text_after
+    assert "Nenhuma inconsistência cadastral" in text_after, text_after
 
     shot = OUT / f"v47-curvelo-{label}.png"
     detail = OUT / f"v47-curvelo-{label}-integrity.png"

@@ -9,7 +9,8 @@ from fastapi import HTTPException
 
 import portal_v8
 import sicar_overlap_hardening_v47  # applies narrow CAR-overlap dedup patch before imports below
-from sicar_integrity_v47 import CAR_RE, panel_table_rows, query_car_integrity_v47
+from sicar_integrity_v47 import CAR_RE, query_car_integrity_v47
+from sicar_integrity_display_v47 import panel_table_rows
 
 app = portal_v8.app
 _CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
