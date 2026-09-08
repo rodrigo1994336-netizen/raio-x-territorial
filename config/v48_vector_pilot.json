@@ -1,0 +1,22 @@
+{
+  "schema_version": "v48-vector-pilot-1",
+  "status": "selected",
+  "project": "metodo-afp-plataforma",
+  "pilot_uf": "ES",
+  "snapshot_id": "sicar-2026-08-04",
+  "snapshot_date": "2026-08-04",
+  "analysis_snapshot": "2026-08-04",
+  "map_snapshot": "2026-08-04",
+  "candidate_evidence": {
+    "distinct_cars": 129496,
+    "municipalities": 78,
+    "duplicate_row_cars": 2,
+    "p50_points": 19,
+    "p90_points": 55,
+    "p95_points": 77,
+    "p99_points": 154,
+    "max_points": 5187
+  },
+  "selection_reason": "Nearly the same CAR volume as SE, but materially higher typical geometry complexity while remaining a small exact-snapshot UF.",
+  "national_generation_allowed": false
+}
