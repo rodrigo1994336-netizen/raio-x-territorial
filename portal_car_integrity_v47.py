@@ -65,4 +65,9 @@ async def car_integrity_v47(car_code: str):
     return out
 
 
+# V48 Source 2 is deliberately loaded here because sitecustomize imports this
+# module immediately after the MTE conformity extension. This preserves the
+# additive wrapper order without changing the frozen V47 integrity engine.
+import portal_conformity_sinaflor_v48  # noqa: E402,F401
+
 print("RX_PORTAL_CAR_INTEGRITY_V47=lazy_basedosdados_fail_closed", flush=True)
