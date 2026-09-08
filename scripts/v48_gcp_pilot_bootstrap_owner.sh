@@ -32,6 +32,7 @@ echo "RX_V48_BOOTSTRAP_BUDGET_ROLE_GRANTS=NONE"
 # kept outside the long-lived service-account privileges.
 gcloud services enable \
   batch.googleapis.com \
+  bigquery.googleapis.com \
   compute.googleapis.com \
   logging.googleapis.com \
   storage.googleapis.com \
