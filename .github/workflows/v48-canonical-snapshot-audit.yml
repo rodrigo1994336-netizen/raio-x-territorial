@@ -1,0 +1,84 @@
+name: V48 Canonical SICAR Snapshot Audit
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit-canonical-snapshots:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+      GOOGLE_CLOUD_PROJECT: ${{ secrets.GCP_PROJECT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Static contract gate before any paid query
+        run: python scripts/v48_canonical_snapshot_static_gate.py
+
+      - name: Reject missing Google Cloud configuration
+        shell: bash
+        env:
+          GCP_SA_KEY_PRESENT: ${{ secrets.GCP_SA_KEY }}
+        run: |
+          test -n "$GCP_PROJECT_ID" || { echo 'GCP_PROJECT_ID ausente'; exit 2; }
+          test -n "$GCP_SA_KEY_PRESENT" || { echo 'GCP_SA_KEY ausente'; exit 2; }
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - name: Install BigQuery dependency
+        run: pip install --disable-pip-version-check google-cloud-bigquery
+
+      - name: Discover latest complete eight-table snapshot for each UF
+        run: python scripts/v48_canonical_snapshot_audit.py
+
+      - name: Assert Curvelo/MG reference remains on 04/08/2026
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          data = json.loads(Path('artifacts/v48_sicar_canonical_snapshot_manifest_candidate.json').read_text(encoding='utf-8'))
+          mg = data['ufs']['MG']
+          assert mg['status'] == 'canonical', mg
+          assert mg['snapshot'] == '2026-08-04', mg
+          assert int(mg['area_imovel_distinct_car_count']) > 0, mg
+          print('RX_V48_CURVELO_REFERENCE_SNAPSHOT_PRESERVED=PASS snapshot=2026-08-04')
+          PY
+
+      - name: Print 27 canonical dates and CAR counts
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          data = json.loads(Path('artifacts/v48_sicar_canonical_snapshot_manifest_candidate.json').read_text(encoding='utf-8'))
+          for uf in sorted(data['ufs']):
+              item = data['ufs'][uf]
+              if item['status'] == 'canonical':
+                  print(f"RX_V48_CANONICAL_{uf}=snapshot:{item['snapshot']} cars:{item['area_imovel_distinct_car_count']}")
+              else:
+                  print(f"RX_V48_CANONICAL_{uf}=UNAVAILABLE")
+          PY
+
+      - name: Upload immutable-manifest candidate evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v48-sicar-canonical-snapshot-manifest-candidate
+          path: artifacts/v48_sicar_canonical_snapshot_manifest_candidate.json
+          if-no-files-found: warn
+          retention-days: 14
