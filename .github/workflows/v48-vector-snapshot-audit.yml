@@ -1,0 +1,58 @@
+name: V48 Vector Snapshot Audit
+
+on:
+  push:
+    branches:
+      - ops/v48-budget-gate-probe-20260908
+    paths:
+      - scripts/v48_vector_snapshot_audit.py
+      - .github/workflows/v48-vector-snapshot-audit.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit-sicar-snapshot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+      GOOGLE_CLOUD_PROJECT: ${{ secrets.GCP_PROJECT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reject missing Google Cloud configuration
+        shell: bash
+        run: |
+          test -n "$GCP_PROJECT_ID" || { echo 'GCP_PROJECT_ID ausente'; exit 2; }
+          test -n "$GCP_SA_KEY_PRESENT" || { echo 'GCP_SA_KEY ausente'; exit 2; }
+        env:
+          GCP_SA_KEY_PRESENT: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install BigQuery dependency
+        run: pip install --disable-pip-version-check google-cloud-bigquery
+
+      - name: Audit exact SICAR snapshot 2026-08-04
+        run: python scripts/v48_vector_snapshot_audit.py
+
+      - name: Upload audit evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v48-vector-snapshot-audit
+          path: artifacts/v48_vector_snapshot_audit.json
+          if-no-files-found: warn
+          retention-days: 14
