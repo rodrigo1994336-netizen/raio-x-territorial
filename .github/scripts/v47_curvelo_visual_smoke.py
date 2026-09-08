@@ -58,9 +58,9 @@ async def open_curvelo(page):
     await page.locator('[data-rx46-action="full"]').click()
     await page.locator(f'.rx45-panel-card[data-car="{CAR}"]').wait_for(state="visible", timeout=15000)
 
+    # V46 performs finite late normalization. Attach V47 only to the current node.
     await page.wait_for_timeout(1550)
     await page.wait_for_function("typeof window.rxV47LoadIntegrity==='function'", timeout=10000)
-
     table_selector = f'.rx45-panel-card[data-car="{CAR}"] .rx45-integrity-table'
     for _ in range(6):
         if await page.locator(table_selector).count():
@@ -96,12 +96,7 @@ async def assert_mobile_no_truncation(page):
             .filter(el=>el.getClientRects().length && el.scrollWidth>el.clientWidth+1)
             .map(el=>({text:el.textContent,clientWidth:el.clientWidth,scrollWidth:el.scrollWidth}));
           const thead=root.querySelector('.rx45-integrity-table thead');
-          return {
-            missing:false,
-            horizontalOverflow:scroll?scroll.scrollWidth-scroll.clientWidth:999,
-            clipped,
-            theadDisplay:thead?getComputedStyle(thead).display:null,
-          };
+          return {missing:false,horizontalOverflow:scroll?scroll.scrollWidth-scroll.clientWidth:999,clipped,theadDisplay:thead?getComputedStyle(thead).display:null};
         }""",
         CAR,
     )
@@ -109,6 +104,58 @@ async def assert_mobile_no_truncation(page):
     assert layout["horizontalOverflow"] <= 1, layout
     assert not layout["clipped"], layout
     assert layout["theadDisplay"] == "none", layout
+
+
+async def position_integrity(page, edge: str):
+    state = await page.evaluate(
+        """({car,edge})=>{
+          const host=document.querySelector('#rx43SnapshotHost');
+          const root=document.querySelector(`.rx45-panel-card[data-car="${CSS.escape(car)}"] .rx45-integrity-slot`);
+          if(!host||!root)return {ok:false};
+          const hr=host.getBoundingClientRect(),rr=root.getBoundingClientRect();
+          if(edge==='top') host.scrollTop += rr.top-hr.top-4;
+          else host.scrollTop += rr.bottom-hr.bottom+4;
+          return {ok:true,hostScrollTop:host.scrollTop};
+        }""",
+        {"car": CAR, "edge": edge},
+    )
+    assert state.get("ok"), state
+    await page.wait_for_timeout(350)
+
+
+async def assert_top_evidence_visible(page):
+    state = await page.evaluate(
+        """car=>{
+          const host=document.querySelector('#rx43SnapshotHost');
+          const root=document.querySelector(`.rx45-panel-card[data-car="${CSS.escape(car)}"] .rx45-integrity-slot`);
+          if(!host||!root)return {ok:false};
+          const hr=host.getBoundingClientRect();
+          const els=[root.querySelector('.rx45-integrity-reading'),...root.querySelectorAll('.rx45-integrity-check')];
+          const rects=els.map(el=>{const r=el.getBoundingClientRect();return {top:r.top,bottom:r.bottom,left:r.left,right:r.right,text:el.textContent}});
+          const visible=rects.every(r=>r.bottom>hr.top+1&&r.top<hr.bottom-1);
+          return {ok:true,host:{top:hr.top,bottom:hr.bottom},rects,visible};
+        }""",
+        CAR,
+    )
+    assert state.get("ok") and state.get("visible"), state
+
+
+async def assert_bottom_evidence_visible(page):
+    state = await page.evaluate(
+        """car=>{
+          const host=document.querySelector('#rx43SnapshotHost');
+          const root=document.querySelector(`.rx45-panel-card[data-car="${CSS.escape(car)}"] .rx45-integrity-slot`);
+          if(!host||!root)return {ok:false};
+          const hr=host.getBoundingClientRect();
+          const rows=[...root.querySelectorAll('.rx45-integrity-table tbody tr')];
+          const regen=rows.find(r=>/Regeneração/i.test(r.textContent||''));
+          const note=root.querySelector('.rx45-integrity-note');
+          const visible=el=>{if(!el)return false;const r=el.getBoundingClientRect();return r.bottom>hr.top+1&&r.top<hr.bottom-1};
+          return {ok:true,regenVisible:visible(regen),noteVisible:visible(note)};
+        }""",
+        CAR,
+    )
+    assert state.get("ok") and state.get("regenVisible") and state.get("noteVisible"), state
 
 
 async def run_viewport(browser, width: int, height: int, label: str):
@@ -136,38 +183,30 @@ async def run_viewport(browser, width: int, height: int, label: str):
     assert "indisponível" not in folded, text
     assert "1.4556" not in text and "12.5778" not in text and "100.00%" not in text, text
     assert not errors, errors
-
     if width <= 390:
         await assert_mobile_no_truncation(page)
 
-    await page.evaluate(
-        """car=>{
-          const sel=`.rx45-panel-card[data-car="${CSS.escape(car)}"] .rx45-integrity-slot`;
-          const el=document.querySelector(sel);
-          if(!el) throw new Error('V47 integrity slot missing before screenshot');
-          el.scrollIntoView({block:'center',inline:'nearest'});
-        }""",
-        CAR,
-    )
-    await page.wait_for_timeout(300)
-    integrity = await current_integrity(page)
-    text_after = await integrity.inner_text()
-    assert "Nenhuma inconsistência cadastral" in text_after, text_after
+    # Real-screen evidence at two actual scroll positions. No CSS/layout is
+    # modified for screenshots: top proves reading+three checks, bottom proves
+    # final table rows+legal note are reachable/readable at each viewport.
+    await position_integrity(page, "top")
+    await assert_top_evidence_visible(page)
+    top_shot = OUT / f"v47-curvelo-{label}-top.png"
+    await page.screenshot(path=str(top_shot), full_page=False)
 
-    shot = OUT / f"v47-curvelo-{label}.png"
-    detail = OUT / f"v47-curvelo-{label}-integrity.png"
-    await page.screenshot(path=str(shot), full_page=False)
-    integrity = await current_integrity(page)
-    await integrity.screenshot(path=str(detail))
+    await position_integrity(page, "bottom")
+    await assert_bottom_evidence_visible(page)
+    bottom_shot = OUT / f"v47-curvelo-{label}-bottom.png"
+    await page.screenshot(path=str(bottom_shot), full_page=False)
 
     data = {
         "width": width,
         "height": height,
         "car": CAR,
-        "integrity_text": text_after,
+        "integrity_text": text,
         "errors": errors,
-        "screenshot": str(shot),
-        "integrity_screenshot": str(detail),
+        "top_screenshot": str(top_shot),
+        "bottom_screenshot": str(bottom_shot),
     }
     print("RX_V47_CURVELO_VISUAL", json.dumps(data, ensure_ascii=False))
     await context.close()
@@ -185,7 +224,7 @@ async def main():
         finally:
             await browser.close()
     (OUT / "results.json").write_text(json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8")
-    (OUT / "browser-executed.txt").write_text("V47_CURVELO_VISUAL\n", encoding="utf-8")
+    (OUT / "browser-executed.txt").write_text("V47_CURVELO_VISUAL_TOP_BOTTOM\n", encoding="utf-8")
     print("RX_V47_CURVELO_VISUAL_SMOKE=PASS")
 
 

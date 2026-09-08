@@ -4,6 +4,7 @@ import json
 
 import sicar_integrity_v47 as sicar
 import sicar_overlap_hardening_v47  # noqa: F401 - patches overlap engine before query
+from sicar_integrity_display_v47 import format_snapshot_ptbr, panel_table_rows
 from scripts.v47_block2_real_bigquery_gate import CURVELO_CAR, inspect_admin_mesh_schema
 
 
@@ -18,11 +19,12 @@ def main() -> None:
     overlap = result.get("overlap") or {}
     municipality = result.get("municipality_boundary") or {}
     uf = result.get("uf_boundary") or {}
-    table = sicar.panel_table_rows(result)
+    table = panel_table_rows(result)
 
     payload = {
         "car_code": CURVELO_CAR,
         "snapshot": result.get("snapshot"),
+        "snapshot_display": format_snapshot_ptbr(result.get("snapshot")),
         "property": {
             "id_municipio": prop.get("id_municipio"),
             "sigla_uf": prop.get("sigla_uf"),
