@@ -41,7 +41,6 @@ def require_configuration() -> None:
 
 
 def inspect_admin_mesh_schema(client: Any) -> dict[str, dict[str, str]]:
-    # This exact dataset-level inventory is a hard gate requested by the owner.
     rows = sicar._query(
         client,
         f"SELECT table_name FROM `{ADMIN_DATASET}.INFORMATION_SCHEMA.TABLES` ORDER BY table_name",
@@ -115,7 +114,8 @@ def inspect_admin_mesh_schema(client: Any) -> dict[str, dict[str, str]]:
     return schema
 
 
-def source_coverage_sql() -> str:
+def uf_presence_any_date_sql() -> str:
+    """Prove only that each UF has at least one non-null geometry at any date."""
     return f"""
     SELECT DISTINCT sigla_uf
     FROM `{sicar.DATASET}.area_imovel`
@@ -123,13 +123,14 @@ def source_coverage_sql() -> str:
     """
 
 
-def source_coverage(client: Any) -> set[str]:
-    rows = sicar._query(client, source_coverage_sql(), {})
+def uf_presence_any_date(client: Any) -> set[str]:
+    rows = sicar._query(client, uf_presence_any_date_sql(), {})
     return {str(row.get("sigla_uf") or "").upper() for row in rows if row.get("sigla_uf")}
 
 
 def sample_car(client: Any, uf: str) -> str:
-    # Keep the expensive spatial work partition-pruned to one UF + one snapshot.
+    # Historical V47 sampling deliberately uses the latest area_imovel date per UF.
+    # This is not the V48 canonical-snapshot selection rule.
     sql = f"""
     WITH latest AS (
       SELECT MAX(data_extracao) AS snapshot
@@ -189,7 +190,7 @@ def estimate_expensive_queries(client: Any) -> None:
             sicar._boundary_sql(os.environ["RX_ADMIN_UF_TABLE"], "sigla_uf"),
             {"uf": "MG"},
         ),
-        ("national_source_coverage", source_coverage_sql(), {}),
+        ("uf_presence_any_date", uf_presence_any_date_sql(), {}),
     )
     for name, sql, params in estimates:
         print_dry_run(name, sicar._dry_run_bytes(client, sql, params))
@@ -208,7 +209,6 @@ def assert_result(car_code: str, result: dict[str, Any]) -> None:
     required = set(sicar.DISPLAY_ORDER) | {"regeneracao"}
     if not required.issubset(rows):
         fail(f"{car_code}: linhas ausentes {sorted(required-set(rows))}")
-    # Official br_sfb_sicar schema has no `area` field for hydrografia.
     if rows["hidrografia"].get("declared_ha") is not None:
         fail(f"{car_code}: hidrografia ganhou área declarada artificial")
     if rows["regeneracao"].get("state") != "geometric_residual":
@@ -251,13 +251,8 @@ def assert_curvelo_benchmark(client: Any) -> None:
 def main() -> None:
     require_configuration()
     client = sicar._client()
-
-    # Hard stop before the V47 engine uses any administrative boundary.
     inspect_admin_mesh_schema(client)
     print("RX_V47_ADMIN_SCHEMA=PASS")
-
-    # Cost is disclosed by BigQuery dry-run BEFORE the nationwide coverage query
-    # or multi-UF spatial sample is executed.
     estimate_expensive_queries(client)
 
     raw = (os.getenv("RX_V47_SAMPLE_UFS") or ",".join(DEFAULT_SAMPLE_UFS)).upper()
@@ -279,19 +274,18 @@ def main() -> None:
 
     assert_curvelo_benchmark(client)
 
-    # National validation is deliberately last and requires a second explicit release
-    # after the dry-run cost has been shown to the owner. This prevents an automatic
-    # PR run from crossing the national-cost boundary in the same execution.
+    # This gate proves ONLY any-date UF presence in area_imovel. It does not prove
+    # a common date, canonical per-UF dates, or completeness across eight tables.
     if (os.getenv("RX_V47_NATIONAL_VALIDATION_APPROVED") or "0").strip() != "1":
-        print("RX_V47_NATIONAL_VALIDATION=PENDING_COST_REVIEW")
+        print("RX_V47_UF_PRESENCE_ANY_DATE=PENDING_COST_REVIEW")
         print("RX_V47_BLOCK2_REAL_BIGQUERY_GATE=PRENATIONAL_PASS")
         return
 
-    present = source_coverage(client)
+    present = uf_presence_any_date(client)
     missing = sorted(EXPECTED_UFS - present)
     if missing:
-        fail(f"area_imovel não cobre as 27 UFs esperadas; faltando: {missing}")
-    print("RX_V47_NATIONAL_SOURCE_COVERAGE=PASS ufs=27")
+        fail(f"area_imovel não contém geometria em nenhuma data para UFs: {missing}")
+    print("RX_V47_UF_PRESENCE_ANY_DATE=PASS ufs=27")
     print("RX_V47_BLOCK2_REAL_BIGQUERY_GATE=PASS")
 
 
