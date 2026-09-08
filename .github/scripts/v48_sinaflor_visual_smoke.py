@@ -54,7 +54,7 @@ async def wait_panel_hydrated(page):
           const ids=rows.map(row=>row.dataset.source||'');
           return rows.length===10 && ids.includes('mte_slave_labor') && ids.includes('sinaflor');
         }""",
-        CAR,
+        arg=CAR,
         timeout=45000,
     )
 
