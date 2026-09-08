@@ -6,8 +6,10 @@ on:
       - ops/v48-budget-gate-probe-20260908
     paths:
       - scripts/v48_es_batch_submit.py
+      - scripts/v48_es_paid_gate.py
       - scripts/v48_vector_pilot_worker.py
       - config/v48_vector_pilot.json
+      - .github/workflows/v48-es-batch-pilot.yml
       - .github/workflows/v48-es-batch-submit-static.yml
   workflow_dispatch:
 
@@ -25,51 +27,11 @@ jobs:
           python-version: '3.12'
       - name: Install import dependencies
         run: pip install --disable-pip-version-check google-auth requests
-      - name: Compile submitter and worker
-        run: python -m py_compile scripts/v48_es_batch_submit.py scripts/v48_vector_pilot_worker.py
-      - name: Assert exact paid-resource contract without GCP mutation
-        shell: bash
-        run: |
-          python - <<'PY'
-          import sys
-          sys.path.insert(0, 'scripts')
-          import v48_es_batch_submit as s
-          cfg = s.assert_frozen_contract()
-          sha, b64 = s.worker_payload()
-          job = s.build_job(sha, b64)
-          tg = job['taskGroups'][0]
-          spec = tg['taskSpec']
-          policy = job['allocationPolicy']['instances'][0]['policy']
-          disk = policy['disks'][0]
-          script = spec['runnables'][0]['script']['text']
-          assert s.JOB_ID == 'rx-v48-es-sicar-20260804-pilot-002'
-          assert cfg['pilot_uf'] == 'ES'
-          assert cfg['snapshot_date'] == '2026-08-04'
-          assert cfg['analysis_snapshot'] == cfg['map_snapshot'] == '2026-08-04'
-          assert cfg['national_generation_allowed'] is False
-          assert tg['taskCount'] == '1' and tg['parallelism'] == '1'
-          assert spec['maxRetryCount'] == 0
-          assert spec['maxRunDuration'] == '3600s'
-          assert policy['machineType'] == 'e2-standard-8'
-          assert policy['provisioningModel'] == 'SPOT'
-          assert disk['newDisk']['type'] == 'pd-balanced'
-          assert disk['newDisk']['sizeGb'] == '100'
-          assert job['allocationPolicy']['serviceAccount']['email'] == s.RUNTIME_SA
-          assert s.TIPPECANOE_VERSION == '2.79.0'
-          assert s.TIPPECANOE_SHA256 == 'b0fd9df49b6efc988288ea48774822c6de19eb48428017f27ee0b3b01d44f05d'
-          assert "export PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'" in script
-          assert '$SUDO apt-get update -y' in script
-          assert 'build-essential' in script and 'gcc' in script and 'g++' in script and 'coreutils' in script
-          assert 'FAIL_MISSING_COMMAND' in script
-          assert 'FAIL_MISSING_CC1' in script
-          assert 'FAIL_MISSING_CC1PLUS' in script
-          assert 'RX_V48_BATCH_BOOTSTRAP=TOOLCHAIN_OK' in script
-          assert 'RX_V48_BATCH_FINAL_METRICS=' in script
-          assert len(b64) > 1000
-          print(f'RX_V48_ES_SUBMIT_STATIC_WORKER_SHA={sha}')
-          print('RX_V48_ES_SUBMIT_STATIC_JOB_ID=rx-v48-es-sicar-20260804-pilot-002')
-          print('RX_V48_ES_SUBMIT_STATIC_RESOURCES=ONE_SPOT_E2_STANDARD_8_PD_BALANCED_100GB')
-          print('RX_V48_ES_SUBMIT_STATIC_RETRY=0')
-          print('RX_V48_ES_SUBMIT_STATIC_NATIONAL=FALSE')
-          print('RX_V48_ES_BATCH_SUBMIT_STATIC_GATE=PASS')
-          PY
+      - name: Compile all Python gate and execution code
+        run: >-
+          python -m py_compile
+          scripts/v48_es_batch_submit.py
+          scripts/v48_es_paid_gate.py
+          scripts/v48_vector_pilot_worker.py
+      - name: Assert exact paid-resource contract and runnable syntax without GCP mutation
+        run: python scripts/v48_es_paid_gate.py
