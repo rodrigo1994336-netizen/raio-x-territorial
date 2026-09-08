@@ -1,5 +1,5 @@
 name: V48 US Central1 Read-only Quota Probe
-# recovery-trigger: 2026-09-08
+# recovery-trigger-cloud-quotas: 2026-09-08
 
 on:
   push:
@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   probe-quota:
@@ -42,74 +42,32 @@ jobs:
       - name: Set up gcloud
         uses: google-github-actions/setup-gcloud@v2
 
-      - name: Read regional Compute Engine quotas only
+      - name: Read Compute Engine QuotaInfo only
         shell: bash
         run: |
-          gcloud compute regions describe "$TARGET_REGION" \
-            --project "$GCP_PROJECT_ID" \
-            --format=json > /tmp/region.json
-
+          set -euo pipefail
+          mkdir -p artifacts
+          gcloud beta quotas info list \
+            --project="$GCP_PROJECT_ID" \
+            --billing-project="$GCP_PROJECT_ID" \
+            --service=compute.googleapis.com \
+            --format=json > artifacts/v48_compute_quota_info_raw.json
           python - <<'PY'
-          import datetime as dt
           import json
-          import math
-          import os
           from pathlib import Path
-
-          raw = json.loads(Path('/tmp/region.json').read_text(encoding='utf-8'))
-          quotas = []
-          for q in raw.get('quotas', []):
-              quotas.append({
-                  'metric': q.get('metric'),
-                  'limit': float(q.get('limit', 0)),
-                  'usage': float(q.get('usage', 0)),
-              })
-          by_metric = {q['metric']: q for q in quotas}
-          preemptible = by_metric.get('PREEMPTIBLE_CPUS')
-          standard = by_metric.get('CPUS')
-          if preemptible:
-              governing = preemptible
-              source = 'PREEMPTIBLE_CPUS'
-          elif standard:
-              governing = standard
-              source = 'CPUS_FALLBACK_NO_PREEMPTIBLE_QUOTA_PRESENT'
-          else:
-              raise SystemExit('Neither PREEMPTIBLE_CPUS nor CPUS quota was returned')
-
-          available = max(0.0, governing['limit'] - governing['usage'])
-          payload = {
-              'schema_version': 'v48-us-central1-quota-probe-1',
-              'project': os.environ['GCP_PROJECT_ID'],
-              'region': os.environ['TARGET_REGION'],
-              'observed_at_utc': dt.datetime.now(dt.timezone.utc).isoformat(),
-              'read_only': True,
-              'spot_cpu_quota': {
-                  'preemptible_quota_present': preemptible is not None,
-                  'governing_metric': source,
-                  'limit_vcpu': governing['limit'],
-                  'usage_vcpu': governing['usage'],
-                  'available_vcpu': available,
-                  'max_e2_standard_8_at_observation': math.floor(available / 8),
-              },
-              'standard_cpu_quota': standard,
-              'preemptible_cpu_quota': preemptible,
-              'all_regional_quotas': sorted(quotas, key=lambda x: str(x['metric'])),
-          }
-          out = Path('evidence/v48/us-central1_compute_quota.json')
-          out.parent.mkdir(parents=True, exist_ok=True)
-          out.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + '\n', encoding='utf-8')
-          print('RX_V48_QUOTA_GOVERNING_METRIC=' + source)
-          print('RX_V48_QUOTA_LIMIT_VCPU=' + str(governing['limit']))
-          print('RX_V48_QUOTA_USAGE_VCPU=' + str(governing['usage']))
-          print('RX_V48_QUOTA_AVAILABLE_VCPU=' + str(available))
-          print('RX_V48_QUOTA_MAX_E2_STANDARD_8=' + str(math.floor(available / 8)))
+          p = Path('artifacts/v48_compute_quota_info_raw.json')
+          data = json.loads(p.read_text(encoding='utf-8'))
+          if not data:
+              raise SystemExit('Cloud Quotas returned no Compute Engine quota info')
+          print('RX_V48_CLOUD_QUOTAS_ITEMS=' + str(len(data)))
+          print('RX_V48_CLOUD_QUOTAS_READ=PASS')
           PY
 
-      - name: Commit quota evidence
-        shell: bash
-        run: |
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add evidence/v48/us-central1_compute_quota.json
-          git commit -m 'chore(v48): version us-central1 quota evidence'
-          git push origin "HEAD:${GITHUB_REF_NAME}"
+      - name: Upload raw quota evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v48-us-central1-quota-probe
+          path: artifacts/v48_compute_quota_info_raw.json
+          if-no-files-found: warn
+          retention-days: 14
