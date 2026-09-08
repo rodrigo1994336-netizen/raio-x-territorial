@@ -27,13 +27,21 @@ _HIDDEN_PLANNED = [
 
 
 def _panel_sync_v48(car_code: str) -> dict[str, Any]:
-    out = _BASE_PANEL_SYNC(car_code)
-    if not out.get("ok"):
-        return out
+    base = _BASE_PANEL_SYNC(car_code)
+    if not base.get("ok"):
+        return dict(base)
 
-    # Preserve every original V45 conformity row. V48 is additive: MTE is the
-    # only new visible row because it is the only new connector implemented now.
-    original = list(out.get("compliance_sources") or [])
+    # V45's cache returns shallow copies, so V48 must never mutate nested objects
+    # received from it. Rebuild every nested structure we modify and filter MTE
+    # defensively, making repeated reads of the same CAR strictly idempotent.
+    out = dict(base)
+    base_sources = [dict(x) for x in (base.get("sources") or [])]
+    original = [
+        dict(x)
+        for x in (base.get("compliance_sources") or [])
+        if str((x or {}).get("id") or "") != "mte_slave_labor"
+    ]
+    out["sources"] = base_sources
     out["compliance_sources"] = [
         *original,
         {
@@ -44,10 +52,10 @@ def _panel_sync_v48(car_code: str) -> dict[str, Any]:
         },
     ]
 
-    audit = dict(out.get("source_audit") or {})
-    original_total = int(audit.get("total") or (len(original) + int(audit.get("responded") or 0)))
-    # 10 original + all 8 approved new sources. Seven future connectors are
-    # catalogued in audit only; MTE is visible but blocked without owner identity.
+    audit = dict(base.get("source_audit") or {})
+    # Derive the original catalog cardinality from the actual original arrays,
+    # never from a possibly enriched total carried through a shallow cache.
+    original_total = len(base_sources) + len(original)
     audit["total"] = original_total + 1 + len(_HIDDEN_PLANNED)
     audit["visible_compliance"] = len(out["compliance_sources"])
     audit["hidden_planned_count"] = len(_HIDDEN_PLANNED)
@@ -116,4 +124,4 @@ UI = r'''
 if "RX_CONFORMITY_MTE_V48" not in portal_v8.PORTAL_HTML:
     portal_v8.PORTAL_HTML = portal_v8.PORTAL_HTML.replace("</body>", UI + "<!-- RX_CONFORMITY_MTE_V48 --></body>")
 
-print("RX_PORTAL_CONFORMITY_MTE_V48=original8_plus_mte_future7_audit_only_full18_truth", flush=True)
+print("RX_PORTAL_CONFORMITY_MTE_V48=original8_plus_mte_future7_audit_only_full18_truth_idempotent", flush=True)
