@@ -1,0 +1,65 @@
+{
+  "schema_version": "v48-us-central1-compute-quota-evidence-2",
+  "observed_at_utc": "2026-09-08T22:46:51Z",
+  "read_only": true,
+  "project_id": "metodo-afp-plataforma",
+  "project_number": "1070573621714",
+  "target_region": "us-central1",
+  "source": {
+    "api": "serviceusage.googleapis.com/v1beta1/consumerQuotaMetrics",
+    "workflow": "V48 US Central1 Read-only Quota Probe",
+    "run_id": 34287533100,
+    "job_id": 102266467457,
+    "artifact_id": 10080060307,
+    "artifact_digest": "sha256:9598a31650ff97978ee278f66c31f2c1421bee1815c200afc70891515885e806",
+    "raw_json_sha256": "7c762d0507bd361290402d2a757b49a6a9813478f0898e87f3c2aadeb6403bb9"
+  },
+  "regional_cpu": {
+    "metric": "compute.googleapis.com/cpus",
+    "display_name": "CPUs",
+    "region": "us-central1",
+    "default_limit_vcpu": 200,
+    "effective_limit_vcpu": 200
+  },
+  "preemptible_cpu": {
+    "metric": "compute.googleapis.com/preemptible_cpus",
+    "display_name": "Preemptible CPUs",
+    "region": "us-central1",
+    "default_limit_vcpu": null,
+    "effective_limit_vcpu": null,
+    "separate_effective_quota_returned": false
+  },
+  "global_cpu": {
+    "metric": "compute.googleapis.com/cpus_all_regions",
+    "display_name": "CPUs (all regions)",
+    "default_limit_vcpu": 32,
+    "effective_limit_vcpu": 32
+  },
+  "spot_e2_interpretation": {
+    "machine_type": "e2-standard-8",
+    "vcpu_per_uf_job": 8,
+    "separate_preemptible_quota_detected": false,
+    "regional_standard_limit_vcpu": 200,
+    "global_all_regions_limit_vcpu": 32,
+    "governing_static_limit_vcpu": 32,
+    "theoretical_max_concurrent_uf_jobs_if_other_cpu_usage_is_zero": 4
+  },
+  "current_usage": {
+    "measured": false,
+    "vcpu": null,
+    "reason": "Service Usage quota evidence exposes effective limits, not current Compute allocation usage; no zero-usage assumption is made."
+  },
+  "failed_read_paths_preserved": [
+    {
+      "method": "gcloud compute regions describe us-central1",
+      "result": "PERMISSION_DENIED",
+      "missing_permission": "compute.regions.get"
+    },
+    {
+      "method": "Cloud Quotas QuotaInfo",
+      "result": "SERVICE_DISABLED",
+      "service": "cloudquotas.googleapis.com",
+      "mutation_performed": false
+    }
+  ]
+}
