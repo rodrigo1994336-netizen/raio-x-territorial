@@ -10,6 +10,7 @@ on:
       - .github/workflows/v48-batch-storage-preflight.yml
   workflow_dispatch:
 
+# Revalidation remains read-only; owner bootstrap is external to this workflow.
 permissions:
   contents: read
 
