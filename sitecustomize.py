@@ -81,6 +81,7 @@ def _load_portal_deferred():
 
                 import portal_experience_v43  # noqa: F401
                 import portal_map_panel_v45  # noqa: F401
+                import portal_conformity_mte_v48  # noqa: F401
                 import portal_car_integrity_v47  # noqa: F401
                 import portal_car_integrity_ui_v47  # noqa: F401
                 import portal_map_stability_v43  # noqa: F401
@@ -105,6 +106,7 @@ def _load_portal_deferred():
                     '/sw.js',
                     '/v1/live/snapshot/{car_code}',
                     '/v1/live/map-panel/{car_code}',
+                    '/v1/live/conformity/mte/{car_code}',
                     '/v1/live/car-integrity/{car_code}',
                     '/v1/live/sicar/viewport-v46',
                     '/v1/live/property-identity/{car_code}',
@@ -125,6 +127,8 @@ def _load_portal_deferred():
                     raise RuntimeError('v43_experience_not_loaded')
                 if 'RX_MAP_PANEL_V45' not in portal_v8.PORTAL_HTML:
                     raise RuntimeError('v45_map_panel_not_loaded')
+                if 'RX_CONFORMITY_MTE_V48' not in portal_v8.PORTAL_HTML:
+                    raise RuntimeError('v48_mte_conformity_not_loaded')
                 if 'RX_CAR_INTEGRITY_V47' not in portal_v8.PORTAL_HTML:
                     raise RuntimeError('v47_car_integrity_ui_not_loaded')
                 if 'RX_MAP_PANEL_SELECTION_V45' not in portal_v8.PORTAL_HTML:
@@ -163,7 +167,7 @@ def _load_portal_deferred():
                 if heavy:
                     raise RuntimeError('heavy_modules_loaded_on_portal:' + ','.join(heavy))
                 guard.mark_ready()
-                print(f'RX_PORTAL_V46_EXTENSION=loaded_deferred routes:{len(ready)} two_level:on anchor_card:on anchor_race_guard:on cached_grid:on compact_panel:on selection_bridge:on audited_identity:on kml:on png:on advanced_search:on cafir_inverse:on search_resilient:on names:on coverage:on map_stability:on map_polish:on hybrid_basemap:on named_pdf:on pdf_viewer:on browser_worker_wake:on version:{portal_v8.APP_PORTAL_VERSION}', flush=True)
+                print(f'RX_PORTAL_V46_EXTENSION=loaded_deferred routes:{len(ready)} two_level:on anchor_card:on anchor_race_guard:on cached_grid:on compact_panel:on selection_bridge:on audited_identity:on kml:on png:on advanced_search:on cafir_inverse:on search_resilient:on names:on coverage:on map_stability:on map_polish:on hybrid_basemap:on named_pdf:on pdf_viewer:on browser_worker_wake:on mte_conformity:on version:{portal_v8.APP_PORTAL_VERSION}', flush=True)
             except Exception as exc:
                 if guard is not None:
                     try:
