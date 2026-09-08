@@ -1,0 +1,81 @@
+name: V48 Snapshot Contract Gate
+
+on:
+  push:
+    branches:
+      - ops/v48-budget-gate-probe-20260908
+    paths:
+      - vector_snapshot_contract_v48.py
+      - .github/workflows/v48-snapshot-contract-gate.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  exact-snapshot-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+      GOOGLE_CLOUD_PROJECT: ${{ secrets.GCP_PROJECT_ID }}
+      RX_BIGQUERY_PROJECT: ${{ secrets.GCP_PROJECT_ID }}
+      RX_ADMIN_MUNICIPALITY_TABLE: basedosdados.br_geobr_mapas.municipio
+      RX_ADMIN_UF_TABLE: basedosdados.br_geobr_mapas.estado
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install runtime dependencies
+        run: pip install --disable-pip-version-check google-cloud-bigquery shapely pyproj
+
+      - name: Prove exact snapshot contract and real canonical property
+        shell: bash
+        run: |
+          python - <<'PY'
+          import vector_snapshot_contract_v48 as v48
+          import sicar_integrity_v47 as sicar
+
+          assert v48.SNAPSHOT_DATE.isoformat() == '2026-08-04'
+          sql = v48.property_at_snapshot_sql().upper()
+          assert 'DATA_EXTRACAO=@SNAPSHOT' in sql
+          assert 'MAX(DATA_EXTRACAO)' not in sql
+
+          manifest = v48.validate_manifest(v48.canonical_manifest())
+          assert manifest['analysis_snapshot'] == '2026-08-04'
+          assert manifest['map_snapshot'] == '2026-08-04'
+          assert manifest['analysis_snapshot'] == manifest['map_snapshot']
+
+          divergent = v48.canonical_manifest()
+          divergent['map_snapshot'] = '2026-09-01'
+          try:
+              v48.validate_manifest(divergent)
+          except v48.SnapshotContractError:
+              pass
+          else:
+              raise AssertionError('divergent map/analysis snapshot accepted')
+
+          client = sicar._client()
+          car = 'MG-3120904-DFB380BECD7A4323AD8AA68FA14D011F'
+          prop = v48.fetch_property_at_snapshot(client, car, 'MG')
+          assert prop, 'Curvelo reference CAR absent from canonical snapshot'
+          assert str(prop.get('data_extracao')) == '2026-08-04'
+          assert prop.get('geometry_geojson'), 'canonical property geometry missing'
+
+          print('RX_V48_CANONICAL_SNAPSHOT=2026-08-04')
+          print('RX_V48_MAP_ANALYSIS_SNAPSHOT_EQUAL=PASS')
+          print('RX_V48_NO_LATEST_DATE_FALLBACK=PASS')
+          print('RX_V48_CURVELO_EXACT_SNAPSHOT=PASS')
+          print('RX_V48_SNAPSHOT_CONTRACT_GATE=PASS')
+          PY
