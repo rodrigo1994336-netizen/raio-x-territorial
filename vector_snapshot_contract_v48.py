@@ -192,7 +192,7 @@ def query_car_integrity_v48(car_code: str, *, client: Any | None = None,
 def assert_contract_static() -> None:
     sql = property_at_snapshot_sql()
     assert "data_extracao=@snapshot" in sql
-    assert "MAX(data_extracao)" not in sql.upper()
+    assert "MAX(DATA_EXTRACAO)" not in sql.upper()
     assert "ST_UNION_AGG(geometria)" in sql
     manifest = validate_manifest(canonical_manifest())
     assert manifest["analysis_snapshot"] == manifest["map_snapshot"] == "2026-08-04"
