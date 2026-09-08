@@ -56,7 +56,7 @@ def _query_names_sync(west: float, south: float, east: float, north: float, limi
         if len(items)>=cap:break
 
     # This seed contains OSM name points already audited against one exact CAR code.
-    # These are the only OSM-derived labels eligible to behave as property names.
+    # Spatial auditing does not establish a denomination under the frozen Stage 2 protocol.
     seed_added=0
     if len(items)<cap:
         for farm in seed.in_bbox(west,south,east,north,cap-len(items)):
@@ -70,10 +70,10 @@ def _query_names_sync(west: float, south: float, east: float, north: float, limi
                 'property_code':car_code,'car_code':car_code,'registry':None,'status':None,
                 'center':{'lat':float(farm['lat']),'lon':float(farm['lon'])},'osm_node_id':farm.get('osm_id'),
                 'source':seed.SOURCE,
-                'display_kind':'VALIDATED_PROPERTY_NAME','validation_status':'VALIDATED','panel_name_eligible':True,
-                'reference_kind':None,'map_anchor':'CAR_POLYGON','validation_scope':'SPATIAL_ASSOCIATION',
+                'display_kind':'REFERENCE','validation_status':'UNVALIDATED','panel_name_eligible':False,
+                'reference_kind':'OSM_AUDITED','map_anchor':'GEOGRAPHIC_POINT',
                 'validation_method':'AUDITED_OSM_POINT_TO_EXACT_CAR',
-                'origin_label':'OpenStreetMap auditado + cruzamento espacial CAR/SICAR'
+                'origin_label':'OpenStreetMap auditado — referência geográfica não confirmada para o CAR'
             });seed_added+=1
             if len(items)>=cap:break
 

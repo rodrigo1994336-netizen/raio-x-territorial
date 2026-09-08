@@ -1,0 +1,78 @@
+name: V47 Block 2 Deterministic Gate
+
+on:
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  v47-block2-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install deterministic dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install fastapi httpx shapely pyproj pillow reportlab uvicorn
+      - name: Compile V47 Block 2 modules
+        run: |
+          python -m py_compile sicar_integrity_v47.py sicar_overlap_hardening_v47.py portal_car_integrity_v47.py portal_car_integrity_ui_v47.py report_engine_v9.py live_report_adapter_v19.py report_v19_patch.py scripts/v47_block2_integrity_gate.py
+      - name: Run deterministic geometry and PDF gate
+        env:
+          RX_RELEASE: OFF
+        run: |
+          PYTHONPATH=. python scripts/v47_block2_integrity_gate.py
+      - name: Verify hardened overlap contract
+        run: |
+          PYTHONPATH=. python - <<'PY'
+          import sicar_overlap_hardening_v47
+          import sicar_integrity_v47 as sicar
+          sql=sicar._overlap_sql()
+          assert 'SELECT ST_UNION_AGG(geometria) AS geometria' in sql
+          assert 'others AS' in sql and 'GROUP BY id_imovel' in sql
+          assert 'id_imovel!=@car_code' in sql
+          assert 'ST_AREA(ST_INTERSECTION(target.geometria, other.geometria)) > 0' in sql
+          print('RX_V47_OVERLAP_HARDENING_CONTRACT=PASS')
+          PY
+      - name: V47 report runtime uses the shared integrity motor
+        env:
+          RX_RELEASE: OFF
+        run: |
+          python - <<'PY'
+          import time
+          import sitecustomize
+          import report_api
+          deadline=time.time()+15
+          while time.time()<deadline and str(getattr(report_api,'APP_VERSION',''))!='0.47.0-v47-block2-candidate':
+              time.sleep(.1)
+          assert str(report_api.APP_VERSION)=='0.47.0-v47-block2-candidate', report_api.APP_VERSION
+          assert report_api.generate_live_report.__module__=='live_report_adapter_v19'
+          print('RX_V47_BLOCK2_REPORT_RUNTIME=PASS')
+          PY
+      - name: Preserve frozen V46/Block-1 portal guard
+        env:
+          RX_RELEASE: V8_OPERATIONAL_ZERO_COST
+          RX_PORTAL_RSS_BUDGET_MB: '220'
+        run: |
+          python - <<'PY'
+          import time
+          import sitecustomize
+          import portal_api, portal_boot_guard_v26, portal_v8
+          deadline=time.time()+12
+          while time.time()<deadline and not portal_boot_guard_v26.STATE.get('ready') and not portal_boot_guard_v26.STATE.get('error'):
+              time.sleep(.1)
+          assert portal_boot_guard_v26.STATE.get('ready'), portal_boot_guard_v26.STATE
+          paths={getattr(r,'path',None) for r in portal_v8.app.router.routes}
+          html=portal_v8.PORTAL_HTML
+          assert '/v1/live/car-integrity/{car_code}' in paths
+          for token in ('RX_CAR_INTEGRITY_V47','Declarado no CAR','Dentro do perímetro','Medido por nós','RX_MAP_V46_TWO_LEVEL','RX_MAP_V46_ANCHOR_STATE'):
+              assert token in html, token
+          assert str(portal_v8.APP_PORTAL_VERSION)=='0.47.0-v47-search-name-truth-fill'
+          assert html.count('MutationObserver')==0
+          assert html.count('setInterval(')==0
+          print('RX_V47_BLOCK2_PORTAL_CONTRACT=PASS')
+          PY
