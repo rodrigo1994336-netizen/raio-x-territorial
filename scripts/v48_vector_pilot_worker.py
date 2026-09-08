@@ -12,7 +12,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 import psutil
 from google.api_core.exceptions import PreconditionFailed
@@ -27,10 +27,11 @@ SNAPSHOT = dt.date(2026, 8, 4)
 SNAPSHOT_ID = "sicar-2026-08-04"
 EXPECTED_FEATURES = 129_496
 BUCKET = os.getenv("RX_V48_GCS_BUCKET", "raio-x-territorial-car-metodo-afp-plataforma").strip()
+BUCKET_REGION_OWNER_ATTESTED = "southamerica-east1"
 MIN_ZOOM = 10
 MAX_ZOOM = 16
 MAX_BQ_BYTES = 10 * 1024**3
-SCHEMA_VERSION = "v48-vector-pilot-metrics-1"
+SCHEMA_VERSION = "v48-vector-pilot-metrics-2"
 
 
 def die(message: str) -> None:
@@ -100,6 +101,8 @@ def assert_static_contract() -> None:
         die("pilot_uf_contract_changed")
     if SNAPSHOT.isoformat() != "2026-08-04":
         die("snapshot_contract_changed")
+    if BUCKET_REGION_OWNER_ATTESTED != "southamerica-east1":
+        die("bucket_region_contract_changed")
     sql = extraction_sql().upper()
     if "DATA_EXTRACAO=@SNAPSHOT" not in sql:
         die("exact_snapshot_predicate_missing")
@@ -400,13 +403,11 @@ def main() -> None:
         pmtiles_sha256 = sha256_file(pmtiles)
         pmtiles_size = pmtiles.stat().st_size
 
+        # Runtime intentionally has objectCreator + objectViewer only. Bucket
+        # existence/location/security were verified by the post-bootstrap gate
+        # and owner attestation; do not require storage.buckets.get here.
         storage_client = storage.Client(project=PROJECT)
         bucket = storage_client.bucket(BUCKET)
-        if not bucket.exists(timeout=30):
-            die(f"gcs_bucket_unavailable:{BUCKET}")
-        bucket.reload()
-        if str(bucket.location or "").lower() != "southamerica-east1":
-            die(f"gcs_bucket_wrong_location:{bucket.location}")
 
         object_name = f"car/{SNAPSHOT_ID}/uf/{UF}.pmtiles"
         common_meta = {
@@ -431,6 +432,7 @@ def main() -> None:
             "status": "pilot-generated",
             "project": PROJECT,
             "bucket": BUCKET,
+            "bucket_region_owner_attested": BUCKET_REGION_OWNER_ATTESTED,
             "uf": UF,
             "snapshot_id": SNAPSHOT_ID,
             "snapshot_date": SNAPSHOT.isoformat(),
@@ -464,8 +466,6 @@ def main() -> None:
             "national_generation_allowed": False,
         }
 
-        # Stop sampling before freezing the metrics manifest so the recorded
-        # maxima include extraction + tippecanoe + PMTiles upload.
         sampler.stop()
         metrics["resources"].update(
             {
@@ -487,9 +487,6 @@ def main() -> None:
             "application/json",
         )
         metrics["manifest"] = manifest_upload
-        # Local final evidence includes its own manifest upload record; the GCS
-        # immutable copy intentionally represents the generation state just
-        # before this final bookkeeping field to avoid recursive self-hashing.
         write_json(manifest_path, metrics)
 
         print(f"RX_V48_PILOT_UF={UF}")
