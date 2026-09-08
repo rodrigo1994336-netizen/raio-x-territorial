@@ -55,11 +55,15 @@ jobs:
       - name: Probe Batch Storage APIs and IAM without mutation
         run: python scripts/v48_batch_storage_preflight.py
 
+      # Evidence transport is best-effort only. A transient GitHub artifact
+      # backend 403 must not invert a successfully completed GCP gate; the full
+      # PASS/FAIL evidence is already emitted in the immutable workflow log.
       - name: Upload preflight evidence
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
-          name: v48-batch-storage-preflight
+          name: v48-batch-storage-preflight-${{ github.run_id }}
           path: artifacts/v48_batch_storage_preflight.json
           if-no-files-found: warn
           retention-days: 14
