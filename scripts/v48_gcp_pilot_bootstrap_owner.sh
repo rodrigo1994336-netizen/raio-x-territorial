@@ -46,14 +46,16 @@ if ! gcloud iam service-accounts describe "${RUNTIME_SA}" --project="${PROJECT}"
 fi
 
 # Dedicated single-region bucket. Uniform IAM + PAP prevents accidental public
-# exposure. The browser pilot will use an authenticated/signed validation path.
+# exposure. Soft delete is explicitly disabled because the runtime identity has
+# no delete permission: publication is append-only/immutable by contract.
 if ! gcloud storage buckets describe "gs://${BUCKET}" --project="${PROJECT}" >/dev/null 2>&1; then
   gcloud storage buckets create "gs://${BUCKET}" \
     --project="${PROJECT}" \
     --location="${REGION}" \
     --default-storage-class=STANDARD \
     --uniform-bucket-level-access \
-    --public-access-prevention
+    --public-access-prevention \
+    --soft-delete-duration=0
 else
   ACTUAL_LOCATION="$(gcloud storage buckets describe "gs://${BUCKET}" --format='value(location)')"
   if [[ "${ACTUAL_LOCATION,,}" != "${REGION,,}" ]]; then
@@ -62,12 +64,14 @@ else
   fi
   gcloud storage buckets update "gs://${BUCKET}" \
     --uniform-bucket-level-access \
-    --public-access-prevention >/dev/null
+    --public-access-prevention \
+    --clear-soft-delete >/dev/null
 fi
 
 # GitHub service account = orchestrator only. It can submit/read/delete Batch
 # jobs, consume enabled services, act as the dedicated runtime identity, and
-# read pilot objects for validation. It cannot create Compute VMs directly.
+# read pilot objects for validation. It cannot create Compute VMs directly and
+# cannot create/update/delete objects in the pilot bucket.
 gcloud projects add-iam-policy-binding "${PROJECT}" \
   --member="serviceAccount:${ORCHESTRATOR_SA}" \
   --role="roles/batch.jobsEditor" \
@@ -88,8 +92,8 @@ gcloud storage buckets add-iam-policy-binding "gs://${BUCKET}" \
   --role="roles/storage.objectViewer" >/dev/null
 
 # Runtime worker = query public SICAR through jobs billed to this project,
-# report Batch state/logs, and write immutable pilot artifacts only to the
-# dedicated bucket. No project-wide Storage role is granted.
+# report Batch state/logs, and publish immutable pilot artifacts only to the
+# dedicated bucket. Creator + Viewer deliberately excludes delete/overwrite.
 gcloud projects add-iam-policy-binding "${PROJECT}" \
   --member="serviceAccount:${RUNTIME_SA}" \
   --role="roles/batch.agentReporter" \
@@ -107,7 +111,11 @@ gcloud projects add-iam-policy-binding "${PROJECT}" \
 
 gcloud storage buckets add-iam-policy-binding "gs://${BUCKET}" \
   --member="serviceAccount:${RUNTIME_SA}" \
-  --role="roles/storage.objectUser" >/dev/null
+  --role="roles/storage.objectCreator" >/dev/null
+
+gcloud storage buckets add-iam-policy-binding "gs://${BUCKET}" \
+  --member="serviceAccount:${RUNTIME_SA}" \
+  --role="roles/storage.objectViewer" >/dev/null
 
 # Assertions: owner-side evidence only. No national resource is created here.
 gcloud storage buckets describe "gs://${BUCKET}" \
@@ -119,5 +127,7 @@ gcloud iam service-accounts describe "${RUNTIME_SA}" \
 echo "RX_V48_BOOTSTRAP_RUNTIME_SA=${RUNTIME_SA}"
 echo "RX_V48_BOOTSTRAP_BUCKET=${BUCKET}"
 echo "RX_V48_BOOTSTRAP_ORCHESTRATOR=${ORCHESTRATOR_SA}"
+echo "RX_V48_BOOTSTRAP_RUNTIME_STORAGE=OBJECT_CREATOR_PLUS_VIEWER_NO_DELETE"
+echo "RX_V48_BOOTSTRAP_SOFT_DELETE=DISABLED"
 echo "RX_V48_BOOTSTRAP_NATIONAL_GENERATION=DISABLED_BY_REPO_CONTRACT"
 echo "RX_V48_BOOTSTRAP=PASS"
