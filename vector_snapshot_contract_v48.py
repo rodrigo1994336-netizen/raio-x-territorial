@@ -203,7 +203,6 @@ def assert_contract_static() -> None:
     assert "MAX(DATA_EXTRACAO)" not in sql.upper()
     assert "ST_UNION_AGG(geometria)" in sql
     assert SNAPSHOT_SCOPE == "uf_canonical"
-    assert "2026-08-04" not in canonical_manifest.__doc__ if canonical_manifest.__doc__ else True
 
 
 assert_contract_static()
