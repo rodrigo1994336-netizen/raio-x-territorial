@@ -1,0 +1,81 @@
+name: V48 MTE Visual Smoke
+
+on:
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mte-visual:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      RX_RELEASE: V8_OPERATIONAL_ZERO_COST
+      RX_PORTAL_RSS_BUDGET_MB: '220'
+      RX_BIGQUERY_PROJECT: ${{ secrets.GCP_PROJECT_ID }}
+      RX_ADMIN_MUNICIPALITY_TABLE: basedosdados.br_geobr_mapas.municipio
+      RX_ADMIN_UF_TABLE: basedosdados.br_geobr_mapas.uf
+      RX_BIGQUERY_MAX_BYTES_BILLED: '42949672960'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Reject missing Google Cloud secret configuration
+        shell: bash
+        env:
+          GCP_SA_KEY_PRESENT: ${{ secrets.GCP_SA_KEY }}
+          GCP_PROJECT_ID_PRESENT: ${{ secrets.GCP_PROJECT_ID }}
+        run: |
+          test -n "$GCP_SA_KEY_PRESENT" || { echo 'GCP_SA_KEY ausente'; exit 2; }
+          test -n "$GCP_PROJECT_ID_PRESENT" || { echo 'GCP_PROJECT_ID ausente'; exit 2; }
+      - name: Authenticate BigQuery to preserve the V47 panel while testing V48
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+          create_credentials_file: true
+          export_environment_variables: true
+      - name: Install runtime and Chromium
+        run: |
+          python -m pip install --upgrade pip
+          pip install fastapi httpx shapely pyproj pillow reportlab uvicorn "psycopg[binary]" "redis>=5,<7" "numpy>=2,<3" "rasterio>=1.4,<2" "PyJWT[crypto]>=2.10,<3" playwright google-cloud-bigquery google-auth
+          python -m playwright install --with-deps chromium
+      - name: Start V48 candidate runtime
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts-v48-mte
+          export PYTHONPATH="$PWD${PYTHONPATH:+:$PYTHONPATH}"
+          uvicorn portal_api:app --host 127.0.0.1 --port 8000 > /tmp/rx-v48-mte.log 2>&1 &
+          echo $! > /tmp/rx-v48-mte.pid
+          ready=0
+          for i in $(seq 1 90); do
+            if ! kill -0 "$(cat /tmp/rx-v48-mte.pid)" 2>/dev/null; then
+              tail -n 400 /tmp/rx-v48-mte.log || true
+              exit 1
+            fi
+            html="$(curl -fsS http://127.0.0.1:8000/ 2>/dev/null || true)"
+            if [[ "$html" == *"RX_CONFORMITY_MTE_V48"* && "$html" == *"RX_CAR_INTEGRITY_V47"* && "$html" == *"RX_MAP_V46_TWO_LEVEL"* ]]; then
+              ready=1
+              echo "RX_V48_MTE_VISUAL_RUNTIME=READY attempt=$i"
+              break
+            fi
+            sleep 1
+          done
+          test "$ready" -eq 1
+      - name: Capture MTE owner-truth state at 375 768 1440
+        run: python .github/scripts/v48_mte_visual_smoke.py
+      - name: Runtime log on failure
+        if: failure()
+        run: tail -n 500 /tmp/rx-v48-mte.log || true
+      - name: Upload V48 MTE evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v48-mte-visual-${{ github.run_id }}
+          path: artifacts-v48-mte/
+          if-no-files-found: error
+          retention-days: 14
