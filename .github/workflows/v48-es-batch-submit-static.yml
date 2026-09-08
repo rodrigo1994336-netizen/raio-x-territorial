@@ -41,7 +41,8 @@ jobs:
           spec = tg['taskSpec']
           policy = job['allocationPolicy']['instances'][0]['policy']
           disk = policy['disks'][0]
-          assert s.JOB_ID == 'rx-v48-es-sicar-20260804-pilot-001'
+          script = spec['runnables'][0]['script']['text']
+          assert s.JOB_ID == 'rx-v48-es-sicar-20260804-pilot-002'
           assert cfg['pilot_uf'] == 'ES'
           assert cfg['snapshot_date'] == '2026-08-04'
           assert cfg['analysis_snapshot'] == cfg['map_snapshot'] == '2026-08-04'
@@ -56,9 +57,17 @@ jobs:
           assert job['allocationPolicy']['serviceAccount']['email'] == s.RUNTIME_SA
           assert s.TIPPECANOE_VERSION == '2.79.0'
           assert s.TIPPECANOE_SHA256 == 'b0fd9df49b6efc988288ea48774822c6de19eb48428017f27ee0b3b01d44f05d'
+          assert "export PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'" in script
+          assert '$SUDO apt-get update -y' in script
+          assert 'build-essential' in script and 'gcc' in script and 'g++' in script and 'coreutils' in script
+          assert 'FAIL_MISSING_COMMAND' in script
+          assert 'FAIL_MISSING_CC1' in script
+          assert 'FAIL_MISSING_CC1PLUS' in script
+          assert 'RX_V48_BATCH_BOOTSTRAP=TOOLCHAIN_OK' in script
+          assert 'RX_V48_BATCH_FINAL_METRICS=' in script
           assert len(b64) > 1000
           print(f'RX_V48_ES_SUBMIT_STATIC_WORKER_SHA={sha}')
-          print('RX_V48_ES_SUBMIT_STATIC_JOB_ID=rx-v48-es-sicar-20260804-pilot-001')
+          print('RX_V48_ES_SUBMIT_STATIC_JOB_ID=rx-v48-es-sicar-20260804-pilot-002')
           print('RX_V48_ES_SUBMIT_STATIC_RESOURCES=ONE_SPOT_E2_STANDARD_8_PD_BALANCED_100GB')
           print('RX_V48_ES_SUBMIT_STATIC_RETRY=0')
           print('RX_V48_ES_SUBMIT_STATIC_NATIONAL=FALSE')
