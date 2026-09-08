@@ -1,5 +1,5 @@
 name: V48 US Central1 Read-only Quota Probe
-# recovery-trigger-cloud-quotas-quiet: 2026-09-08
+# recovery-trigger-service-usage: 2026-09-08
 
 on:
   push:
@@ -42,25 +42,55 @@ jobs:
       - name: Set up gcloud
         uses: google-github-actions/setup-gcloud@v2
 
-      - name: Read Compute Engine QuotaInfo only
+      - name: Read Compute quota through Service Usage only
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p artifacts
-          gcloud --quiet beta quotas info list \
-            --project="$GCP_PROJECT_ID" \
-            --billing-project="$GCP_PROJECT_ID" \
-            --service=compute.googleapis.com \
-            --format=json > artifacts/v48_compute_quota_info_raw.json
+          export PROJECT_NUMBER="$(gcloud projects describe "$GCP_PROJECT_ID" --format='value(projectNumber)')"
+          test -n "$PROJECT_NUMBER" || { echo 'project number unavailable'; exit 3; }
+          export ACCESS_TOKEN="$(gcloud auth print-access-token)"
           python - <<'PY'
           import json
+          import os
+          import urllib.parse
+          import urllib.request
           from pathlib import Path
+
+          base = (
+              'https://serviceusage.googleapis.com/v1beta1/projects/'
+              + os.environ['PROJECT_NUMBER']
+              + '/services/compute.googleapis.com/consumerQuotaMetrics'
+          )
+          token = os.environ['ACCESS_TOKEN']
+          metrics = []
+          page_token = None
+          while True:
+              query = {'view': 'FULL', 'pageSize': '200'}
+              if page_token:
+                  query['pageToken'] = page_token
+              req = urllib.request.Request(
+                  base + '?' + urllib.parse.urlencode(query),
+                  headers={'Authorization': 'Bearer ' + token},
+              )
+              with urllib.request.urlopen(req, timeout=60) as resp:
+                  data = json.load(resp)
+              metrics.extend(data.get('metrics', []))
+              page_token = data.get('nextPageToken')
+              if not page_token:
+                  break
+          if not metrics:
+              raise SystemExit('Service Usage returned no Compute quota metrics')
+          out = {
+              'source_api': 'serviceusage.googleapis.com/v1beta1/consumerQuotaMetrics',
+              'project_number': os.environ['PROJECT_NUMBER'],
+              'target_region': os.environ['TARGET_REGION'],
+              'metrics': metrics,
+          }
           p = Path('artifacts/v48_compute_quota_info_raw.json')
-          data = json.loads(p.read_text(encoding='utf-8'))
-          if not data:
-              raise SystemExit('Cloud Quotas returned no Compute Engine quota info')
-          print('RX_V48_CLOUD_QUOTAS_ITEMS=' + str(len(data)))
-          print('RX_V48_CLOUD_QUOTAS_READ=PASS')
+          p.write_text(json.dumps(out, ensure_ascii=False, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+          print('RX_V48_SERVICE_USAGE_QUOTA_METRICS=' + str(len(metrics)))
+          print('RX_V48_SERVICE_USAGE_QUOTA_READ=PASS')
           PY
 
       - name: Upload raw quota evidence
