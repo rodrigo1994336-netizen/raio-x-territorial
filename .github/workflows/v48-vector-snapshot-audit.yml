@@ -1,16 +1,10 @@
 name: V48 Vector Snapshot Audit
-# recovery-trigger: 2026-09-08
 
 on:
-  push:
-    branches:
-      - ops/v48-budget-gate-probe-20260908
-    paths:
-      - .github/workflows/v48-vector-snapshot-audit.yml
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   audit-sicar-snapshot:
@@ -48,37 +42,31 @@ jobs:
       - name: Audit exact SICAR snapshot 2026-08-04
         run: python scripts/v48_vector_snapshot_audit.py
 
-      - name: Validate durable evidence contract
+      - name: Print all 27 exact-snapshot UF counts
         shell: bash
         run: |
           python - <<'PY'
           import json
           from pathlib import Path
-          p = Path('artifacts/v48_vector_snapshot_audit.json')
-          data = json.loads(p.read_text(encoding='utf-8'))
+          expected = {'AC','AL','AP','AM','BA','CE','DF','ES','GO','MA','MT','MS','MG','PA','PB','PR','PE','PI','RJ','RN','RS','RO','RR','SC','SP','SE','TO'}
+          data = json.loads(Path('artifacts/v48_vector_snapshot_audit.json').read_text(encoding='utf-8'))
           assert data['target_snapshot'] == '2026-08-04'
-          assert len(data['ufs']) == 27
-          assert set(data['ufs']) == {'AC','AL','AP','AM','BA','CE','DF','ES','GO','MA','MT','MS','MG','PA','PB','PR','PE','PI','RJ','RN','RS','RO','RR','SC','SP','SE','TO'}
-          for uf, item in data['ufs'].items():
-              cars = int((item.get('area_stats') or {}).get('distinct_car_count') or 0)
-              assert cars > 0, f'{uf}: distinct_car_count inválido'
-          out = Path('evidence/v48/sicar-2026-08-04/vector_snapshot_audit.json')
-          out.parent.mkdir(parents=True, exist_ok=True)
-          out.write_text(json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+          assert set(data['ufs']) == expected
+          complete = []
+          for uf in sorted(expected):
+              item = data['ufs'][uf]
+              stats = item.get('area_stats') or {}
+              cars = stats.get('distinct_car_count')
+              if cars is None:
+                  print(f'RX_V48_UF_COUNT_{uf}=MISSING_EXACT_PARTITION')
+              else:
+                  print(f'RX_V48_UF_COUNT_{uf}={int(cars)}')
+              if item.get('snapshot_complete'):
+                  complete.append(uf)
+          print('RX_V48_EXACT_SNAPSHOT_COMPLETE_UFS=' + ','.join(complete))
+          print('RX_V48_EXACT_SNAPSHOT_COMPLETE_UF_COUNT=' + str(len(complete)))
+          print('RX_V48_EXACT_SNAPSHOT_NATIONAL=' + ('PASS' if len(complete) == 27 else 'BLOCKED'))
           PY
-
-      - name: Commit durable audit evidence
-        shell: bash
-        run: |
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add evidence/v48/sicar-2026-08-04/vector_snapshot_audit.json
-          if git diff --cached --quiet; then
-            echo 'RX_V48_VECTOR_AUDIT_EVIDENCE=UNCHANGED'
-            exit 0
-          fi
-          git commit -m 'chore(v48): version SICAR 2026-08-04 UF audit evidence'
-          git push origin "HEAD:${GITHUB_REF_NAME}"
 
       - name: Upload audit evidence
         if: always()
@@ -88,3 +76,16 @@ jobs:
           path: artifacts/v48_vector_snapshot_audit.json
           if-no-files-found: warn
           retention-days: 14
+
+      - name: Fail closed if the exact national snapshot is incomplete
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          data = json.loads(Path('artifacts/v48_vector_snapshot_audit.json').read_text(encoding='utf-8'))
+          missing = sorted(uf for uf, item in data['ufs'].items() if not item.get('snapshot_complete'))
+          if missing:
+              raise SystemExit('RX_V48_NATIONAL_SNAPSHOT_BLOCKED missing exact 2026-08-04 UFs: ' + ','.join(missing))
+          print('RX_V48_NATIONAL_SNAPSHOT_GATE=PASS')
+          PY
