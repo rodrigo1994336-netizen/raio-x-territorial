@@ -5,12 +5,11 @@ on:
     branches:
       - ops/v48-budget-gate-probe-20260908
     paths:
-      - scripts/v48_vector_snapshot_audit.py
       - .github/workflows/v48-vector-snapshot-audit.yml
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   audit-sicar-snapshot:
@@ -47,6 +46,38 @@ jobs:
 
       - name: Audit exact SICAR snapshot 2026-08-04
         run: python scripts/v48_vector_snapshot_audit.py
+
+      - name: Validate durable evidence contract
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          p = Path('artifacts/v48_vector_snapshot_audit.json')
+          data = json.loads(p.read_text(encoding='utf-8'))
+          assert data['target_snapshot'] == '2026-08-04'
+          assert len(data['ufs']) == 27
+          assert set(data['ufs']) == {'AC','AL','AP','AM','BA','CE','DF','ES','GO','MA','MT','MS','MG','PA','PB','PR','PE','PI','RJ','RN','RS','RO','RR','SC','SP','SE','TO'}
+          for uf, item in data['ufs'].items():
+              cars = int((item.get('area_stats') or {}).get('distinct_car_count') or 0)
+              assert cars > 0, f'{uf}: distinct_car_count inválido'
+          out = Path('evidence/v48/sicar-2026-08-04/vector_snapshot_audit.json')
+          out.parent.mkdir(parents=True, exist_ok=True)
+          out.write_text(json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+          PY
+
+      - name: Commit durable audit evidence
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add evidence/v48/sicar-2026-08-04/vector_snapshot_audit.json
+          if git diff --cached --quiet; then
+            echo 'RX_V48_VECTOR_AUDIT_EVIDENCE=UNCHANGED'
+            exit 0
+          fi
+          git commit -m 'chore(v48): version SICAR 2026-08-04 UF audit evidence'
+          git push origin "HEAD:${GITHUB_REF_NAME}"
 
       - name: Upload audit evidence
         if: always()
