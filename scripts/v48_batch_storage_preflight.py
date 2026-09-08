@@ -31,17 +31,16 @@ PROJECT_PERMISSIONS = (
     "batch.jobs.list",
     "batch.jobs.delete",
     "serviceusage.services.use",
-    # Deliberately observed but not required for the orchestrator. Batch's
-    # service agent provisions Compute resources; the GitHub caller must not
-    # receive direct VM/disk creation power merely to submit a Batch job.
+    # Observed only. The GitHub orchestrator must not receive direct VM/disk
+    # creation power merely to submit a Batch job.
     "compute.instances.create",
     "compute.disks.create",
 )
+# The orchestrator only validates/reads pilot artifacts. The runtime worker is
+# the writer and receives objectUser on the dedicated bucket separately.
 BUCKET_PERMISSIONS = (
-    "storage.objects.create",
     "storage.objects.get",
     "storage.objects.list",
-    "storage.objects.delete",
 )
 
 
@@ -161,7 +160,7 @@ def main() -> None:
     location_ok = bucket_location.upper() == REGION.upper()
 
     result = {
-        "schema_version": "v48-batch-storage-preflight-2",
+        "schema_version": "v48-batch-storage-preflight-3",
         "project": PROJECT,
         "project_number": project_number,
         "caller_email": caller_email or None,
