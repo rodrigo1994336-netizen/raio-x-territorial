@@ -1,5 +1,5 @@
 name: V48 US Central1 Read-only Quota Probe
-# recovery-trigger-cloud-quotas: 2026-09-08
+# recovery-trigger-cloud-quotas-quiet: 2026-09-08
 
 on:
   push:
@@ -47,7 +47,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p artifacts
-          gcloud beta quotas info list \
+          gcloud --quiet beta quotas info list \
             --project="$GCP_PROJECT_ID" \
             --billing-project="$GCP_PROJECT_ID" \
             --service=compute.googleapis.com \
