@@ -1,0 +1,74 @@
+{
+  "schema_version": "v48-pre-national-gate-1",
+  "recorded_date": "2026-09-08",
+  "national_authorized": false,
+  "national_gate": "BLOCKED",
+  "snapshot_contract": {
+    "snapshot_id": "sicar-2026-08-04",
+    "snapshot_date": "2026-08-04",
+    "analysis_snapshot": "2026-08-04",
+    "map_snapshot": "2026-08-04",
+    "exact_date_only": true,
+    "latest_lookup_allowed": false,
+    "date_fallback_allowed": false
+  },
+  "snapshot_evidence": {
+    "path": "evidence/v48/sicar-2026-08-04/vector_snapshot_audit.json",
+    "exact_complete_uf_count": 5,
+    "exact_complete_counts": {
+      "AL": 143364,
+      "ES": 129496,
+      "MG": 1172258,
+      "PB": 218195,
+      "SE": 123567
+    },
+    "exact_complete_count_total": 1786880,
+    "missing_exact_partition_ufs": [
+      "AC","AM","AP","BA","CE","DF","GO","MA","MS","MT","PA","PE","PI","PR","RJ","RN","RO","RR","RS","SC","SP","TO"
+    ],
+    "missing_values_are_zero": false,
+    "national_count_available": false
+  },
+  "quota_evidence": {
+    "path": "evidence/v48/us-central1_compute_quota.json",
+    "region": "us-central1",
+    "regional_standard_cpu_limit_vcpu": 200,
+    "separate_preemptible_effective_limit_vcpu": null,
+    "global_all_regions_cpu_limit_vcpu": 32,
+    "e2_standard_8_vcpu": 8,
+    "theoretical_max_concurrency_if_other_cpu_usage_zero": 4,
+    "current_cpu_usage_measured": false,
+    "approved_static_planning_concurrency": 3
+  },
+  "uf_reprocessing": {
+    "contract": "config/v48_uf_orchestration_contract.json",
+    "state_machine": "scripts/v48_uf_recovery_contract.py",
+    "selftest": "scripts/v48_uf_recovery_selftest.py",
+    "one_batch_job_per_uf": true,
+    "github_matrix_fail_fast": false,
+    "batch_max_retry_count": 0,
+    "rerun_failed_jobs_only": true,
+    "publication_order": [
+      "immutable_prepared_receipt",
+      "immutable_pmtiles",
+      "immutable_commit_manifest"
+    ],
+    "pmtiles_written_manifest_missing": "RECONCILE_MANIFEST_ONLY_IF_RECEIPT_AND_IDENTITY_MATCH",
+    "identity_mismatch": "FAIL_CLOSED",
+    "active_json_mutation_allowed": false
+  },
+  "projection": {
+    "definitive_national_projection_available": false,
+    "reason": "The exact 2026-08-04 physical snapshot is absent for 22 UFs under the frozen V48 exact-date contract. Filling those counts from historical distributions, latest-per-UF data, or extrapolation would violate the contract and fabricate a definitive national table.",
+    "next_gate": "An explicitly approved snapshot-contract resolution must provide valid source partitions for all 27 UFs before national count, size, time, and cost can be called definitive."
+  },
+  "forbidden_actions": [
+    "national_generation",
+    "pilot_003",
+    "active_json_update",
+    "merge",
+    "deploy",
+    "unapproved_paid_compute",
+    "silent_snapshot_fallback"
+  ]
+}
