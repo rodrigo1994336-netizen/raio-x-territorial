@@ -1,0 +1,191 @@
+name: V48 Budget Gate Probe
+
+on:
+  push:
+    branches:
+      - ops/v48-budget-gate-probe-20260908
+
+permissions:
+  contents: read
+
+jobs:
+  billing-budget-probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      EXPECTED_PROJECT_ID: metodo-afp-plataforma
+      GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reject wrong or missing Google Cloud project
+        shell: bash
+        run: |
+          test -n "$GCP_PROJECT_ID" || { echo 'GCP_PROJECT_ID ausente'; exit 2; }
+          test "$GCP_PROJECT_ID" = "$EXPECTED_PROJECT_ID" || { echo 'Projeto GCP inesperado'; exit 2; }
+          echo 'RX_V48_GCP_PROJECT_ID=EXPECTED_MATCH'
+
+      - name: Reject missing Google Cloud credential
+        shell: bash
+        env:
+          GCP_SA_KEY_PRESENT: ${{ secrets.GCP_SA_KEY }}
+        run: |
+          test -n "$GCP_SA_KEY_PRESENT" || { echo 'GCP_SA_KEY ausente'; exit 2; }
+          echo 'RX_V48_GCP_SA_KEY=PRESENT'
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install probe dependencies
+        run: pip install --disable-pip-version-check google-auth requests
+
+      - name: Probe Cloud Billing account, Budget API and IAM without mutation
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import sys
+          from urllib.parse import quote
+
+          import google.auth
+          from google.auth.transport.requests import AuthorizedSession
+
+          project = os.environ['GCP_PROJECT_ID']
+          credentials, _ = google.auth.default(
+              scopes=['https://www.googleapis.com/auth/cloud-platform']
+          )
+          session = AuthorizedSession(credentials)
+
+          def call(label, method, url, **kwargs):
+              response = session.request(method, url, timeout=30, **kwargs)
+              print(f'RX_V48_{label}_HTTP={response.status_code}')
+              if response.status_code >= 400:
+                  text = (response.text or '').replace('\n', ' ')[:800]
+                  print(f'RX_V48_{label}_ERROR={text}')
+                  return None
+              if not response.text:
+                  return {}
+              return response.json()
+
+          billing = call(
+              'BILLING_INFO',
+              'GET',
+              f'https://cloudbilling.googleapis.com/v1/projects/{quote(project, safe="")}/billingInfo',
+          )
+          if not billing:
+              print('RX_V48_BUDGET_GATE_PROBE=FAIL_BILLING_INFO')
+              sys.exit(2)
+
+          enabled = bool(billing.get('billingEnabled'))
+          account = billing.get('billingAccountName') or ''
+          print(f'RX_V48_BILLING_ENABLED={str(enabled).upper()}')
+          print(f'RX_V48_BILLING_ACCOUNT_BOUND={str(bool(account)).upper()}')
+          if not enabled or not account.startswith('billingAccounts/'):
+              print('RX_V48_BUDGET_GATE_PROBE=FAIL_BILLING_NOT_ACTIVE')
+              sys.exit(2)
+
+          project_meta = call(
+              'PROJECT_META',
+              'GET',
+              f'https://cloudresourcemanager.googleapis.com/v1/projects/{quote(project, safe="")}',
+          ) or {}
+          project_number = str(project_meta.get('projectNumber') or '')
+          print(f'RX_V48_PROJECT_NUMBER_RESOLVED={str(bool(project_number)).upper()}')
+
+          requested_project_permissions = [
+              'resourcemanager.projects.get',
+              'billing.resourcebudgets.read',
+              'billing.resourcebudgets.write',
+          ]
+          project_iam = call(
+              'PROJECT_IAM',
+              'POST',
+              f'https://cloudresourcemanager.googleapis.com/v1/projects/{quote(project, safe="")}:testIamPermissions',
+              json={'permissions': requested_project_permissions},
+          ) or {}
+          project_permissions = set(project_iam.get('permissions') or [])
+          for permission in requested_project_permissions:
+              key = permission.upper().replace('.', '_')
+              print(f'RX_V48_PROJECT_PERMISSION_{key}={str(permission in project_permissions).upper()}')
+
+          requested_billing_permissions = [
+              'billing.accounts.get',
+              'billing.budgets.get',
+              'billing.budgets.list',
+              'billing.budgets.create',
+              'billing.budgets.update',
+          ]
+          billing_iam = call(
+              'BILLING_IAM',
+              'POST',
+              f'https://cloudbilling.googleapis.com/v1/{account}:testIamPermissions',
+              json={'permissions': requested_billing_permissions},
+          ) or {}
+          billing_permissions = set(billing_iam.get('permissions') or [])
+          for permission in requested_billing_permissions:
+              key = permission.upper().replace('.', '_')
+              print(f'RX_V48_BILLING_PERMISSION_{key}={str(permission in billing_permissions).upper()}')
+
+          budgets = call(
+              'BUDGET_LIST',
+              'GET',
+              f'https://billingbudgets.googleapis.com/v1/{account}/budgets?pageSize=100',
+          )
+          budget_items = (budgets or {}).get('budgets') or []
+          print(f'RX_V48_BUDGET_COUNT_VISIBLE={len(budget_items)}')
+
+          project_resource = f'projects/{project_number}' if project_number else ''
+          matching = []
+          for budget in budget_items:
+              filt = budget.get('budgetFilter') or {}
+              projects = filt.get('projects') or []
+              if project_resource and project_resource in projects:
+                  matching.append(budget)
+
+          print(f'RX_V48_PROJECT_BUDGET_COUNT={len(matching)}')
+          for idx, budget in enumerate(matching, start=1):
+              thresholds = sorted(
+                  float(rule.get('thresholdPercent'))
+                  for rule in (budget.get('thresholdRules') or [])
+                  if rule.get('thresholdPercent') is not None
+              )
+              updates = budget.get('allUpdatesRule') or {}
+              default_email = not bool(updates.get('disableDefaultIamRecipients'))
+              amount = budget.get('amount') or {}
+              basis = 'specified' if amount.get('specifiedAmount') else ('last_period' if amount.get('lastPeriodAmount') is not None else 'unknown')
+              print(
+                  'RX_V48_PROJECT_BUDGET_' + str(idx) + '=' +
+                  json.dumps({
+                      'displayName': budget.get('displayName'),
+                      'thresholds': thresholds,
+                      'defaultIamEmail': default_email,
+                      'amountBasis': basis,
+                  }, ensure_ascii=True, sort_keys=True)
+              )
+
+          project_create_route = set(requested_project_permissions).issubset(project_permissions)
+          billing_create_route = {
+              'billing.budgets.create',
+              'billing.budgets.list',
+          }.issubset(billing_permissions)
+          can_create = project_create_route or billing_create_route
+          print(f'RX_V48_BUDGET_CREATE_ROUTE_PROJECT={str(project_create_route).upper()}')
+          print(f'RX_V48_BUDGET_CREATE_ROUTE_BILLING_ACCOUNT={str(billing_create_route).upper()}')
+          print(f'RX_V48_BUDGET_CREATE_CAPABLE={str(can_create).upper()}')
+
+          if not can_create:
+              print('RX_V48_BUDGET_GATE_PROBE=FAIL_NO_CREATE_PERMISSION')
+              sys.exit(2)
+
+          print('RX_V48_BUDGET_GATE_PROBE=PASS_READ_ONLY')
+          PY
