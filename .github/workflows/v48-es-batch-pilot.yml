@@ -1,0 +1,85 @@
+name: V48 ES Single Spot Pilot
+
+on:
+  workflow_dispatch:
+
+# PERMANENT COST-SAFETY RULE:
+# Any workflow that can create paid cloud compute MUST be manually dispatched.
+# Never add push, pull_request, schedule, workflow_run, or other automatic triggers here.
+permissions:
+  contents: read
+
+jobs:
+  one-es-spot-attempt:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+      GOOGLE_CLOUD_PROJECT: ${{ secrets.GCP_PROJECT_ID }}
+      RX_V48_PILOT_UF: ES
+      RX_V48_SNAPSHOT: '2026-08-04'
+      RX_V48_ALLOW_NATIONAL: 'false'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install orchestration dependencies
+        run: pip install --disable-pip-version-check google-auth requests
+
+      - name: Re-run post-bootstrap preflight immediately before paid mutation
+        run: python scripts/v48_batch_storage_preflight.py
+
+      - name: Re-assert single-attempt ES contract
+        shell: bash
+        run: |
+          python - <<'PY'
+          import sys
+          sys.path.insert(0, 'scripts')
+          import v48_es_batch_submit as s
+          cfg = s.assert_frozen_contract()
+          sha, b64 = s.worker_payload()
+          job = s.build_job(sha, b64)
+          tg = job['taskGroups'][0]
+          spec = tg['taskSpec']
+          policy = job['allocationPolicy']['instances'][0]['policy']
+          script = spec['runnables'][0]['script']['text']
+          assert s.JOB_ID == 'rx-v48-es-sicar-20260804-pilot-002'
+          assert cfg['pilot_uf'] == 'ES'
+          assert cfg['snapshot_date'] == '2026-08-04'
+          assert cfg['national_generation_allowed'] is False
+          assert tg['taskCount'] == '1' and tg['parallelism'] == '1'
+          assert spec['maxRetryCount'] == 0
+          assert policy['machineType'] == 'e2-standard-8'
+          assert policy['provisioningModel'] == 'SPOT'
+          assert "export PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'" in script
+          assert '$SUDO apt-get update -y' in script
+          assert 'gcc \\\' in script and 'g++ \\\' in script
+          assert 'FAIL_MISSING_CC1PLUS' in script
+          assert 'RX_V48_BATCH_FINAL_METRICS=' in script
+          print(f'RX_V48_PAID_GATE_WORKER_SHA={sha}')
+          print('RX_V48_PAID_GATE=ONE_ES_SPOT_ATTEMPT_002_ONLY')
+          PY
+
+      - name: Submit or observe the one deterministic ES Spot job
+        run: python scripts/v48_es_batch_submit.py
+
+      - name: Upload Batch result evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: v48-es-single-spot-pilot-${{ github.run_id }}
+          path: artifacts/v48_es_batch_result.json
+          if-no-files-found: warn
+          retention-days: 30
