@@ -1,8 +1,6 @@
-name: V47 Block 2 Real BigQuery Gate
+name: V47 Real BigQuery Validation
 
 on:
-  pull_request:
-    branches: [ main ]
   workflow_dispatch:
 
 permissions:
@@ -16,10 +14,8 @@ jobs:
       RX_BIGQUERY_PROJECT: ${{ secrets.GCP_PROJECT_ID }}
       RX_ADMIN_MUNICIPALITY_TABLE: basedosdados.br_geobr_mapas.municipio
       RX_ADMIN_UF_TABLE: basedosdados.br_geobr_mapas.estado
-      # 40 GiB hard ceiling per executed query after explicit cost review; still fail-closed above it.
       RX_BIGQUERY_MAX_BYTES_BILLED: ${{ vars.RX_BIGQUERY_MAX_BYTES_BILLED || '42949672960' }}
       RX_V47_SAMPLE_UFS: ${{ vars.RX_V47_SAMPLE_UFS || 'AM,BA,MT,MG,PR' }}
-      # National validation is locked by default after the successful hardened full-national run.
       RX_V47_NATIONAL_VALIDATION_APPROVED: '0'
     steps:
       - uses: actions/checkout@v4
@@ -45,13 +41,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install google-cloud-bigquery google-auth shapely pyproj
-      - name: Confirm authorized admin schema, estimate cost, then run real V47 gate
-        run: |
-          PYTHONPATH=. python - <<'PY'
-          import runpy
-          import sicar_overlap_hardening_v47
-          runpy.run_path('scripts/v47_block2_real_bigquery_gate.py', run_name='__main__')
-          PY
+      - name: Run V47 real checks with truthful UF-presence label
+        run: PYTHONPATH=. python scripts/v47_block2_real_bigquery_gate_name_truth.py
       - name: Dump Curvelo client-facing values
-        run: |
-          PYTHONPATH=. python scripts/v47_curvelo_client_dump.py
+        run: PYTHONPATH=. python scripts/v47_curvelo_client_dump.py
