@@ -139,13 +139,17 @@ def main() -> None:
         "ufs": ufs,
     }
     canonical_bytes = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    payload["content_fingerprint_sha256"] = hashlib.sha256(canonical_bytes).hexdigest()
+    fingerprint = hashlib.sha256(canonical_bytes).hexdigest()
+    payload["content_fingerprint_sha256"] = fingerprint
     out = Path("artifacts/v48_sicar_canonical_snapshot_manifest_candidate.json")
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    immutable_path = f"car/manifests/sicar-canonical-snapshots-v1-{fingerprint}.json"
     print(f"RX_V48_CANONICAL_SNAPSHOT_UFS={canonical_count}/27")
     print("RX_V48_CANONICAL_SNAPSHOT_UNAVAILABLE=" + (",".join(unavailable) if unavailable else "NONE"))
     print(f"RX_V48_CANONICAL_SNAPSHOT_NATIONAL_CARS={national_cars}")
+    print(f"RX_V48_CANONICAL_MANIFEST_FINGERPRINT={fingerprint}")
+    print(f"RX_V48_CANONICAL_MANIFEST_PATH={immutable_path}")
     print("RX_V48_CANONICAL_SNAPSHOT_AUDIT=PASS")
 
 
