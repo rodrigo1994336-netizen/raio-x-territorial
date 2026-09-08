@@ -42,6 +42,23 @@ async def wait_runtime(page):
     )
 
 
+async def wait_panel_hydrated(page):
+    # The panel shell can become visible before the async map-panel payload has
+    # rendered the full conformity block. Wait for the exact implemented-row
+    # contract instead of racing a shorter generic MTE selector timeout.
+    await page.wait_for_function(
+        """car=>{
+          const panel=document.querySelector('.rx45-panel-card[data-car="'+car+'"]');
+          if(!panel)return false;
+          const rows=[...panel.querySelectorAll('.rx45-check')];
+          const ids=rows.map(row=>row.dataset.source||'');
+          return rows.length===10 && ids.includes('mte_slave_labor') && ids.includes('sinaflor');
+        }""",
+        CAR,
+        timeout=45000,
+    )
+
+
 async def open_panel(page):
     await page.locator("#q").fill(CAR)
     await page.locator("#go").click()
@@ -49,10 +66,9 @@ async def open_panel(page):
     await page.locator('[data-rx46-action="full"]').click()
     panel = page.locator(f'.rx45-panel-card[data-car="{CAR}"]')
     await panel.wait_for(state="visible", timeout=15000)
-    await page.locator('.rx45-check[data-source="mte_slave_labor"]').wait_for(state="visible", timeout=15000)
-    await page.locator('.rx45-check[data-source="sinaflor"]').wait_for(state="visible", timeout=15000)
-    await page.locator('.rx45-check[data-source="mte_slave_labor"][data-state="blocked_missing_owner_identity"]').wait_for(state="visible", timeout=35000)
-    await page.locator('.rx45-check[data-source="sinaflor"][data-state="checked_spatial_record_unconfirmed"]').wait_for(state="visible", timeout=45000)
+    await wait_panel_hydrated(page)
+    await panel.locator('.rx45-check[data-source="mte_slave_labor"][data-state="blocked_missing_owner_identity"]').wait_for(state="visible", timeout=35000)
+    await panel.locator('.rx45-check[data-source="sinaflor"][data-state="checked_spatial_record_unconfirmed"]').wait_for(state="visible", timeout=45000)
     await page.wait_for_timeout(700)
     return panel
 
