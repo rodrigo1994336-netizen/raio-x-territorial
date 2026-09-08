@@ -1,0 +1,30 @@
+{
+  "schemaVersion": "v48-uf-orchestration-contract-1",
+  "nationalEnabled": false,
+  "snapshotId": "sicar-2026-08-04",
+  "snapshotDate": "2026-08-04",
+  "analysisSnapshot": "2026-08-04",
+  "mapSnapshot": "2026-08-04",
+  "batchRegion": "us-central1",
+  "machineType": "e2-standard-8",
+  "provisioningModel": "SPOT",
+  "maxRetryCount": 0,
+  "oneBatchJobPerUf": true,
+  "githubMatrix": {
+    "failFast": false,
+    "maxParallel": 3,
+    "reason": "Observed project quota has 32 global CPU vCPUs; three e2-standard-8 jobs consume 24 vCPUs and leave one 8-vCPU job of static headroom. Current CPU usage was not measured, so concurrency 4 is not assumed safe.",
+    "rerunMode": "failed_jobs_only"
+  },
+  "batchJobIdTemplate": "rx-v48-{uf}-sicar-20260804-r{github_run_id}-a{github_run_attempt}",
+  "publicationProtocol": [
+    "immutable_prepared_receipt",
+    "immutable_pmtiles",
+    "immutable_commit_manifest"
+  ],
+  "publicationRule": "A UF is complete only when its immutable commit manifest exists and receipt/PMTiles identity checks pass.",
+  "pmtilesWithoutManifest": "RECONCILE_MANIFEST_ONLY when the prepared receipt exists and all identity fields match; otherwise FAIL_CLOSED.",
+  "activeJsonMutationAllowed": false,
+  "nationalSnapshotGate": "BLOCKED_UNTIL_27_UFS_SHARE_THE_APPROVED_EXACT_SNAPSHOT_CONTRACT",
+  "paidComputeWorkflowTrigger": "workflow_dispatch_only"
+}
