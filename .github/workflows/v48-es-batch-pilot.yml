@@ -53,7 +53,8 @@ jobs:
           tg = job['taskGroups'][0]
           spec = tg['taskSpec']
           policy = job['allocationPolicy']['instances'][0]['policy']
-          assert s.JOB_ID == 'rx-v48-es-sicar-20260804-pilot-001'
+          script = spec['runnables'][0]['script']['text']
+          assert s.JOB_ID == 'rx-v48-es-sicar-20260804-pilot-002'
           assert cfg['pilot_uf'] == 'ES'
           assert cfg['snapshot_date'] == '2026-08-04'
           assert cfg['national_generation_allowed'] is False
@@ -61,8 +62,13 @@ jobs:
           assert spec['maxRetryCount'] == 0
           assert policy['machineType'] == 'e2-standard-8'
           assert policy['provisioningModel'] == 'SPOT'
+          assert "export PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'" in script
+          assert '$SUDO apt-get update -y' in script
+          assert 'gcc \\\' in script and 'g++ \\\' in script
+          assert 'FAIL_MISSING_CC1PLUS' in script
+          assert 'RX_V48_BATCH_FINAL_METRICS=' in script
           print(f'RX_V48_PAID_GATE_WORKER_SHA={sha}')
-          print('RX_V48_PAID_GATE=ONE_ES_SPOT_ATTEMPT_ONLY')
+          print('RX_V48_PAID_GATE=ONE_ES_SPOT_ATTEMPT_002_ONLY')
           PY
 
       - name: Submit or observe the one deterministic ES Spot job
