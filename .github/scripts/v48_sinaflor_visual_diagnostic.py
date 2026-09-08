@@ -9,6 +9,8 @@ from playwright.async_api import async_playwright
 BASE = "http://127.0.0.1:8000/"
 CAR = "MG-3120904-DFB380BECD7A4323AD8AA68FA14D011F"
 OUT = Path("artifacts-v48-sinaflor")
+LABEL = "1440"
+VIEWPORT = {"width": 1440, "height": 900}
 
 
 async def dom_state(page, stage: str, network: list[dict], errors: list[str]) -> dict:
@@ -46,14 +48,14 @@ async def dom_state(page, stage: str, network: list[dict], errors: list[str]) ->
         }""",
         {"car": CAR, "stage": stage},
     )
-    state["network"] = network[-40:]
+    state["network"] = network[-60:]
     state["errors"] = errors[-30:]
     return state
 
 
 async def save(timeline: list[dict]) -> None:
     OUT.mkdir(parents=True, exist_ok=True)
-    (OUT / "v48-sinaflor-768-diagnostic.json").write_text(
+    (OUT / f"v48-sinaflor-{LABEL}-diagnostic.json").write_text(
         json.dumps(timeline, ensure_ascii=False, indent=2), encoding="utf-8"
     )
 
@@ -70,7 +72,7 @@ async def main() -> None:
     errors: list[str] = []
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
-        context = await browser.new_context(viewport={"width": 768, "height": 900})
+        context = await browser.new_context(viewport=VIEWPORT)
         page = await context.new_page()
         page.on("pageerror", lambda exc: errors.append("pageerror:" + str(exc)))
         page.on("console", lambda msg: errors.append(f"console:{msg.type}:{msg.text}") if msg.type == "error" else None)
@@ -82,7 +84,8 @@ async def main() -> None:
         )
         try:
             await page.goto(BASE, wait_until="domcontentloaded", timeout=30000)
-            await checkpoint(page, timeline, "goto_done", network, errors)
+            # The portal intentionally reloads once during the boot guard handshake.
+            # Do not inspect the DOM until that navigation has settled.
             await page.wait_for_function(
                 "sessionStorage.getItem('rx-v26-ready-reload')==='1' && !document.querySelector('#rxBootGuard')",
                 timeout=25000,
@@ -98,12 +101,15 @@ async def main() -> None:
             await checkpoint(page, timeline, "search_clicked", network, errors)
             await page.locator(f'.rx46-card[data-car="{CAR}"]').wait_for(state="visible", timeout=60000)
             await checkpoint(page, timeline, "result_card_visible", network, errors)
-            await page.locator('[data-rx46-action="full"]').click()
+            full = page.locator('[data-rx46-action="full"]')
+            timeline.append({"stage": "before_full_click", "full_count": await full.count(), "errors": errors[-30:]})
+            await save(timeline)
+            await full.click()
             await checkpoint(page, timeline, "full_clicked", network, errors)
             panel = page.locator(f'.rx45-panel-card[data-car="{CAR}"]')
             await panel.wait_for(state="visible", timeout=15000)
             await checkpoint(page, timeline, "panel_visible", network, errors)
-            for i in range(1, 13):
+            for i in range(1, 21):
                 await page.wait_for_timeout(1000)
                 await checkpoint(page, timeline, f"panel_plus_{i}s", network, errors)
                 state = timeline[-1]
@@ -114,20 +120,20 @@ async def main() -> None:
                     and row_map.get("sinaflor", {}).get("state") == "checked_spatial_record_unconfirmed"
                 ):
                     break
-            await page.screenshot(path=str(OUT / "v48-sinaflor-768-diagnostic.png"), full_page=False)
+            await page.screenshot(path=str(OUT / f"v48-sinaflor-{LABEL}-diagnostic.png"), full_page=False)
             await checkpoint(page, timeline, "diagnostic_finished", network, errors)
         except Exception as exc:
             errors.append(f"exception:{type(exc).__name__}:{exc}")
             try:
                 await checkpoint(page, timeline, "exception", network, errors)
-                await page.screenshot(path=str(OUT / "v48-sinaflor-768-failure.png"), full_page=False)
+                await page.screenshot(path=str(OUT / f"v48-sinaflor-{LABEL}-failure.png"), full_page=False)
             except Exception as inner:
                 errors.append(f"diagnostic_capture_exception:{type(inner).__name__}:{inner}")
                 await save(timeline + [{"stage": "capture_failed", "errors": errors}])
         finally:
             await context.close()
             await browser.close()
-    print("RX_V48_SINAFLOR_768_DIAGNOSTIC=RECORDED")
+    print(f"RX_V48_SINAFLOR_{LABEL}_DIAGNOSTIC=RECORDED")
 
 
 if __name__ == "__main__":
