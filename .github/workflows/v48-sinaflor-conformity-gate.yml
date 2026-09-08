@@ -1,0 +1,23 @@
+name: V48 SINAFLOR Conformity Gate
+
+on:
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sinaflor-truth:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install minimal spatial runtime
+        run: pip install fastapi httpx shapely pyproj
+      - name: Validate exact geometry states and current official IBAMA PAMGIA layer
+        run: PYTHONPATH=. python scripts/v48_sinaflor_conformity_gate.py
