@@ -1,0 +1,57 @@
+{
+  "contract": {
+    "date_fallback_allowed": false,
+    "latest_lookup_allowed": false,
+    "selection": "data_extracao = 2026-08-04 exactly"
+  },
+  "dataset": "basedosdados.br_sfb_sicar",
+  "evidence_type": "exact_physical_snapshot_audit",
+  "exact_snapshot_complete_national": false,
+  "exact_snapshot_complete_uf_count": 5,
+  "exact_snapshot_complete_ufs": [
+    "AL",
+    "ES",
+    "MG",
+    "PB",
+    "SE"
+  ],
+  "project": "metodo-afp-plataforma",
+  "schema_version": "v48-vector-snapshot-audit-evidence-2",
+  "source": {
+    "artifact_id": 10079659231,
+    "artifact_json_sha256": "6c337dead934f2d87058fcbf88087ec8787e88d1591a4aaadac0f6555f6f5a3c",
+    "job_id": 102263158518,
+    "run_id": 34286481776,
+    "workflow": "V48 Vector Snapshot Audit"
+  },
+  "target_snapshot": "2026-08-04",
+  "ufs": {
+    "AC": {"area_imovel_row_count": null, "distinct_car_count": null, "missing_tables": ["area_imovel", "vegetacao_nativa", "reserva_legal", "app", "uso_restrito", "area_consolidada", "hidrografia", "area_pousio"], "snapshot_complete": false},
+    "AL": {"area_imovel_row_count": 143372, "distinct_car_count": 143364, "missing_tables": [], "snapshot_complete": true},
+    "AM": {"area_imovel_row_count": null, "distinct_car_count": null, "missing_tables": ["area_imovel", "vegetacao_nativa", "reserva_legal", "app", "uso_restrito", "area_consolidada", "hidrografia", "area_pousio"], "snapshot_complete": false},
+    "AP": {"area_imovel_row_count": null, "distinct_car_count": null, "missing_tables": ["area_imovel", "vegetacao_nativa", "reserva_legal", "app", "uso_restrito", "area_consolidada", "hidrografia", "area_pousio"], "snapshot_complete": false},
+    "BA": {"area_imovel_row_count": null, "distinct_car_count": null, "missing_tables": ["area_imovel", "vegetacao_nativa", "reserva_legal", "app", "uso_restrito", "area_consolidada", "hidrografia", "area_pousio"], "snapshot_complete": false},
+    "CE": {"area_imovel_row_count": null, "distinct_car_count": null, "missing_tables": ["area_imovel", "vegetacao_nativa", "reserva_legal", "app", "uso_restrito", "area_consolidada", "hidrografia", "area_pousio"], "snapshot_complete": false},
+    "DF": {"area_imovel_row_count": null, "distinct_car_count": null, "missing_tables": ["area_imovel", "vegetacao_nativa", "reserva_legal", "app", "uso_restrito", "area_consolidada", "hidrografia", "area_pousio"], "snapshot_complete": false},
+    "ES": {"area_imovel_row_count": 129498, "distinct_car_count": 129496, "missing_tables": [], "snapshot_complete": true},
+    "GO": {"area_imovel_row_count": null, "distinct_car_count": null, "missing_tables": ["area_imovel", "vegetacao_nativa", "reserva_legal", "app", "uso_restrito", "area_consolidada", "hidrografia", "area_pousio"], "snapshot_complete": false},
+    "MA": {"area_imovel_row_count": null, "distinct_car_count": null, "missing_tables": ["area_imovel", "vegetacao_nativa", "reserva_legal", "app", "uso_restrito", "area_consolidada", "hidrografia", "area_pousio"], "snapshot_complete": false},
+    "MG": {"area_imovel_row_count": 1173606, "distinct_car_count": 1172258, "missing_tables": [], "snapshot_complete": true},
+    "MS": {"area_imovel_row_count": null, "distinct_car_count": null, "missing_tables": ["area_imovel", "vegetacao_nativa", "reserva_legal", "app", "uso_restrito", "area_consolidada", "hidrografia", "area_pousio"], "snapshot_complete": false},
+    "MT": {"area_imovel_row_count": null, "distinct_car_count": null, "missing_tables": ["area_imovel", "vegetacao_nativa", "reserva_legal", "app", "uso_restrito", "area_consolidada", "hidrografia", "area_pousio"], "snapshot_complete": false},
+    "PA": {"area_imovel_row_count": null, "distinct_car_count": null, "missing_tables": ["area_imovel", "vegetacao_nativa", "reserva_legal", "app", "uso_restrito", "area_consolidada", "hidrografia", "area_pousio"], "snapshot_complete": false},
+    "PB": {"area_imovel_row_count": 218227, "distinct_car_count": 218195, "missing_tables": [], "snapshot_complete": true},
+    "PE": {"area_imovel_row_count": null, "distinct_car_count": null, "missing_tables": ["area_imovel", "vegetacao_nativa", "reserva_legal", "app", "uso_restrito", "area_consolidada", "hidrografia", "area_pousio"], "snapshot_complete": false},
+    "PI": {"area_imovel_row_count": null, "distinct_car_count": null, "missing_tables": ["area_imovel", "vegetacao_nativa", "reserva_legal", "app", "uso_restrito", "area_consolidada", "hidrografia", "area_pousio"], "snapshot_complete": false},
+    "PR": {"area_imovel_row_count": null, "distinct_car_count": null, "missing_tables": ["area_imovel", "vegetacao_nativa", "reserva_legal", "app", "uso_restrito", "area_consolidada", "hidrografia", "area_pousio"], "snapshot_complete": false},
+    "RJ": {"area_imovel_row_count": null, "distinct_car_count": null, "missing_tables": ["area_imovel", "vegetacao_nativa", "reserva_legal", "app", "uso_restrito", "area_consolidada", "hidrografia", "area_pousio"], "snapshot_complete": false},
+    "RN": {"area_imovel_row_count": null, "distinct_car_count": null, "missing_tables": ["area_imovel", "vegetacao_nativa", "reserva_legal", "app", "uso_restrito", "area_consolidada", "hidrografia", "area_pousio"], "snapshot_complete": false},
+    "RO": {"area_imovel_row_count": null, "distinct_car_count": null, "missing_tables": ["area_imovel", "vegetacao_nativa", "reserva_legal", "app", "uso_restrito", "area_consolidada", "hidrografia", "area_pousio"], "snapshot_complete": false},
+    "RR": {"area_imovel_row_count": null, "distinct_car_count": null, "missing_tables": ["area_imovel", "vegetacao_nativa", "reserva_legal", "app", "uso_restrito", "area_consolidada", "hidrografia", "area_pousio"], "snapshot_complete": false},
+    "RS": {"area_imovel_row_count": null, "distinct_car_count": null, "missing_tables": ["area_imovel", "vegetacao_nativa", "reserva_legal", "app", "uso_restrito", "area_consolidada", "hidrografia", "area_pousio"], "snapshot_complete": false},
+    "SC": {"area_imovel_row_count": null, "distinct_car_count": null, "missing_tables": ["area_imovel", "vegetacao_nativa", "reserva_legal", "app", "uso_restrito", "area_consolidada", "hidrografia", "area_pousio"], "snapshot_complete": false},
+    "SE": {"area_imovel_row_count": 123575, "distinct_car_count": 123567, "missing_tables": [], "snapshot_complete": true},
+    "SP": {"area_imovel_row_count": null, "distinct_car_count": null, "missing_tables": ["area_imovel", "vegetacao_nativa", "reserva_legal", "app", "uso_restrito", "area_consolidada", "hidrografia", "area_pousio"], "snapshot_complete": false},
+    "TO": {"area_imovel_row_count": null, "distinct_car_count": null, "missing_tables": ["area_imovel", "vegetacao_nativa", "reserva_legal", "app", "uso_restrito", "area_consolidada", "hidrografia", "area_pousio"], "snapshot_complete": false}
+  }
+}
