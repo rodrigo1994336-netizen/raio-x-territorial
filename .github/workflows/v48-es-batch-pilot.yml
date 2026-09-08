@@ -1,16 +1,11 @@
 name: V48 ES Single Spot Pilot
 
 on:
-  push:
-    branches:
-      - ops/v48-budget-gate-probe-20260908
-    paths:
-      - scripts/v48_es_batch_submit.py
-      - .github/workflows/v48-es-batch-pilot.yml
   workflow_dispatch:
 
-# This workflow may create exactly one deterministic Batch job. Re-runs reuse
-# that job ID and never create a second paid ES pilot.
+# PERMANENT COST-SAFETY RULE:
+# Any workflow that can create paid cloud compute MUST be manually dispatched.
+# Never add push, pull_request, schedule, workflow_run, or other automatic triggers here.
 permissions:
   contents: read
 
