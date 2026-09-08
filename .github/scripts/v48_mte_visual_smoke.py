@@ -95,12 +95,13 @@ async def assert_contract(page, label):
     assert await mte.locator('.rx45-dot.blocked_missing_owner_identity').count() == 1
     assert "sem ocorrência" not in folded, mte_text
 
-    # Full catalog count: 10 original + 8 approved new sources = 18. MTE is
-    # blocked by missing owner identity, so the two original base responses remain.
+    # Denominator is a customer-facing promise: 10 implemented originals + MTE = 11.
+    # Seven approved future sources remain audit-only and do not enter the denominator.
     audit = panel.locator('.rx45-audit-count')
     audit_text = await audit.inner_text()
     audit_folded = audit_text.casefold()
-    assert "2 de 18 fontes responderam" in audit_folded, (label, audit_text)
+    assert "2 de 11 fontes responderam" in audit_folded, (label, audit_text)
+    assert "2 de 18" not in audit_folded, (label, audit_text)
     assert "car/sicar" in audit_folded and "resolução de identidade" in audit_folded, (label, audit_text)
 
     # Future sources exist only behind "ver auditoria", never as default rows.
@@ -190,7 +191,7 @@ async def main():
         finally:
             await browser.close()
     (OUT / "results.json").write_text(json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8")
-    (OUT / "browser-executed.txt").write_text("V48_MTE_ORIGINAL8_PLUS_MTE_FUTURE7_AUDIT_ONLY_375_768_1440\n", encoding="utf-8")
+    (OUT / "browser-executed.txt").write_text("V48_MTE_ORIGINAL8_PLUS_MTE_FUTURE7_AUDIT_ONLY_DENOMINATOR11_375_768_1440\n", encoding="utf-8")
     print("RX_V48_MTE_VISUAL_SMOKE=PASS")
 
 
