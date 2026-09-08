@@ -21,6 +21,7 @@ BUCKET = os.getenv(
 ).strip()
 REQUIRED_APIS = (
     "batch.googleapis.com",
+    "bigquery.googleapis.com",
     "compute.googleapis.com",
     "logging.googleapis.com",
     "storage.googleapis.com",
@@ -166,7 +167,7 @@ def main() -> None:
     location_ok = bucket_location.upper() == REGION.upper()
 
     result = {
-        "schema_version": "v48-batch-storage-preflight-4",
+        "schema_version": "v48-batch-storage-preflight-5",
         "project": PROJECT,
         "project_number": project_number,
         "caller_email": caller_email or None,
