@@ -144,6 +144,12 @@ async def assert_contract(page, label):
     return {"panel_text": text, "mte_text": mte_text, "sinaflor_text": sina_text, "audit": audit_text, "audit_detail": detail}
 
 
+async def assert_no_visible_error_status(page, label, stage):
+    bad = page.locator('#rxUiStatus.rx-ui-status.show.bad')
+    if await bad.count() and await bad.is_visible():
+        raise AssertionError((label, stage, "visible_error_status", await bad.inner_text()))
+
+
 async def position_conformity(page, edge):
     state = await page.evaluate(
         """edge=>{
@@ -176,9 +182,11 @@ async def run_viewport(browser, width, height, label):
     assert not errors, errors
 
     await position_conformity(page, "top")
+    await assert_no_visible_error_status(page, label, "top")
     top = OUT / f"v48-sinaflor-{label}-top.png"
     await page.screenshot(path=str(top), full_page=False)
     await position_conformity(page, "bottom")
+    await assert_no_visible_error_status(page, label, "bottom")
     bottom = OUT / f"v48-sinaflor-{label}-bottom.png"
     await page.screenshot(path=str(bottom), full_page=False)
 
@@ -200,7 +208,7 @@ async def main():
         finally:
             await browser.close()
     (OUT / "results.json").write_text(json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8")
-    (OUT / "browser-executed.txt").write_text("V48_SINAFLOR_ORIGINAL8_MTE_SINAFLOR_DENOMINATOR12_FUTURE6_AUDIT_ONLY_375_768_1440\n", encoding="utf-8")
+    (OUT / "browser-executed.txt").write_text("V48_SINAFLOR_ORIGINAL8_MTE_SINAFLOR_DENOMINATOR12_FUTURE6_AUDIT_ONLY_375_768_1440_NO_VISIBLE_ERROR_STATUS\n", encoding="utf-8")
     print("RX_V48_SINAFLOR_VISUAL_SMOKE=PASS")
 
 
