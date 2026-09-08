@@ -41,10 +41,6 @@ Nacional: BLOQUEADO
 - GHA artifact ID: `10071870243`
 - artifact SHA-256: `ccb615f5804920bfc36e800ed0cf631f242b4c780ecff3b8db04a33326ee2a83`
 - Batch runDuration: `497.216513469s`
-- worker total: `412.633s`
-- BigQuery/extraction: `360.174s`
-- Tippecanoe/tiles: `49.307s`
-- PMTiles upload: `1.61s`
 - features: `129496`
 - polygons resultantes: `129499`
 - duplicate CARs: `2`
@@ -57,6 +53,30 @@ Nacional: BLOQUEADO
 - peak temp disk used: `563224576` bytes
 - `map_analysis_snapshot_equal = true`
 
+### Linha literal completa do Cloud Logging
+
+```text
+RX_V48_BATCH_FINAL_METRICS=pmtiles_bytes=167000688 apt_update_s=7 apt_install_s=6 toolchain_gate_s=0 tippecanoe_download_s=5 tippecanoe_verify_extract_s=1 tippecanoe_build_s=51 tippecanoe_install_s=0 python_env_deps_s=14 worker_prepare_s=0 worker_s=413 bq_s=360.174 tiles_s=49.307 pmtiles_upload_s=1.61 manifest_upload_s=0.14 worker_reported_s=412.633 total_s=497
+```
+
+Tempos medidos do runnable:
+- `apt_update_s = 7`
+- `apt_install_s = 6`
+- `toolchain_gate_s = 0`
+- `tippecanoe_download_s = 5`
+- `tippecanoe_verify_extract_s = 1`
+- `tippecanoe_build_s = 51`
+- `tippecanoe_install_s = 0`
+- `python_env_deps_s = 14`
+- `worker_prepare_s = 0`
+- `worker_s = 413`
+- `bq_s = 360.174`
+- `tiles_s = 49.307`
+- `pmtiles_upload_s = 1.61`
+- `manifest_upload_s = 0.14`
+- `worker_reported_s = 412.633`
+- `total_s = 497`
+
 Amostra:
 - CAR: `ES-3200102-00009F9E92794C0F9F1B28812A6E82C7`
 - município: `3200102`
@@ -65,10 +85,21 @@ Amostra:
 
 ## LEITURA DO GARGALO APROVADA PELO USUÁRIO
 
-O piloto revelou que a geração dos tiles NÃO é o gargalo principal:
-- BigQuery/extraction: `360.174s` (~72% do Batch runDuration)
-- tiles: `49.307s` (~10%)
-- upload: `1.61s`
+O piloto revelou dois desperdícios que escalam nacionalmente:
+
+1. BigQuery/extraction: `360.174s`, aproximadamente 72% do tempo total de `497s`.
+2. Preparo repetitivo do ambiente por execução:
+   - apt: `7 + 6 = 13s`
+   - download Tippecanoe: `5s`
+   - verify/extract: `1s`
+   - build Tippecanoe: `51s`
+   - Python env/deps: `14s`
+   - total aproximado do preparo repetido: `84s` por UF
+   - em 27 UFs: aproximadamente `2268s`, ou `37,8 min`, apenas refazendo a mesma preparação.
+
+A geração de tiles em si foi rápida:
+- tiles: `49.307s`
+- upload PMTiles: `1.61s`
 
 O worker atualmente pagina resultados do BigQuery com `page_size=1000` e processa a transferência entre a infraestrutura do BigQuery e a VM em `southamerica-east1`.
 
@@ -83,7 +114,7 @@ Essas projeções são hipóteses de planejamento do usuário e devem ser valida
 
 # PRIMEIRA MISSÃO OBRIGATÓRIA DO NOVO CHAT
 
-ANTES de qualquer nacional, atacar o gargalo de extração BigQuery e trazer números comparáveis para quatro alternativas.
+ANTES de qualquer nacional, atacar os gargalos e trazer números comparáveis para CINCO frentes.
 
 ## 1. PAGE_SIZE MAIOR NA API BIGQUERY
 
@@ -142,7 +173,7 @@ Entregar:
 
 ## 4. PLANO NACIONAL OTIMIZADO — POR UF E EM PARALELO
 
-Somente depois dos itens 1–3:
+Somente depois dos itens 1, 2, 3 e 5:
 - escolher a melhor estratégia por evidência, não preferência;
 - projetar o Brasil inteiro por UF;
 - considerar paralelismo controlado por UFs;
@@ -168,6 +199,34 @@ Entregar também cenários:
 - paralelismo moderado;
 - paralelismo máximo recomendado dentro do orçamento/quotas.
 
+## 5. IMAGEM DE CONTAINER PRONTA PARA O BATCH
+
+Objetivo:
+- eliminar os aproximadamente `84s` de bootstrap repetido por UF;
+- construir UMA imagem versionada e reproduzível com Tippecanoe `2.79.0`, toolchain necessária e dependências Python já instaladas;
+- usar essa imagem no Batch em vez de `apt + download + make + venv/pip` a cada VM.
+
+Avaliar e entregar:
+- melhor registro/armazenamento para a imagem no Google Cloud, preferencialmente Artifact Registry se adequado;
+- tamanho estimado/medido da imagem final;
+- custo mensal de armazenamento da imagem conforme pricing oficial vigente;
+- eventual custo de pull/transferência da imagem dentro da mesma região e entre regiões;
+- tempo de cold start/pull esperado ou medido;
+- economia líquida por UF comparada ao baseline de `~84s` de preparo;
+- economia acumulada em 27 UFs;
+- impacto em reprodutibilidade, segurança e supply-chain;
+- pinagem por digest SHA-256, não apenas tag;
+- compatibilidade com Batch Spot e com a estratégia de região escolhida no item 3;
+- se convém uma imagem única nacional ou imagens regionais/replicadas;
+- custo de build inicial da imagem e frequência de rebuild.
+
+A imagem deve preservar:
+- Tippecanoe `2.79.0` pinado;
+- worker/contrato versionados;
+- sem gatilho automático que crie compute pago;
+- sem ampliar IAM por conveniência;
+- nacional ainda bloqueado.
+
 ## CRITÉRIO DE DECISÃO
 
 A melhor opção deve minimizar principalmente:
@@ -175,7 +234,8 @@ A melhor opção deve minimizar principalmente:
 2. custo total;
 3. complexidade operacional;
 4. risco de inconsistência;
-5. dependência de transferência inter-região.
+5. dependência de transferência inter-região;
+6. bootstrap repetitivo por UF.
 
 Não aceitar uma otimização que quebre:
 - `analysis_snapshot == map_snapshot == 2026-08-04`;
@@ -184,14 +244,46 @@ Não aceitar uma otimização que quebre:
 - publicação imutável com `if_generation_match=0`;
 - nacional bloqueado até aprovação.
 
+## ENTREGA FINAL OBRIGATÓRIA DO NOVO CHAT
+
+Somente depois de resolver os CINCO pontos acima, entregar uma projeção nacional final com:
+
+### Por UF
+- número de CARs;
+- bytes PMTiles projetados;
+- tempo de extração;
+- tempo de geração de tiles;
+- bootstrap/cold start com imagem pronta;
+- tempo total;
+- custo Spot/compute;
+- custo BigQuery;
+- custo de Artifact Registry/imagem;
+- custo de storage PMTiles;
+- custo de transferência/egress;
+- lote de paralelismo recomendado.
+
+### Brasil inteiro
+- tamanho total projetado;
+- tempo sequencial;
+- tempo com paralelismo moderado;
+- tempo com paralelismo máximo recomendado;
+- custo total de geração;
+- custo mensal de armazenamento;
+- custo da imagem/container;
+- custo de transferência;
+- margem de segurança/intervalo de incerteza;
+- arquitetura recomendada e justificativa quantitativa.
+
+NÃO executar geração nacional até o usuário ver esses números e autorizar expressamente.
+
 ## ORDEM DE TRABALHO DO NOVO CHAT
 
 1. Ler este arquivo inteiro.
 2. Não refazer o piloto ES.
 3. Confirmar o estado atual em poucas linhas.
-4. Começar imediatamente pelos quatro estudos de otimização acima, com fontes oficiais atuais para pricing/regiões/limites BigQuery/Batch/GCS.
+4. Começar imediatamente pelos CINCO estudos de otimização acima, com fontes oficiais atuais para pricing/regiões/limites BigQuery/Batch/GCS/Artifact Registry.
 5. Não executar nacional nem criar compute pago sem autorização expressa.
-6. Ao final, recomendar uma arquitetura nacional e apresentar projeção de tempo/custo por UF e em paralelo.
+6. Ao final, recomendar uma arquitetura nacional e apresentar projeção final de tempo/custo/tamanho por UF e em paralelo.
 
 ## ARQUIVOS DE CONTEXTO COMPLEMENTARES
 
