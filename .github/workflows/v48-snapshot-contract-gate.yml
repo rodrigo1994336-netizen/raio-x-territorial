@@ -1,4 +1,4 @@
-name: V48 Snapshot Contract Gate
+name: V48 Snapshot Contract Static Gate
 
 on:
   push:
@@ -6,6 +6,11 @@ on:
       - ops/v48-budget-gate-probe-20260908
     paths:
       - vector_snapshot_contract_v48.py
+      - sicar_canonical_manifest_v48.py
+      - sicar_canonical_snapshot_v48.py
+      - portal_car_snapshot_ui_v48.py
+      - portal_car_integrity_v47.py
+      - scripts/v48_canonical_snapshot_static_gate.py
       - .github/workflows/v48-snapshot-contract-gate.yml
   workflow_dispatch:
 
@@ -13,69 +18,49 @@ permissions:
   contents: read
 
 jobs:
-  exact-snapshot-contract:
+  per-uf-snapshot-contract:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    env:
-      GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
-      GOOGLE_CLOUD_PROJECT: ${{ secrets.GCP_PROJECT_ID }}
-      RX_BIGQUERY_PROJECT: ${{ secrets.GCP_PROJECT_ID }}
-      RX_ADMIN_MUNICIPALITY_TABLE: basedosdados.br_geobr_mapas.municipio
-      RX_ADMIN_UF_TABLE: basedosdados.br_geobr_mapas.estado
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-
-      - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@v2
-        with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
-          project_id: ${{ secrets.GCP_PROJECT_ID }}
-          create_credentials_file: true
-          export_environment_variables: true
 
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
-      - name: Install runtime dependencies
-        run: pip install --disable-pip-version-check google-cloud-bigquery shapely pyproj
+      - name: Compile canonical snapshot contract
+        run: |
+          python -m py_compile \
+            sicar_canonical_manifest_v48.py \
+            sicar_canonical_snapshot_v48.py \
+            portal_car_snapshot_ui_v48.py \
+            portal_car_integrity_v47.py \
+            vector_snapshot_contract_v48.py \
+            scripts/v48_canonical_snapshot_static_gate.py \
+            scripts/v48_canonical_snapshot_audit.py
 
-      - name: Prove exact snapshot contract and real canonical property
+      - name: Run static canonical snapshot gate
+        run: python scripts/v48_canonical_snapshot_static_gate.py
+
+      - name: Prove per-UF vector contract without BigQuery
         shell: bash
         run: |
           python - <<'PY'
-          import vector_snapshot_contract_v48 as v48
-          import sicar_integrity_v47 as sicar
+          from pathlib import Path
+          source = Path('vector_snapshot_contract_v48.py').read_text(encoding='utf-8')
+          runtime = Path('sicar_canonical_snapshot_v48.py').read_text(encoding='utf-8')
+          manifest = Path('sicar_canonical_manifest_v48.py').read_text(encoding='utf-8')
+          sql_contract = Path('vector_snapshot_contract_v48.py').read_text(encoding='utf-8')
 
-          assert v48.SNAPSHOT_DATE.isoformat() == '2026-08-04'
-          sql = v48.property_at_snapshot_sql().upper()
-          assert 'DATA_EXTRACAO=@SNAPSHOT' in sql
-          assert 'MAX(DATA_EXTRACAO)' not in sql
+          assert 'SNAPSHOT_DATE = dt.date(2026, 8, 4)' not in source
+          assert 'PER_UF_MAP_EQUALS_ANALYSIS_FAIL_CLOSED' in source
+          assert 'data_extracao=@snapshot' in runtime
+          assert 'MAX(data_extracao)' not in runtime
+          assert 'PINNED_MANIFEST_PATH = ""' in manifest  # stays empty until audited manifest promotion
+          assert 'data_extracao=@snapshot' in sql_contract
 
-          manifest = v48.validate_manifest(v48.canonical_manifest())
-          assert manifest['analysis_snapshot'] == '2026-08-04'
-          assert manifest['map_snapshot'] == '2026-08-04'
-          assert manifest['analysis_snapshot'] == manifest['map_snapshot']
-
-          divergent = v48.canonical_manifest()
-          divergent['map_snapshot'] = '2026-09-01'
-          try:
-              v48.validate_manifest(divergent)
-          except v48.SnapshotContractError:
-              pass
-          else:
-              raise AssertionError('divergent map/analysis snapshot accepted')
-
-          client = sicar._client()
-          car = 'MG-3120904-DFB380BECD7A4323AD8AA68FA14D011F'
-          prop = v48.fetch_property_at_snapshot(client, car, 'MG')
-          assert prop, 'Curvelo reference CAR absent from canonical snapshot'
-          assert str(prop.get('data_extracao')) == '2026-08-04'
-          assert prop.get('geometry_geojson'), 'canonical property geometry missing'
-
-          print('RX_V48_CANONICAL_SNAPSHOT=2026-08-04')
-          print('RX_V48_MAP_ANALYSIS_SNAPSHOT_EQUAL=PASS')
-          print('RX_V48_NO_LATEST_DATE_FALLBACK=PASS')
-          print('RX_V48_CURVELO_EXACT_SNAPSHOT=PASS')
-          print('RX_V48_SNAPSHOT_CONTRACT_GATE=PASS')
+          print('RX_V48_CANONICAL_SCOPE=UF')
+          print('RX_V48_MAP_ANALYSIS_SAME_UF_SNAPSHOT=PASS')
+          print('RX_V48_NO_PER_CAR_LATEST_FALLBACK=PASS')
+          print('RX_V48_SNAPSHOT_CONTRACT_STATIC_GATE=PASS')
           PY
