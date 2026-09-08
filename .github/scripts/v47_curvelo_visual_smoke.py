@@ -36,18 +36,13 @@ async def open_curvelo(page):
     await page.locator(f'.rx46-card[data-car="{CAR}"]').wait_for(state="visible", timeout=60000)
     await page.locator('[data-rx46-action="full"]').click()
     await page.locator(f'.rx45-panel-card[data-car="{CAR}"]').wait_for(state="visible", timeout=15000)
-    await page.wait_for_timeout(1550)
-    await page.wait_for_function("typeof window.rxV47LoadIntegrity==='function'", timeout=10000)
+
+    # V47 schedules finite refreshes at 90/720/2300/9800 ms. Evidence must be
+    # taken only after that last product cycle has finished. We deliberately do
+    # not call rxV47LoadIntegrity here: if the final product state loses the
+    # integrity block, the smoke must fail rather than reattach it for the photo.
+    await page.wait_for_timeout(11000)
     selector = f'.rx45-panel-card[data-car="{CAR}"] .rx45-integrity-table'
-    for _ in range(7):
-        if await page.locator(selector).count():
-            try:
-                await page.locator(selector).wait_for(state="visible", timeout=1200)
-                return
-            except Exception:
-                pass
-        await page.evaluate("window.rxV47LoadIntegrity()")
-        await page.wait_for_timeout(1200)
     await page.locator(selector).wait_for(state="visible", timeout=10000)
 
 
@@ -81,43 +76,46 @@ async def assert_mobile_no_truncation(page):
     assert layout["theadDisplay"] == "none", layout
 
 
-async def capture_edge(page, edge: str, path: Path):
-    """Position, verify and capture in one finite retry loop.
+async def edge_state(page, edge: str, position: bool):
+    return await page.evaluate(
+        """({car,edge,position})=>{
+          const host=document.querySelector('#rx43SnapshotHost');
+          const root=document.querySelector(`.rx45-panel-card[data-car="${CSS.escape(car)}"] .rx45-integrity-slot`);
+          if(!host||!root)return {ok:false,reason:'missing'};
+          if(position){const hr=host.getBoundingClientRect(),rr=root.getBoundingClientRect();if(edge==='top')host.scrollTop+=rr.top-hr.top-4;else host.scrollTop+=rr.bottom-hr.bottom+4}
+          const live=document.querySelector(`.rx45-panel-card[data-car="${CSS.escape(car)}"] .rx45-integrity-slot`);
+          if(!live)return {ok:false,reason:'replaced'};
+          const vh=host.getBoundingClientRect();
+          const visible=el=>{if(!el)return false;const r=el.getBoundingClientRect();return r.bottom>vh.top+1&&r.top<vh.bottom-1};
+          if(edge==='top'){
+            const reading=live.querySelector('.rx45-integrity-reading'),checks=[...live.querySelectorAll('.rx45-integrity-check')];
+            return {ok:Boolean(reading)&&checks.length===3&&visible(reading)&&checks.every(visible),edge};
+          }
+          const rows=[...live.querySelectorAll('.rx45-integrity-table tbody tr')];
+          const regen=rows.find(r=>/Regeneração/i.test(r.textContent||'')),note=live.querySelector('.rx45-integrity-note');
+          return {ok:visible(regen)&&visible(note),edge};
+        }""", {"car": CAR, "edge": edge, "position": position})
 
-    V45 may replace the panel node during late enrichment. Re-acquire the live
-    node on every attempt; this changes no product CSS/DOM contract.
-    """
+
+async def capture_edge(page, edge: str, path: Path):
+    # At settled product state there should be no panel replacement. Verify both
+    # immediately before and immediately after the actual screenshot; if a node
+    # changes during the frame, overwrite on a finite retry instead of accepting
+    # a misleading image.
     last = None
-    for _ in range(8):
-        state = await page.evaluate(
-            """({car,edge})=>{
-              const host=document.querySelector('#rx43SnapshotHost');
-              const root=document.querySelector(`.rx45-panel-card[data-car="${CSS.escape(car)}"] .rx45-integrity-slot`);
-              if(!host||!root)return {ok:false,reason:'missing'};
-              const hr=host.getBoundingClientRect(),rr=root.getBoundingClientRect();
-              if(edge==='top') host.scrollTop += rr.top-hr.top-4;
-              else host.scrollTop += rr.bottom-hr.bottom+4;
-              const live=document.querySelector(`.rx45-panel-card[data-car="${CSS.escape(car)}"] .rx45-integrity-slot`);
-              if(!live)return {ok:false,reason:'replaced'};
-              const vh=host.getBoundingClientRect();
-              const visible=el=>{if(!el)return false;const r=el.getBoundingClientRect();return r.bottom>vh.top+1&&r.top<vh.bottom-1};
-              if(edge==='top'){
-                const reading=live.querySelector('.rx45-integrity-reading');
-                const checks=[...live.querySelectorAll('.rx45-integrity-check')];
-                return {ok:Boolean(reading)&&checks.length===3&&visible(reading)&&checks.every(visible),edge};
-              }
-              const rows=[...live.querySelectorAll('.rx45-integrity-table tbody tr')];
-              const regen=rows.find(r=>/Regeneração/i.test(r.textContent||''));
-              const note=live.querySelector('.rx45-integrity-note');
-              return {ok:visible(regen)&&visible(note),edge};
-            }""", {"car": CAR, "edge": edge})
-        last = state
-        if state.get("ok"):
-            await page.screenshot(path=str(path), full_page=False)
-            return state
-        if await page.evaluate("typeof window.rxV47LoadIntegrity==='function'"):
-            await page.evaluate("window.rxV47LoadIntegrity()")
-        await page.wait_for_timeout(650)
+    for _ in range(4):
+        last = await edge_state(page, edge, True)
+        if not last.get("ok"):
+            await page.wait_for_timeout(300)
+            continue
+        await page.wait_for_timeout(120)
+        before = await edge_state(page, edge, False)
+        if not before.get("ok"):
+            continue
+        await page.screenshot(path=str(path), full_page=False)
+        after = await edge_state(page, edge, False)
+        if after.get("ok"):
+            return after
     raise AssertionError((edge, last))
 
 
@@ -170,7 +168,7 @@ async def main():
         finally:
             await browser.close()
     (OUT / "results.json").write_text(json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8")
-    (OUT / "browser-executed.txt").write_text("V47_CURVELO_VISUAL_TOP_BOTTOM\n", encoding="utf-8")
+    (OUT / "browser-executed.txt").write_text("V47_CURVELO_VISUAL_STABLE_TOP_BOTTOM\n", encoding="utf-8")
     print("RX_V47_CURVELO_VISUAL_SMOKE=PASS")
 
 
