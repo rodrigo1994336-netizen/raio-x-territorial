@@ -16,7 +16,7 @@ from google.auth.transport.requests import AuthorizedSession
 
 PROJECT = "metodo-afp-plataforma"
 REGION = "southamerica-east1"
-JOB_ID = "rx-v48-es-sicar-20260804-pilot-001"
+JOB_ID = "rx-v48-es-sicar-20260804-pilot-002"
 RUNTIME_SA = f"rx-v48-vector-worker@{PROJECT}.iam.gserviceaccount.com"
 BUCKET = "raio-x-territorial-car-metodo-afp-plataforma"
 WORKER_PATH = Path("scripts/v48_vector_pilot_worker.py")
@@ -76,7 +76,10 @@ def build_task_script(worker_sha256: str, worker_b64: str) -> str:
     return f"""#!/usr/bin/env bash
 set -euo pipefail
 
+export PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
 export DEBIAN_FRONTEND=noninteractive
+SECONDS=0
+
 if [ \"$(id -u)\" -eq 0 ]; then
   SUDO=\"\"
 elif command -v sudo >/dev/null 2>&1; then
@@ -86,34 +89,71 @@ else
   exit 20
 fi
 
+STEP_STARTED=$SECONDS
 $SUDO apt-get update -y
-$SUDO apt-get install -y --no-install-recommends \\
-  build-essential ca-certificates curl libsqlite3-dev python3 python3-pip python3-venv zlib1g-dev
+T_APT_UPDATE=$((SECONDS - STEP_STARTED))
+
+STEP_STARTED=$SECONDS
+$SUDO apt-get install -y --no-install-recommends build-essential gcc g++ coreutils ca-certificates curl libsqlite3-dev python3 python3-pip python3-venv zlib1g-dev
+T_APT_INSTALL=$((SECONDS - STEP_STARTED))
+
+STEP_STARTED=$SECONDS
+for cmd in gcc g++ uname make curl tar sha256sum python3 stat; do
+  if ! command -v \"$cmd\" >/dev/null 2>&1; then
+    echo \"RX_V48_BATCH_BOOTSTRAP=FAIL_MISSING_COMMAND:$cmd\" >&2
+    exit 21
+  fi
+done
+gcc --version
+g++ --version
+CC1_PATH=\"$(gcc -print-prog-name=cc1)\"
+CC1PLUS_PATH=\"$(g++ -print-prog-name=cc1plus)\"
+if [ \"$CC1_PATH\" = 'cc1' ] || [ ! -x \"$CC1_PATH\" ]; then
+  echo \"RX_V48_BATCH_BOOTSTRAP=FAIL_MISSING_CC1:$CC1_PATH\" >&2
+  exit 22
+fi
+if [ \"$CC1PLUS_PATH\" = 'cc1plus' ] || [ ! -x \"$CC1PLUS_PATH\" ]; then
+  echo \"RX_V48_BATCH_BOOTSTRAP=FAIL_MISSING_CC1PLUS:$CC1PLUS_PATH\" >&2
+  exit 23
+fi
+T_TOOLCHAIN_GATE=$((SECONDS - STEP_STARTED))
+echo 'RX_V48_BATCH_BOOTSTRAP=TOOLCHAIN_OK'
+echo \"RX_V48_BATCH_BOOTSTRAP_CC1=$CC1_PATH\"
+echo \"RX_V48_BATCH_BOOTSTRAP_CC1PLUS=$CC1PLUS_PATH\"
 
 cd /tmp
-curl --fail --location --retry 3 --connect-timeout 20 \\
-  --output tippecanoe.tar.gz \\
-  '{TIPPECANOE_URL}'
+STEP_STARTED=$SECONDS
+curl --fail --location --retry 3 --connect-timeout 20 --output tippecanoe.tar.gz '{TIPPECANOE_URL}'
+T_TIPPECANOE_DOWNLOAD=$((SECONDS - STEP_STARTED))
+
+STEP_STARTED=$SECONDS
 echo '{TIPPECANOE_SHA256}  tippecanoe.tar.gz' | sha256sum -c -
 tar -xzf tippecanoe.tar.gz
+T_TIPPECANOE_VERIFY_EXTRACT=$((SECONDS - STEP_STARTED))
+
 cd 'tippecanoe-{TIPPECANOE_VERSION}'
+STEP_STARTED=$SECONDS
 make -j8
+T_TIPPECANOE_BUILD=$((SECONDS - STEP_STARTED))
+
+STEP_STARTED=$SECONDS
 $SUDO make install PREFIX=/usr/local
 /usr/local/bin/tippecanoe --version
+T_TIPPECANOE_INSTALL=$((SECONDS - STEP_STARTED))
 
+STEP_STARTED=$SECONDS
 python3 -m venv /tmp/rxv48-venv
-/tmp/rxv48-venv/bin/pip install --disable-pip-version-check --no-cache-dir \\
-  'google-cloud-bigquery==3.45.0' \\
-  'google-cloud-storage==3.13.1' \\
-  'shapely==2.1.2' \\
-  'psutil==7.2.2'
+/tmp/rxv48-venv/bin/pip install --disable-pip-version-check --no-cache-dir 'google-cloud-bigquery==3.45.0' 'google-cloud-storage==3.13.1' 'shapely==2.1.2' 'psutil==7.2.2'
+T_PYTHON_ENV_DEPS=$((SECONDS - STEP_STARTED))
 
+STEP_STARTED=$SECONDS
 cat > /tmp/v48_worker.py.b64 <<'RX_V48_WORKER_B64'
 {worker_b64}
 RX_V48_WORKER_B64
 base64 --decode /tmp/v48_worker.py.b64 > /tmp/v48_worker.py
 echo '{worker_sha256}  /tmp/v48_worker.py' | sha256sum -c -
 rm -f /tmp/v48_worker.py.b64
+T_WORKER_PREPARE=$((SECONDS - STEP_STARTED))
 
 export GCP_PROJECT_ID='{PROJECT}'
 export GOOGLE_CLOUD_PROJECT='{PROJECT}'
@@ -124,16 +164,43 @@ export RX_V48_GCS_BUCKET='{BUCKET}'
 export RX_V48_WORKDIR='/mnt/disks/rxv48'
 
 mkdir -p /mnt/disks/rxv48
-printf '%s\\n' \\
-  'RX_V48_BATCH_MACHINE=e2-standard-8' \\
-  'RX_V48_BATCH_PROVISIONING=SPOT' \\
-  'RX_V48_BATCH_REGION={REGION}' \\
-  'RX_V48_BATCH_UF=ES' \\
-  'RX_V48_BATCH_SNAPSHOT=2026-08-04' \\
-  'RX_V48_BATCH_NATIONAL=false' \\
-  'RX_V48_BATCH_RETRY_COUNT=0'
+printf '%s\\n' 'RX_V48_BATCH_MACHINE=e2-standard-8' 'RX_V48_BATCH_PROVISIONING=SPOT' 'RX_V48_BATCH_REGION={REGION}' 'RX_V48_BATCH_UF=ES' 'RX_V48_BATCH_SNAPSHOT=2026-08-04' 'RX_V48_BATCH_NATIONAL=false' 'RX_V48_BATCH_RETRY_COUNT=0'
 
-exec /tmp/rxv48-venv/bin/python /tmp/v48_worker.py
+STEP_STARTED=$SECONDS
+/tmp/rxv48-venv/bin/python /tmp/v48_worker.py
+T_WORKER=$((SECONDS - STEP_STARTED))
+
+PMTILES_PATH='/mnt/disks/rxv48/sicar-2026-08-04-es/ES.pmtiles'
+MANIFEST_PATH='/mnt/disks/rxv48/sicar-2026-08-04-es/pilot-manifest.json'
+if [ ! -s \"$PMTILES_PATH\" ]; then
+  echo \"RX_V48_BATCH_FINAL_METRICS=FAIL_MISSING_PMTILES:$PMTILES_PATH\" >&2
+  exit 24
+fi
+if [ ! -s \"$MANIFEST_PATH\" ]; then
+  echo \"RX_V48_BATCH_FINAL_METRICS=FAIL_MISSING_MANIFEST:$MANIFEST_PATH\" >&2
+  exit 25
+fi
+
+PMTILES_BYTES=\"$(stat -c%s \"$PMTILES_PATH\")\"
+read -r BQ_SECONDS TILE_SECONDS PMTILES_UPLOAD_SECONDS MANIFEST_UPLOAD_SECONDS WORKER_REPORTED_SECONDS < <(
+  /tmp/rxv48-venv/bin/python - \"$MANIFEST_PATH\" <<'RX_V48_METRICS_PY'
+import json
+import sys
+from pathlib import Path
+m = json.loads(Path(sys.argv[1]).read_text(encoding=\"utf-8\"))
+print(
+    m.get(\"source\", dict()).get(\"elapsed_seconds\", \"NA\"),
+    m.get(\"tippecanoe\", dict()).get(\"elapsed_seconds\", \"NA\"),
+    m.get(\"pmtiles\", dict()).get(\"upload\", dict()).get(\"elapsed_seconds\", \"NA\"),
+    m.get(\"manifest\", dict()).get(\"elapsed_seconds\", \"NA\"),
+    m.get(\"total_elapsed_seconds\", \"NA\"),
+)
+RX_V48_METRICS_PY
+)
+T_TOTAL=$SECONDS
+
+printf 'RX_V48_BATCH_FINAL_METRICS=pmtiles_bytes=%s apt_update_s=%s apt_install_s=%s toolchain_gate_s=%s tippecanoe_download_s=%s tippecanoe_verify_extract_s=%s tippecanoe_build_s=%s tippecanoe_install_s=%s python_env_deps_s=%s worker_prepare_s=%s worker_s=%s bq_s=%s tiles_s=%s pmtiles_upload_s=%s manifest_upload_s=%s worker_reported_s=%s total_s=%s\\n' \"$PMTILES_BYTES\" \"$T_APT_UPDATE\" \"$T_APT_INSTALL\" \"$T_TOOLCHAIN_GATE\" \"$T_TIPPECANOE_DOWNLOAD\" \"$T_TIPPECANOE_VERIFY_EXTRACT\" \"$T_TIPPECANOE_BUILD\" \"$T_TIPPECANOE_INSTALL\" \"$T_PYTHON_ENV_DEPS\" \"$T_WORKER_PREPARE\" \"$T_WORKER\" \"$BQ_SECONDS\" \"$TILE_SECONDS\" \"$PMTILES_UPLOAD_SECONDS\" \"$MANIFEST_UPLOAD_SECONDS\" \"$WORKER_REPORTED_SECONDS\" \"$T_TOTAL\"
+echo 'RX_V48_BATCH_RUNNABLE=PASS'
 """
 
 
@@ -186,6 +253,7 @@ def build_job(worker_sha256: str, worker_b64: str) -> dict[str, Any]:
             "rx-snapshot": "20260804",
             "rx-national": "false",
             "rx-attempts": "one",
+            "rx-attempt": "002",
         },
     }
 
@@ -290,7 +358,7 @@ def main() -> None:
     state = str(((final_job or {}).get("status") or {}).get("state") or "UNKNOWN")
 
     result: dict[str, Any] = {
-        "schema_version": "v48-es-batch-result-1",
+        "schema_version": "v48-es-batch-result-2",
         "project": PROJECT,
         "region": REGION,
         "job_id": JOB_ID,
@@ -318,6 +386,9 @@ def main() -> None:
         print(f"RX_V48_BATCH_MANIFEST={manifest_name}")
         print(f"RX_V48_BATCH_PMTILES_BYTES={manifest.get('pmtiles', {}).get('size_bytes')}")
         print(f"RX_V48_BATCH_WORKER_SECONDS={manifest.get('total_elapsed_seconds')}")
+        print(f"RX_V48_BATCH_BQ_SECONDS={manifest.get('source', {}).get('elapsed_seconds')}")
+        print(f"RX_V48_BATCH_TILES_SECONDS={manifest.get('tippecanoe', {}).get('elapsed_seconds')}")
+        print(f"RX_V48_BATCH_PMTILES_UPLOAD_SECONDS={manifest.get('pmtiles', {}).get('upload', {}).get('elapsed_seconds')}")
     else:
         print(f"RX_V48_BATCH_RESULT={state}:{JOB_ID}", file=sys.stderr)
 
@@ -334,7 +405,7 @@ if __name__ == "__main__":
         if not OUT_PATH.exists():
             OUT_PATH.write_text(
                 json.dumps({
-                    "schema_version": "v48-es-batch-result-1",
+                    "schema_version": "v48-es-batch-result-2",
                     "status": "fail_closed_before_or_during_batch",
                     "job_id": JOB_ID,
                     "error": f"{type(exc).__name__}:{exc}",
