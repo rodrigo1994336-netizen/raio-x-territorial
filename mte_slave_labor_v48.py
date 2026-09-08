@@ -12,6 +12,7 @@ import io
 import re
 import time
 from datetime import datetime, timezone
+from html import unescape
 from typing import Any
 
 import httpx
@@ -54,7 +55,11 @@ def parse_registry_csv(raw: bytes) -> list[dict[str, str]]:
 
 
 def _published_date(page_html: str) -> str | None:
-    m = re.search(r"Publicado\s+em\s+(\d{2}/\d{2}/\d{4})", page_html or "", re.I)
+    # gov.br may wrap "Publicado em" and the date in nested tags. Normalize the
+    # rendered text without depending on BeautifulSoup or another runtime dep.
+    rendered = unescape(re.sub(r"<[^>]+>", " ", page_html or ""))
+    rendered = " ".join(rendered.split())
+    m = re.search(r"Publicado\s+em\s+(\d{2}/\d{2}/\d{4})", rendered, re.I)
     if not m:
         return None
     day, month, year = m.group(1).split("/")
@@ -84,6 +89,8 @@ def _fetch_registry() -> dict[str, Any]:
                 page_resp = client.get(SOURCE_PAGE)
                 page_resp.raise_for_status()
                 data_date = _published_date(page_resp.text)
+                if not data_date:
+                    page_detail = "metadata:publication_date_not_found"
             except Exception as exc:
                 page_detail = f"metadata:{type(exc).__name__}"
         out = {
