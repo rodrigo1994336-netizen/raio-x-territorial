@@ -1,0 +1,4 @@
+# Runtime dependencies required by the production Render service for V47 CAR integrity.
+# Versions match the last successful authenticated BigQuery gate on Python 3.12.
+google-cloud-bigquery==3.45.0
+google-auth==2.57.1
