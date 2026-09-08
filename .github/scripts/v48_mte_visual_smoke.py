@@ -10,6 +10,24 @@ BASE = "http://127.0.0.1:8000/"
 CAR = "MG-3120904-DFB380BECD7A4323AD8AA68FA14D011F"
 OUT = Path("artifacts-v48-mte")
 VIEWPORTS = ((375, 812, "375"), (768, 900, "768"), (1440, 900, "1440"))
+ORIGINAL_EIGHT = {
+    "embargo": "Embargos",
+    "prodes": "PRODES",
+    "indigenous_land": "Terra Indígena",
+    "legal_reserve": "Reserva Legal",
+    "conservation_unit": "Un. Conservação",
+    "registry": "Matrícula",
+    "public_forest": "Floresta Pública",
+    "snci": "SNCI",
+}
+FORBIDDEN_FUTURE_LABELS = (
+    "SINAFLOR — autorização",
+    "IBAMA — autos",
+    "ICMBio — embargos",
+    "ICMBio — autos",
+    "INCRA — assentamento",
+    "INCRA — quilombola",
+)
 
 
 async def wait_runtime(page):
@@ -34,8 +52,8 @@ async def open_panel(page):
     await page.locator(
         '.rx45-check[data-source="mte_slave_labor"][data-state="blocked_missing_owner_identity"]'
     ).wait_for(state="visible", timeout=30000)
-    # V47 has finite panel enrichment cycles through 9.8 s. Evidence is taken
-    # after those cycles so V48 is proven on the stable final product state.
+    # V47/V48 use finite enrichment cycles. Evidence is taken after the last
+    # stable product cycle, never from an intermediate DOM state.
     await page.wait_for_timeout(11000)
     panel = page.locator(f'.rx45-panel-card[data-car="{CAR}"]')
     await panel.wait_for(state="visible", timeout=10000)
@@ -48,7 +66,26 @@ async def open_panel(page):
 async def assert_contract(page, label):
     panel = page.locator(f'.rx45-panel-card[data-car="{CAR}"]')
     text = await panel.inner_text()
-    mte = page.locator('.rx45-check[data-source="mte_slave_labor"]')
+
+    # Regression guard: the original eight V45 conformity rows are frozen and
+    # must remain visible. V48 is additive, never substitutive.
+    rows = panel.locator('.rx45-check')
+    assert await rows.count() == 9, (label, await rows.count(), text)
+    for source_id, expected_label in ORIGINAL_EIGHT.items():
+        row = panel.locator(f'.rx45-check[data-source="{source_id}"]')
+        assert await row.count() == 1, (label, source_id, text)
+        row_text = (await row.inner_text()).strip()
+        assert expected_label.casefold() in row_text.casefold(), (label, source_id, row_text)
+        assert await row.locator('.rx45-dot.not_consulted').count() == 1, (label, source_id, row_text)
+
+    # Not-yet-implemented future connectors belong to audit/backlog only; they
+    # must not create a wall of NON CONSULTADA rows.
+    folded_panel = text.casefold()
+    for forbidden in FORBIDDEN_FUTURE_LABELS:
+        assert forbidden.casefold() not in folded_panel, (label, forbidden, text)
+
+    # Approved MTE truth pattern is preserved verbatim in behavior.
+    mte = panel.locator('.rx45-check[data-source="mte_slave_labor"]')
     mte_text = await mte.inner_text()
     folded = mte_text.casefold()
     assert "mte — trabalho escravo" in folded, (label, mte_text)
@@ -61,22 +98,19 @@ async def assert_contract(page, label):
     assert await mte.locator('.rx45-dot.blocked_missing_owner_identity').count() == 1
     assert "sem ocorrência" not in folded, mte_text
 
-    future = page.locator('.rx45-check[data-state="not_consulted"]')
-    assert await future.count() == 7, (label, await future.count(), text)
-    for i in range(await future.count()):
-        t = (await future.nth(i).inner_text()).casefold()
-        assert "não consultada" in t and "fonte:" in t, (label, i, t)
-        assert await future.nth(i).get_attribute("data-answered") == "0"
-
-    audit = page.locator('.rx45-audit-count')
+    # Honest count: ten original sources + MTE = eleven. MTE is blocked on
+    # owner identity, so only the two pre-existing base responses count.
+    audit = panel.locator('.rx45-audit-count')
     audit_text = await audit.inner_text()
-    assert "2 de 10 fontes responderam" in audit_text.casefold(), (label, audit_text)
+    audit_folded = audit_text.casefold()
+    assert "2 de 11 fontes responderam" in audit_folded, (label, audit_text)
+    assert "car/sicar" in audit_folded and "resolução de identidade" in audit_folded, (label, audit_text)
 
     geometry = await page.evaluate(
         """()=>{
           const s=[...document.querySelectorAll('.rx45-section')].find(x=>/Conformidade/i.test(x.querySelector('h4')?.textContent||''));
           if(!s)return {missing:true};
-          const clipped=[...s.querySelectorAll('.rx48-check-label,.rx48-check-status,.rx48-check-reason,.rx48-check-meta,.rx45-audit-count')]
+          const clipped=[...s.querySelectorAll('.rx48-check-label,.rx48-check-status,.rx48-check-reason,.rx48-check-meta,.rx45-audit-count,.rx45-check>span')]
             .filter(x=>x.getClientRects().length && x.scrollWidth>x.clientWidth+1)
             .map(x=>({text:x.textContent,client:x.clientWidth,scroll:x.scrollWidth}));
           return {missing:false,clipped,scrollWidth:s.scrollWidth,clientWidth:s.clientWidth};
@@ -144,7 +178,7 @@ async def main():
         finally:
             await browser.close()
     (OUT / "results.json").write_text(json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8")
-    (OUT / "browser-executed.txt").write_text("V48_MTE_OWNER_TRUTH_375_768_1440\n", encoding="utf-8")
+    (OUT / "browser-executed.txt").write_text("V48_MTE_ADDITIVE_ORIGINAL8_PLUS_MTE_375_768_1440\n", encoding="utf-8")
     print("RX_V48_MTE_VISUAL_SMOKE=PASS")
 
 
