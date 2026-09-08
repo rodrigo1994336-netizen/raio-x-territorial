@@ -1,0 +1,23 @@
+name: V48 MTE Conformity Gate
+
+on:
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mte-truth:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install minimal runtime dependency
+        run: pip install httpx
+      - name: Validate deterministic states and current official MTE registry
+        run: PYTHONPATH=. python scripts/v48_mte_conformity_gate.py
