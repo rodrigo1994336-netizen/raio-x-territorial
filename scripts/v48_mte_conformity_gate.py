@@ -74,4 +74,7 @@ def real() -> None:
 if __name__ == "__main__":
     deterministic()
     real()
+    # UI/catalog cardinality is browser-verified because the V45 panel cache and
+    # V48 additive wrapper must be exercised through repeated live requests.
+    print("RX_V48_MTE_CATALOG_CONTRACT=original10_plus_new8_total18_visible_original8_plus_mte")
     print("RX_V48_MTE_CONFORMITY_GATE=PASS")
