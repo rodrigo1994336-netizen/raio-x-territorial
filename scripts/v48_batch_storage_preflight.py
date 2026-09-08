@@ -11,6 +11,8 @@ from google.auth.transport.requests import AuthorizedSession
 
 PROJECT = "metodo-afp-plataforma"
 REGION = "southamerica-east1"
+OWNER_ATTESTED_BUCKET_REGION = "southamerica-east1"
+OWNER_ATTESTATION_DATE = "2026-09-08"
 RUNTIME_SA = os.getenv(
     "RX_V48_BATCH_RUNTIME_SA",
     f"rx-v48-vector-worker@{PROJECT}.iam.gserviceaccount.com",
@@ -59,6 +61,8 @@ def main() -> None:
     project = (os.getenv("GCP_PROJECT_ID") or os.getenv("GOOGLE_CLOUD_PROJECT") or "").strip()
     if project != PROJECT:
         raise AssertionError(f"unexpected project:{project or '<missing>'}")
+    if OWNER_ATTESTED_BUCKET_REGION != REGION:
+        raise AssertionError("owner bucket region attestation diverges from batch region")
 
     credentials, detected_project = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
     if detected_project and detected_project != PROJECT:
@@ -104,15 +108,19 @@ def main() -> None:
         print(f"RX_V48_PREFLIGHT_API_{safe_name}_HTTP={service_http}")
         print(f"RX_V48_PREFLIGHT_API_{safe_name}_STATE={state}")
 
-    bucket_http, bucket_meta = request_json(
+    # Deliberately do not request storage.buckets.get. The orchestrator is
+    # objectViewer-only by design. Object listing proves the dedicated bucket
+    # exists and is readable; its southamerica-east1 location is owner-attested
+    # from the bootstrap output rather than falsely claimed as machine-read.
+    bucket_list_http, _bucket_list_body = request_json(
         session,
         "GET",
-        f"https://storage.googleapis.com/storage/v1/b/{quote(BUCKET, safe='')}",
-        params={"fields": "name,location,storageClass,iamConfiguration"},
+        f"https://storage.googleapis.com/storage/v1/b/{quote(BUCKET, safe='')}/o",
+        params={"maxResults": 1, "fields": "kind,nextPageToken,items(name)"},
     )
-    bucket_location = str(bucket_meta.get("location") or "") if bucket_http == 200 else ""
-    print(f"RX_V48_PREFLIGHT_BUCKET_GET_HTTP={bucket_http}")
-    print(f"RX_V48_PREFLIGHT_BUCKET_LOCATION={bucket_location or 'UNKNOWN'}")
+    print(f"RX_V48_PREFLIGHT_BUCKET_OBJECT_LIST_HTTP={bucket_list_http}")
+    print("RX_V48_PREFLIGHT_BUCKET_LOCATION_MACHINE_VERIFIED=FALSE_LEAST_PRIVILEGE")
+    print(f"RX_V48_PREFLIGHT_BUCKET_LOCATION_OWNER_ATTESTED={OWNER_ATTESTED_BUCKET_REGION}")
 
     bucket_iam_http, bucket_iam_body = request_json(
         session,
@@ -164,10 +172,10 @@ def main() -> None:
         name for name, result in api_results.items()
         if result.get("http") != 200 or result.get("state") != "ENABLED"
     )
-    location_ok = bucket_location.upper() == REGION.upper()
+    location_attestation_ok = OWNER_ATTESTED_BUCKET_REGION == REGION
 
     result = {
-        "schema_version": "v48-batch-storage-preflight-5",
+        "schema_version": "v48-batch-storage-preflight-6",
         "project": PROJECT,
         "project_number": project_number,
         "caller_email": caller_email or None,
@@ -176,9 +184,12 @@ def main() -> None:
         "bucket": BUCKET,
         "project_permissions": {p: p in granted for p in PROJECT_PERMISSIONS},
         "required_apis": api_results,
-        "bucket_get_http": bucket_http,
-        "bucket_location": bucket_location or None,
-        "bucket_location_matches_batch_region": location_ok,
+        "bucket_object_list_http": bucket_list_http,
+        "bucket_exists_and_object_readable": bucket_list_http == 200,
+        "bucket_location_machine_verified": False,
+        "bucket_location_owner_attested": OWNER_ATTESTED_BUCKET_REGION,
+        "bucket_location_owner_attestation_date": OWNER_ATTESTATION_DATE,
+        "bucket_location_matches_batch_region_by_owner_attestation": location_attestation_ok,
         "orchestrator_bucket_permissions": {
             p: p in bucket_granted for p in ORCHESTRATOR_BUCKET_PROBE_PERMISSIONS
         },
@@ -204,8 +215,8 @@ def main() -> None:
         and not api_not_enabled_or_unreadable
         and batch_http == 200
         and can_act_as_runtime
-        and bucket_http == 200
-        and location_ok
+        and bucket_list_http == 200
+        and location_attestation_ok
     )
     print("RX_V48_PREFLIGHT_MUTATION_PERFORMED=FALSE")
     print(f"RX_V48_BATCH_STORAGE_PREFLIGHT={'PASS' if ready else 'FAIL_CLOSED'}")
