@@ -68,6 +68,9 @@ jobs:
           test "$ready" -eq 1
       - name: Capture SINAFLOR spatial-truth state at 375 768 1440
         run: python .github/scripts/v48_sinaflor_visual_smoke.py
+      - name: Diagnose 768 visual state on failure
+        if: failure()
+        run: python .github/scripts/v48_sinaflor_visual_diagnostic.py || true
       - name: Runtime log on failure
         if: failure()
         run: tail -n 600 /tmp/rx-v48-sinaflor.log || true
