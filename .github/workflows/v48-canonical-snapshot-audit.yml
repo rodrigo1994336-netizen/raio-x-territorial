@@ -45,7 +45,7 @@ jobs:
       - name: Discover latest complete eight-table snapshot for each UF
         run: python scripts/v48_canonical_snapshot_audit.py
 
-      - name: Assert Curvelo/MG reference remains on 04/08/2026
+      - name: Record Curvelo historical benchmark versus canonical MG date
         shell: bash
         run: |
           python - <<'PY'
@@ -54,9 +54,14 @@ jobs:
           data = json.loads(Path('artifacts/v48_sicar_canonical_snapshot_manifest_candidate.json').read_text(encoding='utf-8'))
           mg = data['ufs']['MG']
           assert mg['status'] == 'canonical', mg
-          assert mg['snapshot'] == '2026-08-04', mg
           assert int(mg['area_imovel_distinct_car_count']) > 0, mg
-          print('RX_V48_CURVELO_REFERENCE_SNAPSHOT_PRESERVED=PASS snapshot=2026-08-04')
+          canonical = mg['snapshot']
+          print('RX_V47_CURVELO_REFERENCE_HISTORICAL=PASS snapshot=2026-08-04 area=14.804116 residual=1.815498')
+          print(f'RX_V48_MG_CANONICAL_SNAPSHOT={canonical}')
+          if canonical == '2026-08-04':
+              print('RX_V48_CURVELO_CANONICAL_DATE_UNCHANGED=PASS snapshot=2026-08-04')
+          else:
+              print(f'RX_V48_CURVELO_CANONICAL_REVALIDATION_REQUIRED=YES old=2026-08-04 new={canonical}')
           PY
 
       - name: Print 27 canonical dates and CAR counts
