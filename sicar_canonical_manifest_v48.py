@@ -84,7 +84,7 @@ def date_pt(value: dt.date) -> str:
 
 
 def age_days(snapshot: dt.date, *, today: dt.date | None = None) -> int:
-    reference = today or dt.date.today()
+    reference = today or dt.datetime.now(dt.timezone.utc).date()
     return max(0, (reference - snapshot).days)
 
 
