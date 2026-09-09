@@ -1,14 +1,6 @@
 name: V48 Vector Pilot Pre-Batch
 
 on:
-  push:
-    branches:
-      - ops/v48-budget-gate-probe-20260908
-    paths:
-      - scripts/v48_vector_pilot_worker.py
-      - scripts/v48_vector_pilot_prebatch.py
-      - config/v48_vector_pilot.json
-      - .github/workflows/v48-vector-pilot-prebatch.yml
   workflow_dispatch:
 
 permissions:
