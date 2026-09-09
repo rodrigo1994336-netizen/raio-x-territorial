@@ -1,16 +1,6 @@
 name: V48 ES Batch Submit Static Gate
 
 on:
-  push:
-    branches:
-      - ops/v48-budget-gate-probe-20260908
-    paths:
-      - scripts/v48_es_batch_submit.py
-      - scripts/v48_es_paid_gate.py
-      - scripts/v48_vector_pilot_worker.py
-      - config/v48_vector_pilot.json
-      - .github/workflows/v48-es-batch-pilot.yml
-      - .github/workflows/v48-es-batch-submit-static.yml
   workflow_dispatch:
 
 permissions:
