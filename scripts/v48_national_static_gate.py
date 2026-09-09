@@ -8,6 +8,9 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 CANONICAL_FP = "25e14900fd0ea92d3ff82cb6f46da24449fb2b3bd233aff215ec8a2b645b64a4"
 EXPECTED_UFS = {
     "AC", "AL", "AP", "AM", "BA", "CE", "DF", "ES", "GO", "MA", "MT", "MS", "MG",
@@ -106,7 +109,6 @@ def main() -> None:
     require("DELETE" not in submit.upper(), "national submitter must not delete Batch/GCS resources")
 
     recovery = text("scripts/v48_national_recovery_contract.py")
-    require("immutable_prepared_receipt" not in recovery or "active_json_updated" in recovery, "recovery commit contract incomplete")
     require("RECONCILE_MANIFEST_ONLY" in recovery and "active_json_updated" in recovery, "recovery invariant missing")
 
     workflow = text(".github/workflows/v48-national-car-quadrica.yml")
