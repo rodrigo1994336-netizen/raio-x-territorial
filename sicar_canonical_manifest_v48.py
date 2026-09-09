@@ -9,8 +9,10 @@ from pathlib import Path
 from typing import Any
 
 EXPECTED_SCHEMA = "v48-sicar-canonical-snapshots-1"
-PINNED_MANIFEST_PATH = ""  # Filled only after the audited immutable manifest is committed.
+PINNED_MANIFEST_PATH = "car/manifests/sicar-canonical-snapshots-v1-25e14900fd0ea92d3ff82cb6f46da24449fb2b3bd233aff215ec8a2b645b64a4.json"
 MANIFEST_NAME_RE = re.compile(r"^sicar-canonical-snapshots-v1-([0-9a-f]{64})\.json$")
+STALE_DAYS_THRESHOLD = 60
+STALE_NOTE = "Esta base está mais antiga que a das demais unidades da federação."
 UF_NAMES = {
     "AC": "Acre", "AL": "Alagoas", "AP": "Amapá", "AM": "Amazonas", "BA": "Bahia",
     "CE": "Ceará", "DF": "Distrito Federal", "ES": "Espírito Santo", "GO": "Goiás",
@@ -54,7 +56,7 @@ def load_manifest() -> dict[str, Any]:
         raise RuntimeError("canonical_snapshot_manifest_ufs_missing")
     actual = _fingerprint(data)
     declared = str(data.get("content_fingerprint_sha256") or "")
-    filename_hash = MANIFEST_NAME_RE.match(path.name).group(1)  # already validated in _path
+    filename_hash = MANIFEST_NAME_RE.match(path.name).group(1)
     if not declared or actual != declared or filename_hash != declared:
         raise RuntimeError("canonical_snapshot_manifest_fingerprint_mismatch")
     return data
@@ -81,6 +83,30 @@ def date_pt(value: dt.date) -> str:
     return value.strftime("%d/%m/%Y")
 
 
-def base_label(uf: str, snapshot: dt.date) -> str:
+def age_days(snapshot: dt.date, *, today: dt.date | None = None) -> int:
+    reference = today or dt.date.today()
+    return max(0, (reference - snapshot).days)
+
+
+def age_text(snapshot: dt.date, *, today: dt.date | None = None) -> str:
+    days = age_days(snapshot, today=today)
+    unit = "dia" if days == 1 else "dias"
+    return f"atualizada há {days} {unit}"
+
+
+def base_label(uf: str, snapshot: dt.date, *, today: dt.date | None = None) -> str:
     code = str(uf or "").upper().strip()
-    return f"Base do CAR de {UF_NAMES.get(code, code)}: {date_pt(snapshot)}"
+    return f"Base do CAR de {UF_NAMES.get(code, code)}: {date_pt(snapshot)} · {age_text(snapshot, today=today)}"
+
+
+def staleness_note(snapshot: dt.date, *, today: dt.date | None = None) -> str | None:
+    return STALE_NOTE if age_days(snapshot, today=today) > STALE_DAYS_THRESHOLD else None
+
+
+def canonical_dates_for_audit() -> dict[str, str]:
+    manifest = load_manifest()
+    return {
+        uf: str(entry.get("snapshot"))
+        for uf, entry in sorted((manifest.get("ufs") or {}).items())
+        if entry.get("status") == "canonical" and entry.get("snapshot")
+    }
