@@ -27,7 +27,7 @@
     "github_max_parallel": 3,
     "rerun_failed_uf_only": true,
     "paid_compute_trigger": "workflow_dispatch_only",
-    "bigquery_maximum_bytes_billed_per_uf": 10737418240
+    "bigquery_maximum_bytes_billed_per_uf": 2147483648
   },
   "measurement_outputs_required": [
     "pmtiles_size_per_uf_and_total",
