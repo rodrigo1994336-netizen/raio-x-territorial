@@ -17,7 +17,7 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Compile canonical snapshot contract
+      - name: Compile canonical and national contracts
         run: |
           python -m py_compile \
             sicar_canonical_manifest_v48.py \
@@ -27,10 +27,17 @@ jobs:
             vector_snapshot_contract_v48.py \
             scripts/v48_canonical_snapshot_static_gate.py \
             scripts/v48_canonical_snapshot_audit.py \
-            scripts/v48_canonical_car_counts.py
+            scripts/v48_national_worker.py \
+            scripts/v48_national_batch_submit.py \
+            scripts/v48_national_finalize.py \
+            scripts/v48_national_recovery_contract.py \
+            scripts/v48_national_static_gate.py
 
       - name: Run invariant canonical snapshot gate
         run: python scripts/v48_canonical_snapshot_static_gate.py --require-manifest
+
+      - name: Run invariant national generation gate
+        run: python scripts/v48_national_static_gate.py
 
       - name: Prove per-UF vector and immutable-manifest invariants without BigQuery
         shell: bash
@@ -54,6 +61,8 @@ jobs:
           assert manifest['content_fingerprint_sha256'] in canonical.PINNED_MANIFEST_PATH
           assert len(manifest['ufs']) == 27
           assert all(item.get('status') == 'canonical' for item in manifest['ufs'].values())
+          assert manifest['ufs']['SP']['snapshot'] == '2026-06-02'
+          assert manifest['ufs']['MG']['snapshot'] == '2026-08-04'
 
           print('RX_V48_CANONICAL_SCOPE=UF')
           print('RX_V48_MAP_ANALYSIS_SAME_UF_SNAPSHOT=PASS')
