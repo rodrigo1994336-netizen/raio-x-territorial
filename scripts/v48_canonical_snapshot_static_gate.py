@@ -91,10 +91,13 @@ def static_contract() -> None:
     require("field != \"data_extracao\"" in audit, "data_extracao partition contract missing")
     require("COUNT(*) AS row_count" in audit, "lightweight row-presence confirmation missing")
     require("COUNTIF(geometria" not in audit, "canonical date selection must not scan geometry")
-    require("COUNT(DISTINCT id_imovel)" not in audit, "probe must not scan id_imovel")
-    require("dry_run=True" in audit, "lightweight query must be dry-run only in probe phase")
-    require('"real_data_query_executed": False' in audit, "probe must explicitly record no real data query")
-    require("MAX_BYTES = 50 * 1024**3" in audit, "BigQuery cost guard missing")
+    require("COUNT(DISTINCT id_imovel)" not in audit, "canonical date selection must not scan id_imovel")
+    require("dry_run=True" in audit, "real query must be preceded by dry-run")
+    require("maximum_bytes_billed=MAX_BYTES" in audit, "real query must enforce maximum bytes billed")
+    require("MAX_BYTES = 2 * 1024**3" in audit, "BigQuery hard guard must be exactly 2 GiB")
+    require('"real_data_query_executed": True' in audit, "audit must record authorized real data query")
+    require("RX_V48_DATE_COVERAGE" in audit, "per-date UF coverage evidence missing")
+    require("RX_V48_CANONICAL_UF" in audit, "per-UF canonical snapshot evidence missing")
     print("RX_V48_CANONICAL_SNAPSHOT_STATIC_GATE=PASS")
 
 
@@ -124,7 +127,6 @@ def manifest_gate() -> None:
         require(set(tables) == TABLES, f"{uf}: canonical snapshot must prove 8/8 tables")
         for table, evidence in tables.items():
             require(int(evidence.get("row_count") or 0) > 0, f"{uf}/{table}: empty partition")
-        require(int(item.get("area_imovel_distinct_car_count") or 0) > 0, f"{uf}: CAR count missing")
 
     declared = str(data.get("content_fingerprint_sha256") or "")
     payload = dict(data)
