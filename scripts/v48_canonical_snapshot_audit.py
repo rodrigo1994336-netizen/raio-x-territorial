@@ -1,17 +1,17 @@
 from __future__ import annotations
 
 import datetime as dt
-import hashlib
 import json
 import os
-from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
 from google.cloud import bigquery
 
 PROJECT = "metodo-afp-plataforma"
-DATASET = "basedosdados.br_sfb_sicar"
+DATASET_PROJECT = "basedosdados"
+DATASET_ID = "br_sfb_sicar"
+DATASET = f"{DATASET_PROJECT}.{DATASET_ID}"
 EXPECTED_UFS = (
     "AC", "AL", "AP", "AM", "BA", "CE", "DF", "ES", "GO", "MA", "MT", "MS", "MG",
     "PA", "PB", "PR", "PE", "PI", "RJ", "RN", "RS", "RO", "RR", "SC", "SP", "SE", "TO",
@@ -21,136 +21,172 @@ TABLES = (
     "uso_restrito", "area_consolidada", "hidrografia", "area_pousio",
 )
 MAX_BYTES = 50 * 1024**3
-SCHEMA_VERSION = "v48-sicar-canonical-snapshots-1"
-SELECTION_RULE = "latest_date_all_8_tables_have_rows_and_usable_geometry_per_uf"
+METADATA_MAX_BYTES = 100 * 1024**2
+OLD_GEOMETRY_DRYRUN_BYTES = 275_904_855_982
+SELECTION_RULE = "latest_date_all_8_tables_have_partition_and_rows_per_uf"
 
 
 def fail(message: str) -> None:
     raise AssertionError(message)
 
 
-def inventory_sql() -> str:
-    parts = []
+def table_partition_contract(client: bigquery.Client) -> dict[str, dict[str, Any]]:
+    """Read table metadata via tables.get; this is not a BigQuery data query."""
+    out: dict[str, dict[str, Any]] = {}
+    for table in TABLES:
+        meta = client.get_table(f"{DATASET}.{table}")
+        tp = meta.time_partitioning
+        field = tp.field if tp else None
+        partition_type = str(tp.type_ if tp else "")
+        if field != "data_extracao":
+            fail(f"{table}: expected partition field data_extracao; got {field or '<none>'}")
+        out[table] = {
+            "partition_field": field,
+            "partition_type": partition_type,
+            "num_rows_table_metadata": int(meta.num_rows or 0),
+        }
+        print(
+            "RX_V48_PARTITION_CONTRACT",
+            f"table={table}",
+            f"field={field}",
+            f"type={partition_type}",
+        )
+    return out
+
+
+def partitions_metadata_sql() -> str:
+    return f"""
+    SELECT table_name, partition_id, total_rows
+    FROM `{DATASET_PROJECT}.{DATASET_ID}.INFORMATION_SCHEMA.PARTITIONS`
+    WHERE table_name IN UNNEST(@tables)
+      AND partition_id IS NOT NULL
+      AND partition_id NOT IN ('__NULL__', '__UNPARTITIONED__')
+      AND total_rows > 0
+    ORDER BY table_name, partition_id
+    """
+
+
+def parse_partition_id(raw: str) -> dt.date:
+    text = str(raw or "").strip()
+    if len(text) != 8 or not text.isdigit():
+        fail(f"unexpected daily partition_id:{text or '<empty>'}")
+    return dt.datetime.strptime(text, "%Y%m%d").date()
+
+
+def partition_candidates(client: bigquery.Client) -> tuple[dict[str, list[str]], list[dt.date], int]:
+    params = [bigquery.ArrayQueryParameter("tables", "STRING", list(TABLES))]
+    cfg = bigquery.QueryJobConfig(
+        query_parameters=params,
+        use_legacy_sql=False,
+        maximum_bytes_billed=METADATA_MAX_BYTES,
+    )
+    job = client.query(partitions_metadata_sql(), job_config=cfg)
+    rows = list(job.result(timeout=120))
+    metadata_bytes = int(job.total_bytes_processed or 0)
+    print(f"RX_V48_PARTITIONS_METADATA_BYTES_PROCESSED={metadata_bytes}")
+
+    by_table: dict[str, set[dt.date]] = {table: set() for table in TABLES}
+    for row in rows:
+        table = str(row.get("table_name") or "")
+        if table not in by_table:
+            continue
+        date = parse_partition_id(str(row.get("partition_id") or ""))
+        if int(row.get("total_rows") or 0) > 0:
+            by_table[table].add(date)
+
+    missing = [table for table, dates in by_table.items() if not dates]
+    if missing:
+        fail(f"partition metadata returned no non-empty partitions for:{','.join(missing)}")
+
+    common = set.intersection(*(dates for dates in by_table.values()))
+    if not common:
+        fail("no partition date exists in all eight tables")
+    common_dates = sorted(common)
+    print(
+        "RX_V48_COMMON_PARTITION_DATES",
+        f"count={len(common_dates)}",
+        f"oldest={common_dates[0].isoformat()}",
+        f"newest={common_dates[-1].isoformat()}",
+    )
+    serialized = {table: [d.isoformat() for d in sorted(dates)] for table, dates in by_table.items()}
+    return serialized, common_dates, metadata_bytes
+
+
+def lightweight_inventory_sql(candidate_dates: list[dt.date]) -> str:
+    if not candidate_dates:
+        fail("candidate_dates_empty")
+    literals = ",".join(f"DATE '{date.isoformat()}'" for date in candidate_dates)
+    parts: list[str] = []
     for table in TABLES:
         parts.append(f"""
         SELECT '{table}' AS table_name,
                sigla_uf,
                data_extracao,
-               COUNT(*) AS row_count,
-               COUNTIF(geometria IS NOT NULL) AS geometry_count,
-               COUNT(DISTINCT id_imovel) AS distinct_car_count
+               COUNT(*) AS row_count
         FROM `{DATASET}.{table}`
-        WHERE sigla_uf IN UNNEST(@ufs) AND data_extracao IS NOT NULL
+        WHERE data_extracao IN ({literals})
+          AND sigla_uf IN UNNEST(@ufs)
         GROUP BY sigla_uf, data_extracao
         """)
     return "\nUNION ALL\n".join(parts)
 
 
-def query_inventory(client: bigquery.Client) -> tuple[list[dict[str, Any]], int]:
+def lightweight_dry_run(client: bigquery.Client, candidate_dates: list[dt.date]) -> int:
     params = [bigquery.ArrayQueryParameter("ufs", "STRING", list(EXPECTED_UFS))]
-    dry_cfg = bigquery.QueryJobConfig(query_parameters=params, dry_run=True, use_query_cache=False)
-    dry = client.query(inventory_sql(), job_config=dry_cfg)
-    estimated = int(dry.total_bytes_processed or 0)
-    print(f"RX_V48_CANONICAL_SNAPSHOT_DRYRUN_BYTES={estimated}")
-    if estimated > MAX_BYTES:
-        fail(f"canonical snapshot audit exceeds guard:{estimated}>{MAX_BYTES}")
     cfg = bigquery.QueryJobConfig(
         query_parameters=params,
+        dry_run=True,
+        use_query_cache=False,
         use_legacy_sql=False,
-        maximum_bytes_billed=MAX_BYTES,
     )
-    rows = client.query(inventory_sql(), job_config=cfg).result(timeout=300)
-    return [dict(row.items()) for row in rows], estimated
-
-
-def choose(rows: list[dict[str, Any]]) -> dict[str, Any]:
-    by_uf_date: dict[str, dict[str, dict[str, dict[str, int]]]] = defaultdict(lambda: defaultdict(dict))
-    for row in rows:
-        uf = str(row.get("sigla_uf") or "").upper()
-        table = str(row.get("table_name") or "")
-        date = str(row.get("data_extracao") or "")
-        if uf not in EXPECTED_UFS or table not in TABLES or not date:
-            continue
-        by_uf_date[uf][date][table] = {
-            "row_count": int(row.get("row_count") or 0),
-            "geometry_count": int(row.get("geometry_count") or 0),
-            "distinct_car_count": int(row.get("distinct_car_count") or 0),
-        }
-
-    ufs: dict[str, Any] = {}
-    for uf in EXPECTED_UFS:
-        eligible: list[str] = []
-        for date, tables in by_uf_date.get(uf, {}).items():
-            if set(tables) != set(TABLES):
-                continue
-            if all(v["row_count"] > 0 and v["geometry_count"] > 0 for v in tables.values()):
-                eligible.append(date)
-        if not eligible:
-            ufs[uf] = {
-                "status": "unavailable",
-                "snapshot": None,
-                "reason": "no_date_has_all_8_required_tables_with_rows_and_usable_geometry",
-            }
-            print(f"RX_V48_CANONICAL_UF uf={uf} status=UNAVAILABLE")
-            continue
-        snapshot = max(eligible)
-        tables = by_uf_date[uf][snapshot]
-        area = tables["area_imovel"]
-        ufs[uf] = {
-            "status": "canonical",
-            "snapshot": snapshot,
-            "area_imovel_distinct_car_count": area["distinct_car_count"],
-            "tables": tables,
-        }
-        print(
-            "RX_V48_CANONICAL_UF",
-            f"uf={uf}",
-            f"snapshot={snapshot}",
-            f"cars={area['distinct_car_count']}",
-            "tables=8/8",
-        )
-    return ufs
+    job = client.query(lightweight_inventory_sql(candidate_dates), job_config=cfg)
+    estimated = int(job.total_bytes_processed or 0)
+    print(f"RX_V48_CANONICAL_LIGHTWEIGHT_DRYRUN_BYTES={estimated}")
+    if estimated > MAX_BYTES:
+        fail(f"lightweight canonical audit exceeds guard:{estimated}>{MAX_BYTES}")
+    return estimated
 
 
 def main() -> None:
     project = (os.getenv("GCP_PROJECT_ID") or os.getenv("GOOGLE_CLOUD_PROJECT") or "").strip()
     if project != PROJECT:
         fail(f"unexpected GCP project:{project or '<missing>'}")
+
     client = bigquery.Client(project=PROJECT)
-    rows, dryrun_bytes = query_inventory(client)
-    ufs = choose(rows)
-    canonical_count = sum(1 for item in ufs.values() if item.get("status") == "canonical")
-    unavailable = sorted(uf for uf, item in ufs.items() if item.get("status") != "canonical")
-    national_cars = sum(int(item.get("area_imovel_distinct_car_count") or 0) for item in ufs.values())
+    partition_contract = table_partition_contract(client)
+    partitions, common_dates, metadata_bytes = partition_candidates(client)
+    dryrun_bytes = lightweight_dry_run(client, common_dates)
+
+    reduction = None
+    if OLD_GEOMETRY_DRYRUN_BYTES > 0:
+        reduction = 1.0 - (dryrun_bytes / OLD_GEOMETRY_DRYRUN_BYTES)
+
     payload = {
-        "schema_version": SCHEMA_VERSION,
+        "mode": "probe_only_no_real_data_query",
         "source": DATASET,
         "selection_rule": SELECTION_RULE,
         "selection_rule_human": (
-            "Para cada UF, escolher a data mais recente em que as oito tabelas necessárias possuem "
-            "linhas e geometria utilizável. Sem data elegível, a UF fica indisponível; não há fallback."
+            "Para cada UF, a data canônica candidata será a mais recente em que as oito tabelas "
+            "possuem a partição e pelo menos uma linha para a UF. Geometria não participa da seleção "
+            "de data; permanece validada fail-closed no motor e no worker."
         ),
         "required_tables": list(TABLES),
+        "partition_contract": partition_contract,
+        "partitions_by_table": partitions,
+        "common_partition_dates": [d.isoformat() for d in common_dates],
+        "common_partition_dates_count": len(common_dates),
+        "partitions_metadata_bytes_processed": metadata_bytes,
+        "old_geometry_dryrun_bytes": OLD_GEOMETRY_DRYRUN_BYTES,
+        "lightweight_dryrun_bytes": dryrun_bytes,
+        "estimated_byte_reduction_fraction": reduction,
+        "real_data_query_executed": False,
         "generated_at_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
-        "dry_run_bytes": dryrun_bytes,
-        "canonical_uf_count": canonical_count,
-        "unavailable_ufs": unavailable,
-        "national_distinct_cars_sum_by_canonical_uf": national_cars,
-        "ufs": ufs,
     }
-    canonical_bytes = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    fingerprint = hashlib.sha256(canonical_bytes).hexdigest()
-    payload["content_fingerprint_sha256"] = fingerprint
-    out = Path("artifacts/v48_sicar_canonical_snapshot_manifest_candidate.json")
+    out = Path("artifacts/v48_canonical_snapshot_probe.json")
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
-    immutable_path = f"car/manifests/sicar-canonical-snapshots-v1-{fingerprint}.json"
-    print(f"RX_V48_CANONICAL_SNAPSHOT_UFS={canonical_count}/27")
-    print("RX_V48_CANONICAL_SNAPSHOT_UNAVAILABLE=" + (",".join(unavailable) if unavailable else "NONE"))
-    print(f"RX_V48_CANONICAL_SNAPSHOT_NATIONAL_CARS={national_cars}")
-    print(f"RX_V48_CANONICAL_MANIFEST_FINGERPRINT={fingerprint}")
-    print(f"RX_V48_CANONICAL_MANIFEST_PATH={immutable_path}")
-    print("RX_V48_CANONICAL_SNAPSHOT_AUDIT=PASS")
+    print("RX_V48_CANONICAL_PROBE_REAL_QUERY_EXECUTED=NO")
+    print("RX_V48_CANONICAL_SNAPSHOT_PROBE=PASS")
 
 
 if __name__ == "__main__":
