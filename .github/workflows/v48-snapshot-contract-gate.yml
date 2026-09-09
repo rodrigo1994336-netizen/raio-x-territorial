@@ -1,0 +1,64 @@
+name: V48 Snapshot Contract Static Gate
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  per-uf-snapshot-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Compile canonical snapshot contract
+        run: |
+          python -m py_compile \
+            sicar_canonical_manifest_v48.py \
+            sicar_canonical_snapshot_v48.py \
+            portal_car_snapshot_ui_v48.py \
+            portal_car_integrity_v47.py \
+            vector_snapshot_contract_v48.py \
+            scripts/v48_canonical_snapshot_static_gate.py \
+            scripts/v48_canonical_snapshot_audit.py \
+            scripts/v48_canonical_car_counts.py
+
+      - name: Run invariant canonical snapshot gate
+        run: python scripts/v48_canonical_snapshot_static_gate.py --require-manifest
+
+      - name: Prove per-UF vector and immutable-manifest invariants without BigQuery
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import sicar_canonical_manifest_v48 as canonical
+
+          source = Path('vector_snapshot_contract_v48.py').read_text(encoding='utf-8')
+          runtime = Path('sicar_canonical_snapshot_v48.py').read_text(encoding='utf-8')
+          sql_contract = Path('vector_snapshot_contract_v48.py').read_text(encoding='utf-8')
+
+          assert 'SNAPSHOT_DATE = dt.date(2026, 8, 4)' not in source
+          assert 'PER_UF_MAP_EQUALS_ANALYSIS_FAIL_CLOSED' in source
+          assert 'data_extracao=@snapshot' in runtime
+          assert 'MAX(data_extracao)' not in runtime
+          assert 'data_extracao=@snapshot' in sql_contract
+
+          manifest = canonical.load_manifest()
+          assert canonical.PINNED_MANIFEST_PATH
+          assert manifest['content_fingerprint_sha256'] in canonical.PINNED_MANIFEST_PATH
+          assert len(manifest['ufs']) == 27
+          assert all(item.get('status') == 'canonical' for item in manifest['ufs'].values())
+
+          print('RX_V48_CANONICAL_SCOPE=UF')
+          print('RX_V48_MAP_ANALYSIS_SAME_UF_SNAPSHOT=PASS')
+          print('RX_V48_NO_PER_CAR_LATEST_FALLBACK=PASS')
+          print('RX_V48_PINNED_MANIFEST_CONTENT_ADDRESSED=PASS')
+          print(f"RX_V48_PINNED_MANIFEST_FINGERPRINT={manifest['content_fingerprint_sha256']}")
+          print('RX_V48_SNAPSHOT_CONTRACT_STATIC_GATE=PASS')
+          PY
