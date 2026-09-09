@@ -1,13 +1,6 @@
 name: V48 Batch Storage Preflight
 
 on:
-  push:
-    branches:
-      - ops/v48-budget-gate-probe-20260908
-    paths:
-      - config/v48_vector_pilot.json
-      - scripts/v48_batch_storage_preflight.py
-      - .github/workflows/v48-batch-storage-preflight.yml
   workflow_dispatch:
 
 # Revalidation remains read-only; owner bootstrap is external to this workflow.
