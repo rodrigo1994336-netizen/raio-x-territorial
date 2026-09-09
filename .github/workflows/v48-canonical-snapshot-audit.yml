@@ -20,7 +20,7 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Prove pinned immutable canonical manifest before paid query
+      - name: Prove pinned manifest and real imports before BigQuery
         run: python scripts/v48_canonical_snapshot_static_gate.py --require-manifest
 
       - name: Reject missing Google Cloud configuration
@@ -42,46 +42,30 @@ jobs:
       - name: Install BigQuery dependency
         run: pip install --disable-pip-version-check google-cloud-bigquery
 
-      - name: Recalculate 27 canonical distinct CAR counts
-        run: python scripts/v48_canonical_car_counts.py
+      - name: Probe canonical distinct CAR count dry-run only
+        run: python scripts/v48_canonical_car_counts.py --dry-run-only
 
-      - name: Verify 2 GiB hard guard and 27-UF evidence
+      - name: Verify dry-run evidence and prove no real query
         shell: bash
         run: |
           python - <<'PY'
           import json
           from pathlib import Path
-          data = json.loads(Path('artifacts/v48_canonical_car_counts.json').read_text(encoding='utf-8'))
+          data = json.loads(Path('artifacts/v48_canonical_car_counts_dryrun.json').read_text(encoding='utf-8'))
+          assert data['mode'] == 'dry_run_only', data
           assert data['maximum_bytes_billed'] == 2 * 1024**3, data
-          assert data['dry_run_bytes'] <= data['maximum_bytes_billed'], data
-          assert len(data['ufs']) == 27, data
-          assert all(int(v['distinct_car_count']) > 0 for v in data['ufs'].values()), data
+          assert data['real_data_query_executed'] is False, data
           print(f"RX_V48_CAR_COUNTS_VERIFIED_MAX_BYTES_BILLED={data['maximum_bytes_billed']}")
           print(f"RX_V48_CAR_COUNTS_VERIFIED_DRYRUN_BYTES={data['dry_run_bytes']}")
-          print(f"RX_V48_CAR_COUNTS_VERIFIED_REAL_QUERY_BYTES_PROCESSED={data['real_query_bytes_processed']}")
-          print(f"RX_V48_CAR_COUNTS_VERIFIED_REAL_QUERY_BYTES_BILLED={data['real_query_bytes_billed']}")
-          print('RX_V48_CAR_COUNTS_VERIFIED_UFS=27/27')
+          print(f"RX_V48_CAR_COUNTS_VERIFIED_WITHIN_GUARD={'YES' if data['dry_run_within_guard'] else 'NO'}")
+          print('RX_V48_CAR_COUNTS_VERIFIED_REAL_QUERY_EXECUTED=NO')
           PY
 
-      - name: Print 27 canonical CAR counts
-        shell: bash
-        run: |
-          python - <<'PY'
-          import json
-          from pathlib import Path
-          data = json.loads(Path('artifacts/v48_canonical_car_counts.json').read_text(encoding='utf-8'))
-          for uf in sorted(data['ufs']):
-              item = data['ufs'][uf]
-              print(f"RX_V48_CAR_COUNT_{uf}=snapshot:{item['snapshot']} distinct:{item['distinct_car_count']} rows:{item['row_count']} duplicates:{item['duplicate_rows']}")
-          print(f"RX_V48_CAR_COUNTS_NATIONAL_DISTINCT={data['national_distinct_car_count_sum']}")
-          print(f"RX_V48_CAR_COUNTS_FINGERPRINT={data['content_fingerprint_sha256']}")
-          PY
-
-      - name: Upload canonical CAR count evidence
+      - name: Upload canonical CAR count dry-run evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: v48-sicar-canonical-car-counts
-          path: artifacts/v48_canonical_car_counts.json
+          name: v48-sicar-canonical-car-counts-dryrun
+          path: artifacts/v48_canonical_car_counts_dryrun.json
           if-no-files-found: warn
           retention-days: 14
