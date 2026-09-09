@@ -1,12 +1,6 @@
 name: V48 Pilot Candidate Audit
 
 on:
-  push:
-    branches:
-      - ops/v48-budget-gate-probe-20260908
-    paths:
-      - scripts/v48_pilot_candidate_audit.py
-      - .github/workflows/v48-pilot-candidate-audit.yml
   workflow_dispatch:
 
 permissions:
