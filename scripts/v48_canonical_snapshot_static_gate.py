@@ -16,6 +16,7 @@ TABLES = {
     "area_imovel", "vegetacao_nativa", "reserva_legal", "app",
     "uso_restrito", "area_consolidada", "hidrografia", "area_pousio",
 }
+SELECTION_RULE = "latest_date_all_8_tables_have_partition_and_rows_per_uf"
 MANIFEST_NAME_RE = re.compile(r"^sicar-canonical-snapshots-v1-([0-9a-f]{64})\.json$")
 
 
@@ -84,9 +85,16 @@ def static_contract() -> None:
     require("d.snapshot_label" in ui, "UI patch must render canonical UF/date label")
 
     audit = text("scripts/v48_canonical_snapshot_audit.py")
-    require("latest_date_all_8_tables_have_rows_and_usable_geometry_per_uf" in audit, "selection rule not explicit")
+    require(SELECTION_RULE in audit, "selection rule not explicit")
+    require("INFORMATION_SCHEMA.PARTITIONS" in audit, "metadata-first partition discovery missing")
+    require("meta.time_partitioning" in audit, "table partition-field metadata gate missing")
+    require("field != \"data_extracao\"" in audit, "data_extracao partition contract missing")
+    require("COUNT(*) AS row_count" in audit, "lightweight row-presence confirmation missing")
+    require("COUNTIF(geometria" not in audit, "canonical date selection must not scan geometry")
+    require("COUNT(DISTINCT id_imovel)" not in audit, "probe must not scan id_imovel")
+    require("dry_run=True" in audit, "lightweight query must be dry-run only in probe phase")
+    require('"real_data_query_executed": False' in audit, "probe must explicitly record no real data query")
     require("MAX_BYTES = 50 * 1024**3" in audit, "BigQuery cost guard missing")
-    require("geometry_count" in audit and "row_count" in audit, "partition completeness evidence incomplete")
     print("RX_V48_CANONICAL_SNAPSHOT_STATIC_GATE=PASS")
 
 
@@ -99,7 +107,7 @@ def manifest_gate() -> None:
 
     data = json.loads(manifest.read_text(encoding="utf-8"))
     require(data.get("schema_version") == "v48-sicar-canonical-snapshots-1", "manifest schema mismatch")
-    require(data.get("selection_rule") == "latest_date_all_8_tables_have_rows_and_usable_geometry_per_uf", "manifest rule mismatch")
+    require(data.get("selection_rule") == SELECTION_RULE, "manifest rule mismatch")
     ufs = data.get("ufs") or {}
     require(set(ufs) == EXPECTED_UFS, "manifest must declare all 27 UFs")
 
@@ -116,7 +124,6 @@ def manifest_gate() -> None:
         require(set(tables) == TABLES, f"{uf}: canonical snapshot must prove 8/8 tables")
         for table, evidence in tables.items():
             require(int(evidence.get("row_count") or 0) > 0, f"{uf}/{table}: empty partition")
-            require(int(evidence.get("geometry_count") or 0) > 0, f"{uf}/{table}: no usable geometry")
         require(int(item.get("area_imovel_distinct_car_count") or 0) > 0, f"{uf}: CAR count missing")
 
     declared = str(data.get("content_fingerprint_sha256") or "")
