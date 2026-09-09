@@ -18,7 +18,7 @@
   "maxRunDurationSeconds": 14400,
   "bigQuery": {
     "pageSize": 10000,
-    "maximumBytesBilledPerUf": 10737418240,
+    "maximumBytesBilledPerUf": 2147483648,
     "exactSnapshotOnly": true,
     "latestFallbackAllowed": false
   },
