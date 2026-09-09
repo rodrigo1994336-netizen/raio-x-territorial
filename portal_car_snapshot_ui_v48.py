@@ -37,7 +37,7 @@ const RX_V48_CANONICAL_DATES={dates_json};
 const RX_V48_UF_NAMES={names_json};
 function rxV48AgeDays(iso){{
   const now=new Date();
-  const todayUtc=Date.UTC(now.getFullYear(),now.getMonth(),now.getDate());
+  const todayUtc=Date.UTC(now.getUTCFullYear(),now.getUTCMonth(),now.getUTCDate());
   const base=Date.parse(iso+'T00:00:00Z');
   return Math.max(0,Math.floor((todayUtc-base)/86400000));
 }}
@@ -57,4 +57,4 @@ if html.count("</body>") != 1:
 html = html.replace("</body>", audit_ui + "</body>", 1)
 
 portal_v8.PORTAL_HTML = html
-print("RX_PORTAL_CAR_CANONICAL_UI_V48=exact_date_dynamic_age_27uf_audit", flush=True)
+print("RX_PORTAL_CAR_CANONICAL_UI_V48=exact_date_dynamic_utc_age_27uf_audit", flush=True)
