@@ -20,7 +20,7 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Static contract gate before any paid query
+      - name: Static contract gate before metadata or dry-run
         run: python scripts/v48_canonical_snapshot_static_gate.py
 
       - name: Reject missing Google Cloud configuration
@@ -42,48 +42,29 @@ jobs:
       - name: Install BigQuery dependency
         run: pip install --disable-pip-version-check google-cloud-bigquery
 
-      - name: Discover latest complete eight-table snapshot for each UF
+      - name: Probe partition metadata and dry-run lightweight canonical audit
         run: python scripts/v48_canonical_snapshot_audit.py
 
-      - name: Record Curvelo historical benchmark versus canonical MG date
+      - name: Prove no real data query was executed
         shell: bash
         run: |
           python - <<'PY'
           import json
           from pathlib import Path
-          data = json.loads(Path('artifacts/v48_sicar_canonical_snapshot_manifest_candidate.json').read_text(encoding='utf-8'))
-          mg = data['ufs']['MG']
-          assert mg['status'] == 'canonical', mg
-          assert int(mg['area_imovel_distinct_car_count']) > 0, mg
-          canonical = mg['snapshot']
-          print('RX_V47_CURVELO_REFERENCE_HISTORICAL=PASS snapshot=2026-08-04 area=14.804116 residual=1.815498')
-          print(f'RX_V48_MG_CANONICAL_SNAPSHOT={canonical}')
-          if canonical == '2026-08-04':
-              print('RX_V48_CURVELO_CANONICAL_DATE_UNCHANGED=PASS snapshot=2026-08-04')
-          else:
-              print(f'RX_V48_CURVELO_CANONICAL_REVALIDATION_REQUIRED=YES old=2026-08-04 new={canonical}')
+          p = Path('artifacts/v48_canonical_snapshot_probe.json')
+          data = json.loads(p.read_text(encoding='utf-8'))
+          assert data['mode'] == 'probe_only_no_real_data_query', data
+          assert data['real_data_query_executed'] is False, data
+          print(f"RX_V48_PROBE_COMMON_PARTITION_DATES={data['common_partition_dates_count']}")
+          print(f"RX_V48_PROBE_LIGHTWEIGHT_DRYRUN_BYTES={data['lightweight_dryrun_bytes']}")
+          print('RX_V48_PROBE_REAL_QUERY_EXECUTED=NO')
           PY
 
-      - name: Print 27 canonical dates and CAR counts
-        shell: bash
-        run: |
-          python - <<'PY'
-          import json
-          from pathlib import Path
-          data = json.loads(Path('artifacts/v48_sicar_canonical_snapshot_manifest_candidate.json').read_text(encoding='utf-8'))
-          for uf in sorted(data['ufs']):
-              item = data['ufs'][uf]
-              if item['status'] == 'canonical':
-                  print(f"RX_V48_CANONICAL_{uf}=snapshot:{item['snapshot']} cars:{item['area_imovel_distinct_car_count']}")
-              else:
-                  print(f"RX_V48_CANONICAL_{uf}=UNAVAILABLE")
-          PY
-
-      - name: Upload immutable-manifest candidate evidence
+      - name: Upload probe evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: v48-sicar-canonical-snapshot-manifest-candidate
-          path: artifacts/v48_sicar_canonical_snapshot_manifest_candidate.json
+          name: v48-sicar-canonical-snapshot-probe
+          path: artifacts/v48_canonical_snapshot_probe.json
           if-no-files-found: warn
           retention-days: 14
