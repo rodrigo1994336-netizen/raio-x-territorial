@@ -62,13 +62,16 @@ def static_contract() -> None:
     manifest_runtime = text("sicar_canonical_manifest_v48.py")
     require("sicar-canonical-snapshots-v1-([0-9a-f]{64})" in manifest_runtime, "content-addressed manifest filename contract missing")
     require("canonical_snapshot_manifest_fingerprint_mismatch" in manifest_runtime, "runtime manifest fingerprint gate missing")
+    require("STALE_DAYS_THRESHOLD = 60" in manifest_runtime, "60-day transparency threshold missing")
+    require("Esta base está mais antiga que a das demais unidades da federação." in manifest_runtime, "neutral stale-data message missing")
+    require("atualizada há" in manifest_runtime, "dynamic snapshot age label missing")
 
     runtime = text("sicar_canonical_snapshot_v48.py")
     require("MAX(data_extracao)" not in runtime, "canonical runtime must never choose latest date per CAR")
     require("data_extracao=@snapshot" in runtime, "canonical runtime must pin exact manifest snapshot")
     require("car_not_present_in_canonical_snapshot" in runtime, "missing CAR must have explicit canonical absence state")
     require("Este imóvel não consta na base de" in runtime, "client absence language missing")
-    require("Base do CAR de" in runtime, "client snapshot language missing")
+    require("snapshot_staleness_note" in runtime and "snapshot_age_days" in runtime, "freshness fields missing")
 
     vector = text("vector_snapshot_contract_v48.py")
     require("SNAPSHOT_SCOPE = \"uf_canonical\"" in vector, "vector contract must be scoped per UF")
@@ -83,6 +86,12 @@ def static_contract() -> None:
     require("Snapshot SICAR:" in ui, "UI patch must target the legacy wording explicitly")
     require("d?.user_message" in ui, "UI patch must render explicit canonical absence message")
     require("d.snapshot_label" in ui, "UI patch must render canonical UF/date label")
+    require("Ver auditoria · datas das bases por estado" in ui, "27-UF provenance panel missing")
+    require("rxV48AgeDays" in ui, "27-UF panel must calculate age dynamically")
+
+    policy = text("docs/v48_sicar_freshness_policy.md")
+    require("120 dias" in policy and "SICAR oficial" in policy, "São Paulo 120-day source-review trigger not recorded")
+    require("0/8 em 01/08/2026" in policy and "04/08/2026" in policy, "São Paulo August absence evidence not recorded")
 
     audit = text("scripts/v48_canonical_snapshot_audit.py")
     require(SELECTION_RULE in audit, "selection rule not explicit")
@@ -111,6 +120,7 @@ def manifest_gate() -> None:
     data = json.loads(manifest.read_text(encoding="utf-8"))
     require(data.get("schema_version") == "v48-sicar-canonical-snapshots-1", "manifest schema mismatch")
     require(data.get("selection_rule") == SELECTION_RULE, "manifest rule mismatch")
+    require(set(data.get("required_tables") or []) == TABLES, "manifest required-table set mismatch")
     ufs = data.get("ufs") or {}
     require(set(ufs) == EXPECTED_UFS, "manifest must declare all 27 UFs")
 
