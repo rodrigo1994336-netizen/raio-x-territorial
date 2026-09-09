@@ -1,30 +1,43 @@
 {
-  "schemaVersion": "v48-uf-orchestration-contract-1",
-  "nationalEnabled": false,
-  "snapshotId": "sicar-2026-08-04",
-  "snapshotDate": "2026-08-04",
-  "analysisSnapshot": "2026-08-04",
-  "mapSnapshot": "2026-08-04",
+  "schemaVersion": "v48-uf-orchestration-contract-2",
+  "nationalEnabled": true,
+  "authorization": {
+    "status": "APPROVED",
+    "date": "2026-09-09",
+    "scope": "generate_and_measure_real_27_uf_car_pmtiles"
+  },
+  "canonicalManifestPath": "car/manifests/sicar-canonical-snapshots-v1-25e14900fd0ea92d3ff82cb6f46da24449fb2b3bd233aff215ec8a2b645b64a4.json",
+  "canonicalManifestFingerprint": "25e14900fd0ea92d3ff82cb6f46da24449fb2b3bd233aff215ec8a2b645b64a4",
+  "snapshotScope": "uf_canonical",
+  "analysisMapRule": "analysis_snapshot == map_snapshot == canonical_snapshot_for_uf",
   "batchRegion": "us-central1",
   "machineType": "e2-standard-8",
   "provisioningModel": "SPOT",
   "maxRetryCount": 0,
   "oneBatchJobPerUf": true,
+  "maxRunDurationSeconds": 14400,
+  "bigQuery": {
+    "pageSize": 10000,
+    "maximumBytesBilledPerUf": 10737418240,
+    "exactSnapshotOnly": true,
+    "latestFallbackAllowed": false
+  },
   "githubMatrix": {
     "failFast": false,
     "maxParallel": 3,
-    "reason": "Observed project quota has 32 global CPU vCPUs; three e2-standard-8 jobs consume 24 vCPUs and leave one 8-vCPU job of static headroom. Current CPU usage was not measured, so concurrency 4 is not assumed safe.",
+    "reason": "Observed project quota has 32 global CPU vCPUs; three e2-standard-8 jobs consume 24 vCPUs and leave 8 vCPUs of static headroom. Current CPU usage was not measured.",
     "rerunMode": "failed_jobs_only"
   },
-  "batchJobIdTemplate": "rx-v48-{uf}-sicar-20260804-r{github_run_id}-a{github_run_attempt}",
+  "publicationRoot": "car/national/25e14900fd0ea92d3ff82cb6f46da24449fb2b3bd233aff215ec8a2b645b64a4",
   "publicationProtocol": [
     "immutable_prepared_receipt",
     "immutable_pmtiles",
     "immutable_commit_manifest"
   ],
-  "publicationRule": "A UF is complete only when its immutable commit manifest exists and receipt/PMTiles identity checks pass.",
+  "publicationRule": "A UF is published only when its immutable commit manifest exists and receipt/PMTiles identity checks pass.",
   "pmtilesWithoutManifest": "RECONCILE_MANIFEST_ONLY when the prepared receipt exists and all identity fields match; otherwise FAIL_CLOSED.",
   "activeJsonMutationAllowed": false,
-  "nationalSnapshotGate": "BLOCKED_UNTIL_27_UFS_SHARE_THE_APPROVED_EXACT_SNAPSHOT_CONTRACT",
-  "paidComputeWorkflowTrigger": "workflow_dispatch_only"
+  "nationalSnapshotGate": "APPROVED_PER_UF_CANONICAL_MANIFEST_2026_09_09",
+  "paidComputeWorkflowTrigger": "workflow_dispatch_only",
+  "historicalEsPilotMustRemainUntouched": true
 }
