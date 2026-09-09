@@ -20,7 +20,7 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Static contract gate before metadata or dry-run
+      - name: Static contract gate before metadata or paid query
         run: python scripts/v48_canonical_snapshot_static_gate.py
 
       - name: Reject missing Google Cloud configuration
@@ -42,29 +42,71 @@ jobs:
       - name: Install BigQuery dependency
         run: pip install --disable-pip-version-check google-cloud-bigquery
 
-      - name: Probe partition metadata and dry-run lightweight canonical audit
+      - name: Run authorized lightweight canonical UF matrix
         run: python scripts/v48_canonical_snapshot_audit.py
 
-      - name: Prove no real data query was executed
+      - name: Verify 2 GiB hard guard and real-query evidence
         shell: bash
         run: |
           python - <<'PY'
           import json
           from pathlib import Path
-          p = Path('artifacts/v48_canonical_snapshot_probe.json')
-          data = json.loads(p.read_text(encoding='utf-8'))
-          assert data['mode'] == 'probe_only_no_real_data_query', data
-          assert data['real_data_query_executed'] is False, data
-          print(f"RX_V48_PROBE_COMMON_PARTITION_DATES={data['common_partition_dates_count']}")
-          print(f"RX_V48_PROBE_LIGHTWEIGHT_DRYRUN_BYTES={data['lightweight_dryrun_bytes']}")
-          print('RX_V48_PROBE_REAL_QUERY_EXECUTED=NO')
+          data = json.loads(Path('artifacts/v48_canonical_snapshot_matrix.json').read_text(encoding='utf-8'))
+          assert data['mode'] == 'real_lightweight_canonical_matrix', data
+          assert data['real_data_query_executed'] is True, data
+          assert data['maximum_bytes_billed'] == 2 * 1024**3, data
+          assert data['lightweight_dryrun_bytes'] <= data['maximum_bytes_billed'], data
+          print(f"RX_V48_VERIFIED_MAX_BYTES_BILLED={data['maximum_bytes_billed']}")
+          print(f"RX_V48_VERIFIED_REAL_QUERY_BYTES_PROCESSED={data['real_query_bytes_processed']}")
+          print(f"RX_V48_VERIFIED_REAL_QUERY_BYTES_BILLED={data['real_query_bytes_billed']}")
+          print('RX_V48_VERIFIED_REAL_QUERY_EXECUTED=YES')
           PY
 
-      - name: Upload probe evidence
+      - name: Record Curvelo historical benchmark versus canonical MG date
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          data = json.loads(Path('artifacts/v48_canonical_snapshot_matrix.json').read_text(encoding='utf-8'))
+          mg = data['ufs']['MG']
+          assert mg['status'] == 'canonical', mg
+          canonical = mg['snapshot']
+          print('RX_V47_CURVELO_REFERENCE_HISTORICAL=PASS snapshot=2026-08-04 area=14.804116 residual=1.815498')
+          print(f'RX_V48_MG_CANONICAL_SNAPSHOT={canonical}')
+          if canonical == '2026-08-04':
+              print('RX_V48_CURVELO_CANONICAL_DATE_UNCHANGED=PASS snapshot=2026-08-04')
+          else:
+              print(f'RX_V48_CURVELO_CANONICAL_REVALIDATION_REQUIRED=YES old=2026-08-04 new={canonical}')
+          PY
+
+      - name: Print 27 canonical dates
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          data = json.loads(Path('artifacts/v48_canonical_snapshot_matrix.json').read_text(encoding='utf-8'))
+          for uf in sorted(data['ufs']):
+              item = data['ufs'][uf]
+              if item['status'] == 'canonical':
+                  print(f"RX_V48_CANONICAL_{uf}=snapshot:{item['snapshot']} age_days:{item['age_days_at_audit']}")
+              else:
+                  print(f"RX_V48_CANONICAL_{uf}=UNAVAILABLE")
+          print('RX_V48_COVERAGE_COUNTS=' + json.dumps(data['coverage_count_by_date'], sort_keys=True))
+          print('RX_V48_ALL_27_DATES=' + (','.join(data['all_27_dates']) if data['all_27_dates'] else 'NONE'))
+          print('RX_V48_CANONICAL_DATES_USED=' + (','.join(data['canonical_dates_used']) if data['canonical_dates_used'] else 'NONE'))
+          minimum = data.get('minimum_date_cover')
+          print('RX_V48_MINIMUM_DATE_COVER=' + (','.join(minimum) if minimum else 'UNAVAILABLE'))
+          PY
+
+      - name: Upload canonical matrix evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: v48-sicar-canonical-snapshot-probe
-          path: artifacts/v48_canonical_snapshot_probe.json
+          name: v48-sicar-canonical-snapshot-matrix
+          path: |
+            artifacts/v48_canonical_snapshot_matrix.json
+            artifacts/v48_sicar_canonical_snapshot_manifest_candidate.json
           if-no-files-found: warn
           retention-days: 14
