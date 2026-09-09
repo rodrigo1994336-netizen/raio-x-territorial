@@ -43,6 +43,18 @@ def compile_gate(path: str) -> None:
     ast.parse(text(path), filename=path)
 
 
+def v48_no_push_trigger_gate() -> None:
+    workflows = sorted((REPO_ROOT / ".github" / "workflows").glob("v48-*.yml"))
+    require(bool(workflows), "no V48 workflow files found")
+    offenders: list[str] = []
+    for path in workflows:
+        source = path.read_text(encoding="utf-8")
+        if re.search(r"(?m)^\s{2}push:\s*$", source):
+            offenders.append(path.name)
+    require(not offenders, "V48 push trigger forbidden on work branch:" + ",".join(offenders))
+    print(f"RX_V48_NO_PUSH_TRIGGER_GATE=PASS workflows={len(workflows)}")
+
+
 def paid_script_import_gate() -> None:
     for path in PAID_WORKFLOW_SCRIPTS:
         proc = subprocess.run(
@@ -90,6 +102,7 @@ def static_contract() -> None:
     ):
         compile_gate(path)
 
+    v48_no_push_trigger_gate()
     paid_script_import_gate()
 
     manifest_runtime = text("sicar_canonical_manifest_v48.py")
@@ -129,6 +142,14 @@ def static_contract() -> None:
     permanent = text("REGRA_PERMANENTE_WORKFLOW_DISPATCH.md")
     require("não pode depender do diretório corrente" in permanent, "workflow script path-independence rule missing")
     require("--import-check" in permanent, "real import gate permanent rule missing")
+    require("nenhum workflow cujo arquivo comece por `v48-` pode usar gatilho `push`" in permanent, "V48 no-push permanent rule missing")
+    require("gate afirma invariante, nunca estágio" in permanent, "invariant-not-stage permanent rule missing")
+
+    budget_admin = text("docs/v48_budget_administrative_record.md")
+    require("Raio-X Territorial" in budget_admin and "US$ 20" in budget_admin, "budget administrative record missing identity/value")
+    require("50%, 90% e 100%" in budget_admin, "budget administrative alert thresholds missing")
+    require("somente alertas" in budget_admin, "budget administrative alert-only behavior missing")
+    require("metodo-afp-plataforma" in budget_admin, "budget administrative project scope missing")
 
     audit = text("scripts/v48_canonical_snapshot_audit.py")
     require(SELECTION_RULE in audit, "selection rule not explicit")
