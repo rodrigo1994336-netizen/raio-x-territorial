@@ -7,7 +7,7 @@ permissions:
   contents: read
 
 jobs:
-  audit-canonical-snapshots:
+  count-canonical-cars:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
@@ -20,8 +20,8 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Static contract gate before metadata or paid query
-        run: python scripts/v48_canonical_snapshot_static_gate.py
+      - name: Prove pinned immutable canonical manifest before paid query
+        run: python scripts/v48_canonical_snapshot_static_gate.py --require-manifest
 
       - name: Reject missing Google Cloud configuration
         shell: bash
@@ -42,71 +42,46 @@ jobs:
       - name: Install BigQuery dependency
         run: pip install --disable-pip-version-check google-cloud-bigquery
 
-      - name: Run authorized lightweight canonical UF matrix
-        run: python scripts/v48_canonical_snapshot_audit.py
+      - name: Recalculate 27 canonical distinct CAR counts
+        run: python scripts/v48_canonical_car_counts.py
 
-      - name: Verify 2 GiB hard guard and real-query evidence
+      - name: Verify 2 GiB hard guard and 27-UF evidence
         shell: bash
         run: |
           python - <<'PY'
           import json
           from pathlib import Path
-          data = json.loads(Path('artifacts/v48_canonical_snapshot_matrix.json').read_text(encoding='utf-8'))
-          assert data['mode'] == 'real_lightweight_canonical_matrix', data
-          assert data['real_data_query_executed'] is True, data
+          data = json.loads(Path('artifacts/v48_canonical_car_counts.json').read_text(encoding='utf-8'))
           assert data['maximum_bytes_billed'] == 2 * 1024**3, data
-          assert data['lightweight_dryrun_bytes'] <= data['maximum_bytes_billed'], data
-          print(f"RX_V48_VERIFIED_MAX_BYTES_BILLED={data['maximum_bytes_billed']}")
-          print(f"RX_V48_VERIFIED_REAL_QUERY_BYTES_PROCESSED={data['real_query_bytes_processed']}")
-          print(f"RX_V48_VERIFIED_REAL_QUERY_BYTES_BILLED={data['real_query_bytes_billed']}")
-          print('RX_V48_VERIFIED_REAL_QUERY_EXECUTED=YES')
+          assert data['dry_run_bytes'] <= data['maximum_bytes_billed'], data
+          assert len(data['ufs']) == 27, data
+          assert all(int(v['distinct_car_count']) > 0 for v in data['ufs'].values()), data
+          print(f"RX_V48_CAR_COUNTS_VERIFIED_MAX_BYTES_BILLED={data['maximum_bytes_billed']}")
+          print(f"RX_V48_CAR_COUNTS_VERIFIED_DRYRUN_BYTES={data['dry_run_bytes']}")
+          print(f"RX_V48_CAR_COUNTS_VERIFIED_REAL_QUERY_BYTES_PROCESSED={data['real_query_bytes_processed']}")
+          print(f"RX_V48_CAR_COUNTS_VERIFIED_REAL_QUERY_BYTES_BILLED={data['real_query_bytes_billed']}")
+          print('RX_V48_CAR_COUNTS_VERIFIED_UFS=27/27')
           PY
 
-      - name: Record Curvelo historical benchmark versus canonical MG date
+      - name: Print 27 canonical CAR counts
         shell: bash
         run: |
           python - <<'PY'
           import json
           from pathlib import Path
-          data = json.loads(Path('artifacts/v48_canonical_snapshot_matrix.json').read_text(encoding='utf-8'))
-          mg = data['ufs']['MG']
-          assert mg['status'] == 'canonical', mg
-          canonical = mg['snapshot']
-          print('RX_V47_CURVELO_REFERENCE_HISTORICAL=PASS snapshot=2026-08-04 area=14.804116 residual=1.815498')
-          print(f'RX_V48_MG_CANONICAL_SNAPSHOT={canonical}')
-          if canonical == '2026-08-04':
-              print('RX_V48_CURVELO_CANONICAL_DATE_UNCHANGED=PASS snapshot=2026-08-04')
-          else:
-              print(f'RX_V48_CURVELO_CANONICAL_REVALIDATION_REQUIRED=YES old=2026-08-04 new={canonical}')
-          PY
-
-      - name: Print 27 canonical dates
-        shell: bash
-        run: |
-          python - <<'PY'
-          import json
-          from pathlib import Path
-          data = json.loads(Path('artifacts/v48_canonical_snapshot_matrix.json').read_text(encoding='utf-8'))
+          data = json.loads(Path('artifacts/v48_canonical_car_counts.json').read_text(encoding='utf-8'))
           for uf in sorted(data['ufs']):
               item = data['ufs'][uf]
-              if item['status'] == 'canonical':
-                  print(f"RX_V48_CANONICAL_{uf}=snapshot:{item['snapshot']} age_days:{item['age_days_at_audit']}")
-              else:
-                  print(f"RX_V48_CANONICAL_{uf}=UNAVAILABLE")
-          print('RX_V48_COVERAGE_COUNTS=' + json.dumps(data['coverage_count_by_date'], sort_keys=True))
-          print('RX_V48_ALL_27_DATES=' + (','.join(data['all_27_dates']) if data['all_27_dates'] else 'NONE'))
-          print('RX_V48_CANONICAL_DATES_USED=' + (','.join(data['canonical_dates_used']) if data['canonical_dates_used'] else 'NONE'))
-          minimum = data.get('minimum_date_cover')
-          print('RX_V48_MINIMUM_DATE_COVER=' + (','.join(minimum) if minimum else 'UNAVAILABLE'))
+              print(f"RX_V48_CAR_COUNT_{uf}=snapshot:{item['snapshot']} distinct:{item['distinct_car_count']} rows:{item['row_count']} duplicates:{item['duplicate_rows']}")
+          print(f"RX_V48_CAR_COUNTS_NATIONAL_DISTINCT={data['national_distinct_car_count_sum']}")
+          print(f"RX_V48_CAR_COUNTS_FINGERPRINT={data['content_fingerprint_sha256']}")
           PY
 
-      - name: Upload canonical matrix evidence
+      - name: Upload canonical CAR count evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: v48-sicar-canonical-snapshot-matrix
-          path: |
-            artifacts/v48_canonical_snapshot_matrix.json
-            artifacts/v48_sicar_canonical_snapshot_manifest_candidate.json
+          name: v48-sicar-canonical-car-counts
+          path: artifacts/v48_canonical_car_counts.json
           if-no-files-found: warn
           retention-days: 14
