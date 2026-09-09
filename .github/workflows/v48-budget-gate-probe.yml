@@ -1,0 +1,99 @@
+name: V48 Budget Gate Probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  billing-budget-probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      EXPECTED_PROJECT_ID: metodo-afp-plataforma
+      GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reject wrong or missing Google Cloud project
+        shell: bash
+        run: |
+          test -n "$GCP_PROJECT_ID" || { echo 'GCP_PROJECT_ID ausente'; exit 2; }
+          test "$GCP_PROJECT_ID" = "$EXPECTED_PROJECT_ID" || { echo 'Projeto GCP inesperado'; exit 2; }
+          echo 'RX_V48_GCP_PROJECT_ID=EXPECTED_MATCH'
+
+      - name: Reject missing Google Cloud credential
+        shell: bash
+        env:
+          GCP_SA_KEY_PRESENT: ${{ secrets.GCP_SA_KEY }}
+        run: |
+          test -n "$GCP_SA_KEY_PRESENT" || { echo 'GCP_SA_KEY ausente'; exit 2; }
+          echo 'RX_V48_GCP_SA_KEY=PRESENT'
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install probe dependencies
+        run: pip install --disable-pip-version-check google-auth requests
+
+      - name: Verify billing invariants without Budget API permissions
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os
+          import sys
+          from urllib.parse import quote
+
+          import google.auth
+          from google.auth.transport.requests import AuthorizedSession
+
+          project = os.environ['GCP_PROJECT_ID']
+          credentials, _ = google.auth.default(
+              scopes=['https://www.googleapis.com/auth/cloud-platform']
+          )
+          session = AuthorizedSession(credentials)
+
+          def get_json(label, url):
+              response = session.get(url, timeout=30)
+              print(f'RX_V48_{label}_HTTP={response.status_code}')
+              if response.status_code >= 400:
+                  text = (response.text or '').replace('\n', ' ')[:800]
+                  print(f'RX_V48_{label}_ERROR={text}')
+                  sys.exit(2)
+              return response.json() if response.text else {}
+
+          billing = get_json(
+              'BILLING_INFO',
+              f'https://cloudbilling.googleapis.com/v1/projects/{quote(project, safe="")}/billingInfo',
+          )
+          enabled = bool(billing.get('billingEnabled'))
+          account = str(billing.get('billingAccountName') or '')
+          print(f'RX_V48_BILLING_ENABLED={str(enabled).upper()}')
+          print(f'RX_V48_BILLING_ACCOUNT_BOUND={str(account.startswith("billingAccounts/")).upper()}')
+          if not enabled or not account.startswith('billingAccounts/'):
+              print('RX_V48_BUDGET_GATE_PROBE=FAIL_BILLING_INVARIANT')
+              sys.exit(2)
+
+          project_meta = get_json(
+              'PROJECT_META',
+              f'https://cloudresourcemanager.googleapis.com/v1/projects/{quote(project, safe="")}',
+          )
+          project_number = str(project_meta.get('projectNumber') or '')
+          print(f'RX_V48_PROJECT_NUMBER_RESOLVED={str(bool(project_number)).upper()}')
+          if not project_number:
+              print('RX_V48_BUDGET_GATE_PROBE=FAIL_PROJECT_NOT_RESOLVED')
+              sys.exit(2)
+
+          print('RX_V48_BUDGET_ADMIN_RECORD=docs/v48_budget_administrative_record.md')
+          print('RX_V48_BUDGET_GATE_PROBE=PASS_BILLING_INVARIANTS')
+          PY
