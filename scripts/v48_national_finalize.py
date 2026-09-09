@@ -5,7 +5,6 @@ import datetime as dt
 import json
 import os
 import re
-import sys
 from pathlib import Path
 from typing import Any
 
@@ -35,10 +34,18 @@ def duration_seconds(value: Any) -> float | None:
     return float(match.group(1)) if match else None
 
 
+def artifact_attempt(path: Path) -> int:
+    for part in reversed(path.parts):
+        match = re.search(r"-a(\d+)$", part)
+        if match:
+            return int(match.group(1))
+    return 0
+
+
 def load_results(input_dir: Path) -> dict[str, dict[str, Any]]:
-    found: dict[str, dict[str, Any]] = {}
+    selected: dict[str, tuple[int, dict[str, Any]]] = {}
     if not input_dir.exists():
-        return found
+        return {}
     for path in sorted(input_dir.rglob("*.json")):
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
@@ -49,10 +56,13 @@ def load_results(input_dir: Path) -> dict[str, dict[str, Any]]:
         uf = str(data.get("uf") or "").upper()
         if uf not in EXPECTED_UFS:
             continue
-        if uf in found:
-            raise RuntimeError(f"duplicate_uf_result:{uf}")
-        found[uf] = data
-    return found
+        attempt = artifact_attempt(path)
+        current = selected.get(uf)
+        if current is None or attempt > current[0]:
+            selected[uf] = (attempt, data)
+        elif attempt == current[0]:
+            raise RuntimeError(f"duplicate_uf_result_same_attempt:{uf}:a{attempt}")
+    return {uf: data for uf, (_, data) in selected.items()}
 
 
 def uf_summary(uf: str, result: dict[str, Any] | None) -> dict[str, Any]:
@@ -118,7 +128,7 @@ def main(input_dir: Path, output: Path) -> dict[str, Any]:
         "github_run_id": os.getenv("GITHUB_RUN_ID"),
         "github_run_attempt": os.getenv("GITHUB_RUN_ATTEMPT"),
         "expected_ufs": 27,
-        "result_files_found": len(results),
+        "result_files_selected": len(results),
         "published_ufs": len(published),
         "failed_ufs": failed,
         "all_27_published": len(published) == 27,
@@ -135,7 +145,7 @@ def main(input_dir: Path, output: Path) -> dict[str, Any]:
     }
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
-    print(f"RX_V48_NATIONAL_RESULT_FILES={len(results)}/27")
+    print(f"RX_V48_NATIONAL_RESULT_UFS={len(results)}/27")
     print(f"RX_V48_NATIONAL_PUBLISHED_UFS={len(published)}/27")
     print(f"RX_V48_NATIONAL_FAILED_UFS={','.join(failed) if failed else 'NONE'}")
     print(f"RX_V48_NATIONAL_PMTILES_TOTAL_BYTES={pmtiles_total}")
