@@ -1,0 +1,44 @@
+{
+  "schema_version": "v48-national-generation-authorization-1",
+  "recorded_date": "2026-09-09",
+  "decision": "AUTHORIZED",
+  "scope": "generate_and_measure_real_national_car_quadrica",
+  "supersedes_planning_block": "evidence/v48/pre_national_gate_2026-09-08.json",
+  "forecast_stage": {
+    "canonical_27_distinct_car_count_search": "CANCELED",
+    "reason": "Owner decided that exact pre-generation cost projection no longer justifies delay; generation will measure real size, time and usage instead."
+  },
+  "data_invariants_unchanged": {
+    "canonical_manifest_fingerprint": "25e14900fd0ea92d3ff82cb6f46da24449fb2b3bd233aff215ec8a2b645b64a4",
+    "snapshot_scope": "uf_canonical",
+    "analysis_snapshot_equals_map_snapshot": true,
+    "sp_snapshot": "2026-06-02",
+    "immutable_publication": true,
+    "fail_closed_per_uf": true,
+    "active_json_mutation_allowed": false
+  },
+  "execution_invariants": {
+    "batch_region": "us-central1",
+    "machine_type": "e2-standard-8",
+    "provisioning_model": "SPOT",
+    "max_retry_count": 0,
+    "one_batch_job_per_uf": true,
+    "github_fail_fast": false,
+    "github_max_parallel": 3,
+    "rerun_failed_uf_only": true,
+    "paid_compute_trigger": "workflow_dispatch_only",
+    "bigquery_maximum_bytes_billed_per_uf": 10737418240
+  },
+  "measurement_outputs_required": [
+    "pmtiles_size_per_uf_and_total",
+    "time_per_uf_and_total",
+    "bigquery_processed_and_billed_bytes",
+    "effective_cost_after_run",
+    "failed_ufs"
+  ],
+  "post_quadrica_queue": [
+    "confiabilidade_do_servico",
+    "mineracao_ANM",
+    "Raio-X_do_Poco"
+  ]
+}
