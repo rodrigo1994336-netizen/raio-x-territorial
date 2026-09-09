@@ -56,6 +56,7 @@ def static_contract() -> None:
         "portal_car_integrity_v47.py",
         "vector_snapshot_contract_v48.py",
         "scripts/v48_canonical_snapshot_audit.py",
+        "scripts/v48_canonical_car_counts.py",
     ):
         compile_gate(path)
 
@@ -104,9 +105,17 @@ def static_contract() -> None:
     require("dry_run=True" in audit, "real query must be preceded by dry-run")
     require("maximum_bytes_billed=MAX_BYTES" in audit, "real query must enforce maximum bytes billed")
     require("MAX_BYTES = 2 * 1024**3" in audit, "BigQuery hard guard must be exactly 2 GiB")
-    require('"real_data_query_executed": True' in audit, "audit must record authorized real data query")
-    require("RX_V48_DATE_COVERAGE" in audit, "per-date UF coverage evidence missing")
-    require("RX_V48_CANONICAL_UF" in audit, "per-UF canonical snapshot evidence missing")
+
+    counts = text("scripts/v48_canonical_car_counts.py")
+    require("COUNT(DISTINCT id_imovel) AS distinct_car_count" in counts, "canonical CAR counts must deduplicate id_imovel")
+    require("MAX_BYTES = 2 * 1024**3" in counts, "CAR count hard guard must be exactly 2 GiB")
+    require("dry_run=True" in counts and "maximum_bytes_billed=MAX_BYTES" in counts, "CAR count query must dry-run then enforce hard guard")
+    require("canonical area_imovel row-count drift" in counts, "CAR count must fail closed on manifest/source drift")
+
+    workflow = text(".github/workflows/v48-canonical-snapshot-audit.yml")
+    require("workflow_dispatch:" in workflow, "manual canonical workflow must use workflow_dispatch")
+    require("\n  push:" not in workflow and "\n  pull_request:" not in workflow and "\n  schedule:" not in workflow, "manual canonical workflow gained an unauthorized trigger")
+    require("--require-manifest" in workflow, "count workflow must prove pinned manifest before query")
     print("RX_V48_CANONICAL_SNAPSHOT_STATIC_GATE=PASS")
 
 
