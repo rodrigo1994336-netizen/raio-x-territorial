@@ -6,8 +6,11 @@ import datetime as dt
 import hashlib
 import json
 import re
+import subprocess
+import sys
 from pathlib import Path
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
 EXPECTED_UFS = {
     "AC", "AL", "AP", "AM", "BA", "CE", "DF", "ES", "GO", "MA", "MT", "MS", "MG",
     "PA", "PB", "PR", "PE", "PI", "RJ", "RN", "RS", "RO", "RR", "SC", "SP", "SE", "TO",
@@ -18,6 +21,9 @@ TABLES = {
 }
 SELECTION_RULE = "latest_date_all_8_tables_have_partition_and_rows_per_uf"
 MANIFEST_NAME_RE = re.compile(r"^sicar-canonical-snapshots-v1-([0-9a-f]{64})\.json$")
+PAID_WORKFLOW_SCRIPTS = (
+    "scripts/v48_canonical_car_counts.py",
+)
 
 
 def require(condition: bool, message: str) -> None:
@@ -25,12 +31,36 @@ def require(condition: bool, message: str) -> None:
         raise AssertionError(message)
 
 
+def file_path(path: str) -> Path:
+    return REPO_ROOT / path
+
+
 def text(path: str) -> str:
-    return Path(path).read_text(encoding="utf-8")
+    return file_path(path).read_text(encoding="utf-8")
 
 
 def compile_gate(path: str) -> None:
     ast.parse(text(path), filename=path)
+
+
+def paid_script_import_gate() -> None:
+    for path in PAID_WORKFLOW_SCRIPTS:
+        proc = subprocess.run(
+            [sys.executable, str(file_path(path)), "--import-check"],
+            cwd=str(REPO_ROOT),
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        output = (proc.stdout or "").strip()
+        error = (proc.stderr or "").strip()
+        require(
+            proc.returncode == 0,
+            f"paid workflow script import failed:{path}:exit={proc.returncode}:stderr={error}",
+        )
+        require("IMPORT_CHECK=PASS" in output, f"paid workflow script import marker missing:{path}")
+        print(f"RX_V48_PAID_SCRIPT_IMPORT_GATE=PASS script={path}")
 
 
 def pinned_manifest_path() -> Path:
@@ -43,9 +73,9 @@ def pinned_manifest_path() -> Path:
                     value = ast.literal_eval(node.value)
     require(isinstance(value, str), "PINNED_MANIFEST_PATH must be a literal string")
     require(bool(value.strip()), "canonical snapshot manifest is not pinned yet")
-    path = Path(value.strip())
-    require(MANIFEST_NAME_RE.match(path.name) is not None, "pinned manifest must be content-addressed")
-    return path
+    relative = Path(value.strip())
+    require(MANIFEST_NAME_RE.match(relative.name) is not None, "pinned manifest must be content-addressed")
+    return REPO_ROOT / relative
 
 
 def static_contract() -> None:
@@ -59,6 +89,8 @@ def static_contract() -> None:
         "scripts/v48_canonical_car_counts.py",
     ):
         compile_gate(path)
+
+    paid_script_import_gate()
 
     manifest_runtime = text("sicar_canonical_manifest_v48.py")
     require("sicar-canonical-snapshots-v1-([0-9a-f]{64})" in manifest_runtime, "content-addressed manifest filename contract missing")
@@ -94,6 +126,10 @@ def static_contract() -> None:
     require("120 dias" in policy and "SICAR oficial" in policy, "São Paulo 120-day source-review trigger not recorded")
     require("0/8 em 01/08/2026" in policy and "04/08/2026" in policy, "São Paulo August absence evidence not recorded")
 
+    permanent = text("REGRA_PERMANENTE_WORKFLOW_DISPATCH.md")
+    require("não pode depender do diretório corrente" in permanent, "workflow script path-independence rule missing")
+    require("--import-check" in permanent, "real import gate permanent rule missing")
+
     audit = text("scripts/v48_canonical_snapshot_audit.py")
     require(SELECTION_RULE in audit, "selection rule not explicit")
     require("INFORMATION_SCHEMA.PARTITIONS" in audit, "metadata-first partition discovery missing")
@@ -107,15 +143,21 @@ def static_contract() -> None:
     require("MAX_BYTES = 2 * 1024**3" in audit, "BigQuery hard guard must be exactly 2 GiB")
 
     counts = text("scripts/v48_canonical_car_counts.py")
+    require("Path(__file__).resolve().parents[1]" in counts, "CAR count script must resolve repository root explicitly")
     require("COUNT(DISTINCT id_imovel) AS distinct_car_count" in counts, "canonical CAR counts must deduplicate id_imovel")
     require("MAX_BYTES = 2 * 1024**3" in counts, "CAR count hard guard must be exactly 2 GiB")
     require("dry_run=True" in counts and "maximum_bytes_billed=MAX_BYTES" in counts, "CAR count query must dry-run then enforce hard guard")
     require("canonical area_imovel row-count drift" in counts, "CAR count must fail closed on manifest/source drift")
+    require("--import-check" in counts and "--dry-run-only" in counts and "--execute-real" in counts, "CAR count execution modes missing")
+    require('"real_data_query_executed": False' in counts, "dry-run evidence must prove no real query")
 
     workflow = text(".github/workflows/v48-canonical-snapshot-audit.yml")
     require("workflow_dispatch:" in workflow, "manual canonical workflow must use workflow_dispatch")
     require("\n  push:" not in workflow and "\n  pull_request:" not in workflow and "\n  schedule:" not in workflow, "manual canonical workflow gained an unauthorized trigger")
     require("--require-manifest" in workflow, "count workflow must prove pinned manifest before query")
+    require("python scripts/v48_canonical_car_counts.py --dry-run-only" in workflow, "next CAR-count workflow must be dry-run only")
+    require("--execute-real" not in workflow, "real CAR-count query must not be enabled before dry-run review")
+    require("REAL_QUERY_EXECUTED=NO" in workflow, "workflow must verify no real CAR-count query executed")
     print("RX_V48_CANONICAL_SNAPSHOT_STATIC_GATE=PASS")
 
 
@@ -150,8 +192,8 @@ def manifest_gate() -> None:
     declared = str(data.get("content_fingerprint_sha256") or "")
     payload = dict(data)
     payload.pop("content_fingerprint_sha256", None)
-    canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    actual = hashlib.sha256(canonical).hexdigest()
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    actual = hashlib.sha256(raw).hexdigest()
     require(actual == declared, "manifest content fingerprint mismatch")
     require(filename_hash == declared, "manifest filename hash does not match content fingerprint")
     print("RX_V48_CANONICAL_SNAPSHOT_MANIFEST_GATE=PASS")
