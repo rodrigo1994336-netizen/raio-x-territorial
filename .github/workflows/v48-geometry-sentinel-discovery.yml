@@ -1,0 +1,135 @@
+name: V48 Geometry Sentinel Discovery
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  discover-mg-geometrycollection:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+      GOOGLE_CLOUD_PROJECT: ${{ secrets.GCP_PROJECT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Reject missing Google Cloud configuration
+        shell: bash
+        env:
+          GCP_SA_KEY_PRESENT: ${{ secrets.GCP_SA_KEY }}
+        run: |
+          test -n "$GCP_PROJECT_ID" || { echo 'GCP_PROJECT_ID ausente'; exit 2; }
+          test "$GCP_PROJECT_ID" = 'metodo-afp-plataforma' || { echo 'Projeto GCP inesperado'; exit 2; }
+          test -n "$GCP_SA_KEY_PRESENT" || { echo 'GCP_SA_KEY ausente'; exit 2; }
+
+      - name: Authenticate read-only discovery to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - name: Install BigQuery client
+        run: pip install --disable-pip-version-check google-cloud-bigquery
+
+      - name: Discover one canonical MG GeometryCollection sentinel
+        shell: bash
+        run: |
+          python - <<'PY'
+          import datetime as dt
+          import hashlib
+          import json
+          import re
+          from pathlib import Path
+          from google.cloud import bigquery
+
+          PROJECT = 'metodo-afp-plataforma'
+          SOURCE = 'basedosdados.br_sfb_sicar.area_imovel'
+          SNAPSHOT = dt.date(2026, 8, 4)
+          AUDIT_RUN_ID = 34519865245
+          AUDIT_FINGERPRINT = '2c718fe0c6f5798430f65eb32a9bb9a9e0b51710ee6de34ce2dd72aac83830cd'
+          MAX_BYTES = 2 * 1024**3
+          OUT = Path('artifacts/v48_geometry_sentinel_discovery.json')
+
+          sql = f'''\
+          WITH per_car_source AS (
+            SELECT id_imovel, ST_UNION_AGG(geometria) AS source_geometry
+            FROM `{SOURCE}`
+            WHERE sigla_uf='MG' AND data_extracao=@snapshot
+            GROUP BY id_imovel
+          )
+          SELECT id_imovel, ST_GEOMETRYTYPE(source_geometry) AS source_geometry_type
+          FROM per_car_source
+          WHERE ST_GEOMETRYTYPE(source_geometry)='ST_GeometryCollection'
+          ORDER BY id_imovel
+          LIMIT 1
+          '''
+          params = [bigquery.ScalarQueryParameter('snapshot', 'DATE', SNAPSHOT)]
+          client = bigquery.Client(project=PROJECT)
+          dry_cfg = bigquery.QueryJobConfig(query_parameters=params, dry_run=True, use_query_cache=False)
+          dry = client.query(sql, job_config=dry_cfg)
+          dry_bytes = int(dry.total_bytes_processed or 0)
+          if dry_bytes > MAX_BYTES:
+              raise RuntimeError(f'discovery_dryrun_guard:{dry_bytes}>{MAX_BYTES}')
+
+          cfg = bigquery.QueryJobConfig(
+              query_parameters=params,
+              use_legacy_sql=False,
+              use_query_cache=False,
+              maximum_bytes_billed=MAX_BYTES,
+          )
+          job = client.query(sql, job_config=cfg)
+          rows = list(job.result(timeout=600))
+          if len(rows) != 1:
+              raise RuntimeError(f'discovery_expected_one_found:{len(rows)}')
+          car = str(rows[0]['id_imovel'] or '').strip().upper()
+          typ = str(rows[0]['source_geometry_type'] or '')
+          if not re.fullmatch(r'MG-\d{7}-[0-9A-F]{32}', car):
+              raise RuntimeError(f'discovery_invalid_car_format:{car}')
+          if typ != 'ST_GeometryCollection':
+              raise RuntimeError(f'discovery_type_mismatch:{typ}')
+
+          payload = {
+              'schema_version': 'v48-geometry-sentinel-discovery-1',
+              'source_audit_run_id': AUDIT_RUN_ID,
+              'source_audit_content_fingerprint_sha256': AUDIT_FINGERPRINT,
+              'source_audit_semantics': 'ST_GEOMETRYTYPE after ST_UNION_AGG per id_imovel at canonical UF snapshot',
+              'uf': 'MG',
+              'canonical_snapshot': SNAPSHOT.isoformat(),
+              'id_imovel': car,
+              'source_geometry_type': typ,
+              'selection_rule': 'lexicographically first canonical MG GeometryCollection after ST_UNION_AGG',
+              'dry_run_bytes': dry_bytes,
+              'bytes_processed': int(job.total_bytes_processed or 0),
+              'bytes_billed': int(job.total_bytes_billed or 0),
+              'national_generation_executed': False,
+              'active_json_updated': False,
+          }
+          raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode('utf-8')
+          payload['content_fingerprint_sha256'] = hashlib.sha256(raw).hexdigest()
+          OUT.parent.mkdir(parents=True, exist_ok=True)
+          OUT.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding='utf-8')
+          print(f'RX_V48_MG_GEOMETRYCOLLECTION_SENTINEL={car}')
+          print(f'RX_V48_MG_GEOMETRYCOLLECTION_TYPE={typ}')
+          print(f'RX_V48_SENTINEL_SOURCE_AUDIT_RUN={AUDIT_RUN_ID}')
+          print(f'RX_V48_SENTINEL_SOURCE_AUDIT_FINGERPRINT={AUDIT_FINGERPRINT}')
+          print(f'RX_V48_SENTINEL_DISCOVERY_BILLED_BYTES={payload["bytes_billed"]}')
+          print(f'RX_V48_SENTINEL_DISCOVERY_FINGERPRINT={payload["content_fingerprint_sha256"]}')
+          print('RX_V48_NATIONAL_GENERATION_EXECUTED=NO')
+          PY
+
+      - name: Upload sentinel discovery evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: v48-geometry-sentinel-discovery-${{ github.run_id }}
+          path: artifacts/v48_geometry_sentinel_discovery.json
+          if-no-files-found: error
+          retention-days: 30
