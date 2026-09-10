@@ -33,6 +33,8 @@ def main() -> None:
         "sicar_overlap_hardening_v47.py",
         "portal_geometry_truth_v48.py",
         "portal_car_integrity_v47.py",
+        "portal_car_snapshot_ui_v48.py",
+        "portal_map_v46_anchor_state.py",
         "scripts/v48_national_worker.py",
     )
     for path in paths:
@@ -78,6 +80,18 @@ def main() -> None:
     require("geometry_notice" in portal and "NORMALIZATION_USER_NOTICE" not in portal, "notice must flow from shared backend contract")
     require("stopImmediatePropagation" in portal, "legacy WFS KML action is not intercepted")
 
+    snapshot_ui = text("portal_car_snapshot_ui_v48.py")
+    require("if(d?.user_message)" in snapshot_ui, "analysis must privilege explicit customer state message")
+    require("Fonte indisponível" in snapshot_ui, "generic unavailable fallback unexpectedly removed")
+
+    compact = text("portal_map_v46_anchor_state.py")
+    require("p?.geometry_notice" in compact, "compact property card does not display geometry notice")
+    require("RX_MAP_V46_GEOMETRY_NOTICE" in compact, "compact geometry notice boot marker missing")
+
+    v45 = text("portal_map_panel_v45.py")
+    require("function geometry(){return activeData?.geometry||(window.current||{}).geometry||null}" in v45, "V45 export geometry source contract changed")
+    require("function downloadPng(){const g=geometry()" in v45, "PNG no longer consumes panel geometry")
+
     national = text("scripts/v48_national_worker.py")
     source_block = national.split("WITH source_rows AS (", 1)[1].split("), per_car_source AS (", 1)[0]
     require("geometria IS NOT NULL" not in source_block, "national worker filters NULL geometry before classification")
@@ -95,6 +109,14 @@ def main() -> None:
     ):
         require(token in national, f"national geometry evidence missing:{token}")
     require("unexpected_geometry_type" not in national, "obsolete GeometryCollection reject path remains")
+
+    recovery = text("scripts/v48_national_recovery_contract.py")
+    require("recovery_requires_full_geometry_evidence_rebuild" in recovery, "evidence-poor recovery does not fail closed")
+
+    finalizer = text("scripts/v48_national_finalize.py")
+    require("geometry_evidence_valid" in finalizer, "national finalizer does not gate geometry evidence")
+    require("normalized_polygon_area_before_m2" in finalizer and "normalized_polygon_area_after_m2" in finalizer, "national area normalization totals missing")
+    require("discarded_line_length_m" in finalizer and "discarded_point_components" in finalizer, "national dimensional discard totals missing")
 
     config = json.loads(text("config/v48_uf_orchestration_contract.json"))
     require(config.get("geometryNormalizationVersion") == contract.NORMALIZATION_VERSION, "config normalization version mismatch")
