@@ -71,10 +71,12 @@ async def car_integrity_v47(car_code: str):
 # additive wrapper order without changing the frozen V47 integrity engine.
 import portal_conformity_sinaflor_v48  # noqa: E402,F401
 
-# Load the frozen V47 integrity UI now, then harden only its snapshot wording.
+# Load the frozen V47 integrity UI now, then harden its canonical provenance and
+# finally bind every geometry consumer to the same normalized BigQuery geometry.
 # sitecustomize imports portal_car_integrity_ui_v47 again afterwards; Python's
 # module cache makes that second import a no-op.
 import portal_car_integrity_ui_v47  # noqa: E402,F401
 import portal_car_snapshot_ui_v48  # noqa: E402,F401
+import portal_geometry_truth_v48  # noqa: E402,F401
 
-print("RX_PORTAL_CAR_INTEGRITY_V47=canonical_uf_snapshot_fail_closed", flush=True)
+print("RX_PORTAL_CAR_INTEGRITY_V47=canonical_normalized_geometry_fail_closed", flush=True)
