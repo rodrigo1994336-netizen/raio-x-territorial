@@ -83,10 +83,12 @@ def run() -> dict[str, Any]:
         die("sp_canonical_snapshot_changed")
 
     client = bigquery.Client(project=PROJECT)
+    plans: dict[str, dict[str, Any]] = {}
     results: dict[str, Any] = {}
     national_types: dict[str, int] = {}
     total_dry = total_processed = total_billed = 0
 
+    # Phase 1: dry-run every UF before any real query.
     for uf in sorted(entries):
         entry = entries[uf]
         if entry.get("status") != "canonical":
@@ -101,12 +103,32 @@ def run() -> dict[str, Any]:
         dry_cfg = bigquery.QueryJobConfig(query_parameters=params, dry_run=True, use_query_cache=False)
         dry_job = client.query(query_sql(), job_config=dry_cfg)
         dry_bytes = int(dry_job.total_bytes_processed or 0)
-        print(f"RX_V48_GEOMTYPE_DRYRUN uf={uf} snapshot={snapshot_text} bytes={dry_bytes}")
-        if dry_bytes > MAX_BYTES_PER_UF:
-            die(f"geometry_type_dryrun_guard:{uf}:{dry_bytes}>{MAX_BYTES_PER_UF}")
+        total_dry += dry_bytes
+        plans[uf] = {
+            "snapshot": snapshot_text,
+            "expected_rows": expected_rows,
+            "params": params,
+            "dry_run_bytes": dry_bytes,
+            "within_guard": dry_bytes <= MAX_BYTES_PER_UF,
+        }
+        print(f"RX_V48_GEOMTYPE_DRYRUN uf={uf} snapshot={snapshot_text} bytes={dry_bytes} within_guard={'YES' if dry_bytes <= MAX_BYTES_PER_UF else 'NO'}")
+
+    # Phase 2: execute only UFs whose own dry-run is within the approved guard.
+    for uf in sorted(plans):
+        plan = plans[uf]
+        if not plan["within_guard"]:
+            results[uf] = {
+                "status": "guard_exceeded_no_real_query",
+                "snapshot": plan["snapshot"],
+                "manifest_area_imovel_row_count": plan["expected_rows"],
+                "dry_run_bytes": plan["dry_run_bytes"],
+                "bytes_processed": 0,
+                "bytes_billed": 0,
+            }
+            continue
 
         cfg = bigquery.QueryJobConfig(
-            query_parameters=params,
+            query_parameters=plan["params"],
             use_legacy_sql=False,
             use_query_cache=False,
             maximum_bytes_billed=MAX_BYTES_PER_UF,
@@ -121,22 +143,25 @@ def run() -> dict[str, Any]:
         types = {str(r["geometry_type"]): int(r["car_count"] or 0) for r in rows}
         for typ, count in types.items():
             national_types[typ] = national_types.get(typ, 0) + count
+        processed = int(job.total_bytes_processed or 0)
+        billed = int(job.total_bytes_billed or 0)
+        total_processed += processed
+        total_billed += billed
         results[uf] = {
-            "snapshot": snapshot_text,
-            "manifest_area_imovel_row_count": expected_rows,
+            "status": "counted",
+            "snapshot": plan["snapshot"],
+            "manifest_area_imovel_row_count": plan["expected_rows"],
             "source_row_count": source_row_count,
             "null_geometry_rows": null_rows,
             "null_geometry_cars": null_cars,
             "geometry_types_after_union_by_car": types,
-            "dry_run_bytes": dry_bytes,
-            "bytes_processed": int(job.total_bytes_processed or 0),
-            "bytes_billed": int(job.total_bytes_billed or 0),
+            "dry_run_bytes": plan["dry_run_bytes"],
+            "bytes_processed": processed,
+            "bytes_billed": billed,
         }
-        total_dry += dry_bytes
-        total_processed += int(job.total_bytes_processed or 0)
-        total_billed += int(job.total_bytes_billed or 0)
         print(f"RX_V48_GEOMTYPE_RESULT uf={uf} types={json.dumps(types, sort_keys=True)} null_rows={null_rows} null_cars={null_cars}")
 
+    guard_exceeded = [uf for uf, item in results.items() if item["status"] != "counted"]
     payload: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "canonical_manifest_fingerprint": str(manifest.get("content_fingerprint_sha256") or ""),
@@ -144,7 +169,8 @@ def run() -> dict[str, Any]:
         "query_semantics": "ST_GEOMETRYTYPE after ST_UNION_AGG per id_imovel at canonical UF snapshot",
         "full_geometry_serialized": False,
         "ufs": results,
-        "national_geometry_types": dict(sorted(national_types.items())),
+        "national_geometry_types_counted_ufs_only": dict(sorted(national_types.items())),
+        "guard_exceeded_ufs": guard_exceeded,
         "total_dry_run_bytes": total_dry,
         "total_bytes_processed": total_processed,
         "total_bytes_billed": total_billed,
@@ -153,10 +179,11 @@ def run() -> dict[str, Any]:
     payload["content_fingerprint_sha256"] = hashlib.sha256(raw).hexdigest()
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
-    print(f"RX_V48_GEOMTYPE_AUDIT_UFS={len(results)}/27")
+    print(f"RX_V48_GEOMTYPE_AUDIT_COUNTED_UFS={sum(1 for x in results.values() if x['status'] == 'counted')}/27")
+    print(f"RX_V48_GEOMTYPE_AUDIT_GUARD_EXCEEDED={','.join(guard_exceeded) if guard_exceeded else 'NONE'}")
     print(f"RX_V48_GEOMTYPE_AUDIT_TOTAL_BILLED_BYTES={total_billed}")
     print(f"RX_V48_GEOMTYPE_AUDIT_FINGERPRINT={payload['content_fingerprint_sha256']}")
-    print("RX_V48_GEOMTYPE_AUDIT=PASS")
+    print("RX_V48_GEOMTYPE_AUDIT=PASS" if not guard_exceeded else "RX_V48_GEOMTYPE_AUDIT=PARTIAL_FAIL_CLOSED")
     return payload
 
 
