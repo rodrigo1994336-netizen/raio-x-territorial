@@ -25,7 +25,7 @@ SOURCE_TABLE = f"{DATASET}.area_imovel"
 CANONICAL_MANIFEST_FINGERPRINT = "25e14900fd0ea92d3ff82cb6f46da24449fb2b3bd233aff215ec8a2b645b64a4"
 BUCKET = "raio-x-territorial-car-metodo-afp-plataforma"
 PAGE_SIZE = 10_000
-MAX_BQ_BYTES = 10 * 1024**3
+MAX_BQ_BYTES = 2 * 1024**3
 MIN_ZOOM = 10
 MAX_ZOOM = 16
 TIPPECANOE_VERSION = "2.79.0"
@@ -105,7 +105,7 @@ def static_contract() -> None:
         die("latest_snapshot_fallback_detected")
     if PAGE_SIZE != 10_000:
         die("page_size_contract_changed")
-    if MAX_BQ_BYTES != 10 * 1024**3:
+    if MAX_BQ_BYTES != 2 * 1024**3:
         die("bigquery_guard_contract_changed")
 
 
