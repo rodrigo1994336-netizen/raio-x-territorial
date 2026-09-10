@@ -70,6 +70,7 @@ def static_contract() -> None:
         "portal_car_integrity_v47.py",
         "vector_snapshot_contract_v48.py",
         "scripts/v48_canonical_snapshot_audit.py",
+        "scripts/v48_geometry_type_audit.py",
     ):
         compile_gate(path)
 
@@ -104,9 +105,15 @@ def static_contract() -> None:
     require("Ver auditoria · datas das bases por estado" in ui, "27-UF provenance panel missing")
     require("rxV48AgeDays" in ui, "27-UF panel must calculate age dynamically")
 
-    policy = text("docs/v48_sicar_freshness_policy.md")
-    require("120 dias" in policy and "SICAR oficial" in policy, "São Paulo 120-day source-review trigger not recorded")
-    require("0/8 em 01/08/2026" in policy and "04/08/2026" in policy, "São Paulo August absence evidence not recorded")
+    freshness_policy = text("docs/v48_sicar_freshness_policy.md")
+    require("120 dias" in freshness_policy and "SICAR oficial" in freshness_policy, "São Paulo 120-day source-review trigger not recorded")
+    require("0/8 em 01/08/2026" in freshness_policy and "04/08/2026" in freshness_policy, "São Paulo August absence evidence not recorded")
+
+    geometry_policy = text("docs/v48_geometry_semantics_policy.md")
+    require("analysis_geometry_normalization == map_geometry_normalization" in geometry_policy, "shared analysis-map geometry normalization invariant missing")
+    require("ST_DUMP(..., 2)" in geometry_policy, "approved dimensional extraction policy missing")
+    require("source_geometry_fingerprint" in geometry_policy and "render_geometry_fingerprint" in geometry_policy, "dual geometry fingerprint policy missing")
+    require("FAIL_CLOSED" in geometry_policy and "polígono vazio" in geometry_policy, "geometry fail-closed policy incomplete")
 
     permanent = text("REGRA_PERMANENTE_WORKFLOW_DISPATCH.md")
     require("não pode depender do diretório corrente" in permanent, "workflow script path-independence rule missing")
@@ -116,7 +123,7 @@ def static_contract() -> None:
     canonical_workflow = text(".github/workflows/v48-canonical-snapshot-audit.yml")
     require("workflow_dispatch:" in canonical_workflow, "canonical workflow must remain manual")
     require("v48_canonical_car_counts.py" not in canonical_workflow, "canceled canonical CAR count stage is still callable")
-    require("CANCELED_BY_OWNER_2026-09-09" in canonical_workflow, "canceled count-stage marker missing")
+    require("v48_geometry_type_audit.py" in canonical_workflow, "geometry-type diagnostic is not wired into canonical audit workflow")
     print("RX_V48_CANONICAL_SNAPSHOT_STATIC_GATE=PASS")
 
 
