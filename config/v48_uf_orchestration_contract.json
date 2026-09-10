@@ -1,5 +1,5 @@
 {
-  "schemaVersion": "v48-uf-orchestration-contract-2",
+  "schemaVersion": "v48-uf-orchestration-contract-3",
   "nationalEnabled": true,
   "authorization": {
     "status": "APPROVED",
@@ -10,6 +10,10 @@
   "canonicalManifestFingerprint": "25e14900fd0ea92d3ff82cb6f46da24449fb2b3bd233aff215ec8a2b645b64a4",
   "snapshotScope": "uf_canonical",
   "analysisMapRule": "analysis_snapshot == map_snapshot == canonical_snapshot_for_uf",
+  "geometryNormalizationVersion": "v48-polygonal-extraction-1",
+  "analysisMapGeometryRule": "analysis_geometry_normalization == map_geometry_normalization == v48-polygonal-extraction-1",
+  "geometryNormalizationOperation": "ST_DUMP(source_geometry, 2) then ST_UNION_AGG polygonal parts",
+  "noGeometryRule": "CAR without published geometry is excluded from map/KML/PNG and reported explicitly in analysis; never area zero or generic error",
   "batchRegion": "us-central1",
   "machineType": "e2-standard-8",
   "provisioningModel": "SPOT",
