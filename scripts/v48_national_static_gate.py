@@ -74,7 +74,7 @@ def main() -> None:
     require(matrix.get("failFast") is False and matrix.get("maxParallel") == 3, "matrix must be fail-fast false / maxParallel 3")
     require(matrix.get("rerunMode") == "failed_jobs_only", "isolated rerun contract missing")
     bq = config.get("bigQuery") or {}
-    require(bq.get("maximumBytesBilledPerUf") == 10 * 1024**3, "per-UF BigQuery guard must be 10 GiB")
+    require(bq.get("maximumBytesBilledPerUf") == 2 * 1024**3, "per-UF BigQuery guard must be 2 GiB")
     require(bq.get("exactSnapshotOnly") is True and bq.get("latestFallbackAllowed") is False, "snapshot fallback must be disabled")
     require(config.get("activeJsonMutationAllowed") is False, "active.json mutation must remain blocked")
 
@@ -90,7 +90,7 @@ def main() -> None:
     require("data_extracao=@snapshot" in worker, "worker exact snapshot predicate missing")
     require("MAX(data_extracao)" not in worker, "worker latest-date fallback detected")
     require("maximum_bytes_billed=MAX_BQ_BYTES" in worker and "dry_run=True" in worker, "BigQuery hard guard/dry-run missing")
-    require("MAX_BQ_BYTES = 10 * 1024**3" in worker, "worker byte guard mismatch")
+    require("MAX_BQ_BYTES = 2 * 1024**3" in worker, "worker byte guard mismatch")
     require("PAGE_SIZE = 10_000" in worker, "worker page size mismatch")
     require("canonical_area_imovel_row_count_drift" in worker, "source row-count drift fail-closed missing")
     require("analysis_snapshot" in worker and "map_snapshot" in worker, "map/analysis identity missing")
