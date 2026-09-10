@@ -7,9 +7,12 @@ permissions:
   contents: read
 
 jobs:
-  verify-promoted-canonical-manifest:
+  geometry-type-audit:
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 30
+    env:
+      GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+      GOOGLE_CLOUD_PROJECT: ${{ secrets.GCP_PROJECT_ID }}
     steps:
       - uses: actions/checkout@v4
 
@@ -20,7 +23,39 @@ jobs:
       - name: Verify promoted immutable canonical manifest and runtime invariants
         run: python scripts/v48_canonical_snapshot_static_gate.py --require-manifest
 
-      - name: Record canceled count stage
+      - name: Compile and import-check geometry audit before authentication
         run: |
-          echo 'RX_V48_CANONICAL_CAR_COUNT_STAGE=CANCELED_BY_OWNER_2026-09-09'
-          echo 'RX_V48_CANONICAL_CAR_COUNT_QUERY_EXECUTED=NO'
+          python -m py_compile scripts/v48_geometry_type_audit.py
+          python scripts/v48_geometry_type_audit.py --import-check
+
+      - name: Reject missing Google Cloud configuration
+        shell: bash
+        env:
+          GCP_SA_KEY_PRESENT: ${{ secrets.GCP_SA_KEY }}
+        run: |
+          test -n "$GCP_PROJECT_ID" || { echo 'GCP_PROJECT_ID ausente'; exit 2; }
+          test "$GCP_PROJECT_ID" = 'metodo-afp-plataforma' || { echo 'Projeto GCP inesperado'; exit 2; }
+          test -n "$GCP_SA_KEY_PRESENT" || { echo 'GCP_SA_KEY ausente'; exit 2; }
+
+      - name: Authenticate read-only diagnostic to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - name: Install BigQuery client
+        run: pip install --disable-pip-version-check google-cloud-bigquery
+
+      - name: Count canonical CARs by post-union geometry type
+        run: python scripts/v48_geometry_type_audit.py
+
+      - name: Upload geometry-type audit evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v48-canonical-geometry-type-audit-${{ github.run_id }}
+          path: artifacts/v48_geometry_type_audit.json
+          if-no-files-found: warn
+          retention-days: 30
