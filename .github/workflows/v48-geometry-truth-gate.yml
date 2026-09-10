@@ -20,6 +20,9 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Zero is not absence gate
+        run: python scripts/v48_zero_not_absence_gate.py
+
       - name: Static geometry truth gate before authentication
         run: python scripts/v48_geometry_truth_static_gate.py
 

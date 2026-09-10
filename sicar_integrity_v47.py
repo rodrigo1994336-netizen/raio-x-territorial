@@ -150,7 +150,7 @@ def _dry_run_bytes(client: Any, sql: str, params: dict[str, Any]) -> int:
         use_query_cache=False,
     )
     job = client.query(sql, job_config=cfg)
-    return int(job.total_bytes_processed or 0)
+    return int(_none_default(job.total_bytes_processed, 0))
 
 
 def _safe_geom(value: Any):
@@ -208,6 +208,10 @@ def _round(value: float | None, digits: int = 6) -> float | None:
     return None if value is None else round(float(value), digits)
 
 
+def _none_default(value: Any, default: Any) -> Any:
+    return default if value is None else value
+
+
 def _difference_label(declared: float | None, inside: float | None) -> str | None:
     if declared is None or inside is None:
         return None
@@ -225,8 +229,8 @@ def _difference_label(declared: float | None, inside: float | None) -> str | Non
 def _theme_row(key: str, record: dict[str, Any], property_geom: Any) -> dict[str, Any]:
     spec = THEMES[key]
     snapshot_available = bool(record.get("snapshot_available"))
-    row_count = int(record.get("row_count") or 0)
-    geometry_count = int(record.get("geometry_count") or 0)
+    row_count = int(_none_default(record.get("row_count"), 0))
+    geometry_count = int(_none_default(record.get("geometry_count"), 0))
     geom = _safe_geom(record.get("geometry_geojson"))
 
     if not snapshot_available:
@@ -345,7 +349,7 @@ def _residual_row(property_geom: Any, rows_by_key: dict[str, dict[str, Any]]) ->
     measured = area_ha_grs80(residual)
     property_area = area_ha_grs80(property_geom)
     share = None
-    if property_area and measured is not None:
+    if property_area is not None and property_area > 0 and measured is not None:
         share = max(0.0, min(100.0, measured / property_area * 100.0))
     return {
         "key": "regeneracao",
@@ -379,13 +383,13 @@ def _boundary_check(property_geom: Any, boundary_record: dict[str, Any] | None, 
         outside = property_geom.difference(boundary)
     outside_ha = area_ha_grs80(outside)
     property_ha = area_ha_grs80(property_geom)
-    outside_pct = None if not property_ha or outside_ha is None else outside_ha / property_ha * 100.0
+    outside_pct = None if property_ha is None or property_ha == 0 or outside_ha is None else outside_ha / property_ha * 100.0
     return {
         "state": "checked",
         "outside_ha": _round(outside_ha),
         "outside_pct": _round(outside_pct, 4),
         "label": label,
-        "has_outside_area": bool(outside_ha and outside_ha > 0.000001),
+        "has_outside_area": bool(outside_ha is not None and outside_ha > 0.000001),
     }
 
 
@@ -431,11 +435,11 @@ def build_integrity_from_records(
                 "detail": overlap_record.get("detail") or "overlap_query_failed",
             }
         else:
-            count = int(overlap_record.get("distinct_car_count") or 0)
+            count = int(_none_default(overlap_record.get("distinct_car_count"), 0))
             og = _safe_geom(overlap_record.get("geometry_geojson"))
             union_area = area_ha_grs80(og) if og is not None else (0.0 if count == 0 else None)
             pct = None
-            if property_measured and union_area is not None:
+            if property_measured is not None and property_measured > 0 and union_area is not None:
                 pct = union_area / property_measured * 100.0
             overlap = {
                 "state": "checked",

@@ -67,3 +67,11 @@ A regra de invariantes evita falso vermelho após uma transição legítima de e
 - V48 Canonical SICAR Snapshot Audit — PR #37, merge commit `67491d64910413e1a8b4883d852b5d22f93779da`.
 - V48 Canonical CAR Counts — execução #4: manifesto PASS, falha de import antes do dry-run; originou a regra permanente de independência do diretório de invocação.
 - V48 Snapshot Contract Static Gate #16 — o gate estático passou, mas uma asserção de estágio obsoleta gerou falso vermelho; originou a regra `gate afirma invariante, nunca estágio`.
+## Regra permanente — ZERO NÃO É AUSÊNCIA
+
+- Em campos numéricos, `0` é valor de domínio e nunca deve ser usado como sinônimo de ausência.
+- Validação de presença numérica em Python deve usar `is None` / `is not None`; defaults devem preservar zero por coalescência explícita.
+- Cadeias como `valor or padrão`, `or -1` e `or 0` são proibidas quando o operando é contagem, área, percentual, bytes, duração ou outra métrica numérica.
+- Em JavaScript, default numérico deve usar semântica nullish (`??`) ou teste explícito de `null`/`undefined`, nunca `||`.
+- Exemplos de zero legítimo: hectares de sobreposição, processos minerários incidentes, área fora do município/UF, desmatamento, feições de uma classe e geometrias publicadas.
+- O caminho geométrico crítico V48 é protegido por gate automático antes de autenticação/consulta. A auditoria repo-wide e seu inventário pertencem à Frente B separada.

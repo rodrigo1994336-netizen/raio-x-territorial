@@ -17,6 +17,17 @@ GEOMETRY_NORMALIZATION_VERSION = "v48-polygonal-extraction-1"
 SCHEMA = "v48-national-generation-summary-2"
 
 
+def _none_default(value: Any, default: Any) -> Any:
+    return default if value is None else value
+
+
+def _first_not_none(*values: Any) -> Any:
+    for value in values:
+        if value is not None:
+            return value
+    return None
+
+
 def parse_rfc3339(value: Any) -> dt.datetime | None:
     raw = str(value or "").strip()
     if not raw:
@@ -69,11 +80,11 @@ def load_results(input_dir: Path) -> dict[str, dict[str, Any]]:
 def _geometry_evidence(commit: dict[str, Any]) -> dict[str, Any]:
     source = ((commit.get("run_metrics") or {}).get("source") or {})
     records = list(source.get("normalization_records") or [])
-    normalized = int(commit.get("normalization_applied_count") or source.get("normalization_applied_count") or 0)
-    no_geometry = int(commit.get("no_geometry_car_count") or source.get("no_geometry_car_count") or 0)
-    no_polygon = int(commit.get("no_polygonal_car_count") or source.get("no_polygonal_car_count") or 0)
-    distinct = int(commit.get("distinct_car_count") or source.get("distinct_car_count") or 0)
-    features = int(commit.get("feature_count") or source.get("feature_count") or 0)
+    normalized = int(_first_not_none(commit.get("normalization_applied_count"), source.get("normalization_applied_count"), 0))
+    no_geometry = int(_first_not_none(commit.get("no_geometry_car_count"), source.get("no_geometry_car_count"), 0))
+    no_polygon = int(_first_not_none(commit.get("no_polygonal_car_count"), source.get("no_polygonal_car_count"), 0))
+    distinct = int(_first_not_none(commit.get("distinct_car_count"), source.get("distinct_car_count"), 0))
+    features = int(_first_not_none(commit.get("feature_count"), source.get("feature_count"), 0))
 
     valid = (
         commit.get("analysis_geometry_normalization") == GEOMETRY_NORMALIZATION_VERSION
@@ -98,13 +109,13 @@ def _geometry_evidence(commit: dict[str, Any]) -> dict[str, Any]:
             valid = False
             continue
         normalized_ids.append(car)
-        line_components += int(record.get("discarded_line_components") or 0)
-        line_length_m += float(record.get("discarded_line_length_m") or 0.0)
-        point_components += int(record.get("discarded_point_components") or 0)
-        before = float(record.get("polygon_area_before_m2") or 0.0)
-        after = float(record.get("polygon_area_after_m2") or 0.0)
-        difference = float(record.get("polygon_area_difference_m2") or 0.0)
-        tolerance = float(record.get("polygon_area_tolerance_m2") or 0.0)
+        line_components += int(_none_default(record.get("discarded_line_components"), 0))
+        line_length_m += float(_none_default(record.get("discarded_line_length_m"), 0.0))
+        point_components += int(_none_default(record.get("discarded_point_components"), 0))
+        before = float(_none_default(record.get("polygon_area_before_m2"), 0.0))
+        after = float(_none_default(record.get("polygon_area_after_m2"), 0.0))
+        difference = float(_none_default(record.get("polygon_area_difference_m2"), 0.0))
+        tolerance = float(_none_default(record.get("polygon_area_tolerance_m2"), 0.0))
         area_before_m2 += before
         area_after_m2 += after
         area_difference_m2 += difference
@@ -115,8 +126,8 @@ def _geometry_evidence(commit: dict[str, Any]) -> dict[str, Any]:
     if len(set(normalized_ids)) != len(normalized_ids):
         valid = False
 
-    no_geometry_ids = list(commit.get("no_geometry_car_ids") or source.get("no_geometry_car_ids") or [])
-    no_polygon_ids = list(commit.get("no_polygonal_car_ids") or source.get("no_polygonal_car_ids") or [])
+    no_geometry_ids = list(_first_not_none(commit.get("no_geometry_car_ids"), source.get("no_geometry_car_ids"), []))
+    no_polygon_ids = list(_first_not_none(commit.get("no_polygonal_car_ids"), source.get("no_polygonal_car_ids"), []))
     if len(no_geometry_ids) != no_geometry or len(no_polygon_ids) != no_polygon:
         valid = False
 
@@ -165,9 +176,9 @@ def uf_summary(uf: str, result: dict[str, Any] | None) -> dict[str, Any]:
         "source_fingerprint_sha256": commit.get("source_fingerprint_sha256"),
         "pmtiles_object": pmtiles.get("object"),
         "pmtiles_sha256": pmtiles.get("sha256"),
-        "pmtiles_size_bytes": int(pmtiles.get("size_bytes") or 0) if published else None,
-        "feature_count": int(commit.get("feature_count") or 0) if published else None,
-        "source_row_count": int(commit.get("source_row_count_actual") or 0) if published else None,
+        "pmtiles_size_bytes": int(_none_default(pmtiles.get("size_bytes"), 0)) if published else None,
+        "feature_count": int(_none_default(commit.get("feature_count"), 0)) if published else None,
+        "source_row_count": int(_none_default(commit.get("source_row_count_actual"), 0)) if published else None,
         "bigquery_dry_run_bytes": source.get("dry_run_bytes"),
         "bigquery_processed_bytes": source.get("total_bytes_processed"),
         "bigquery_billed_bytes": source.get("total_bytes_billed"),
@@ -194,10 +205,10 @@ def main(input_dir: Path, output: Path) -> dict[str, Any]:
     per_uf = [uf_summary(uf, results.get(uf)) for uf in EXPECTED_UFS]
     published = [item for item in per_uf if item["published"]]
     failed = [item["uf"] for item in per_uf if not item["published"]]
-    pmtiles_total = sum(int(item.get("pmtiles_size_bytes") or 0) for item in published)
-    bq_processed_total = sum(int(item.get("bigquery_processed_bytes") or 0) for item in published)
-    bq_billed_total = sum(int(item.get("bigquery_billed_bytes") or 0) for item in published)
-    worker_seconds_total = sum(float(item.get("worker_total_seconds") or 0) for item in published)
+    pmtiles_total = sum(int(_none_default(item.get("pmtiles_size_bytes"), 0)) for item in published)
+    bq_processed_total = sum(int(_none_default(item.get("bigquery_processed_bytes"), 0)) for item in published)
+    bq_billed_total = sum(int(_none_default(item.get("bigquery_billed_bytes"), 0)) for item in published)
+    worker_seconds_total = sum(float(_none_default(item.get("worker_total_seconds"), 0)) for item in published)
     batch_seconds_known = [float(item["batch_run_seconds"]) for item in per_uf if item.get("batch_run_seconds") is not None]
     starts = [parse_rfc3339(item.get("batch_create_time")) for item in per_uf]
     ends = [parse_rfc3339(item.get("batch_update_time")) for item in per_uf]
@@ -208,19 +219,19 @@ def main(input_dir: Path, output: Path) -> dict[str, Any]:
     geometries = [item.get("geometry") or {} for item in published]
     national_geometry = {
         "normalization_version": GEOMETRY_NORMALIZATION_VERSION,
-        "distinct_car_count": sum(int(g.get("distinct_car_count") or 0) for g in geometries),
-        "feature_count": sum(int(g.get("feature_count") or 0) for g in geometries),
-        "normalization_applied_count": sum(int(g.get("normalization_applied_count") or 0) for g in geometries),
-        "no_geometry_car_count": sum(int(g.get("no_geometry_car_count") or 0) for g in geometries),
+        "distinct_car_count": sum(int(_none_default(g.get("distinct_car_count"), 0)) for g in geometries),
+        "feature_count": sum(int(_none_default(g.get("feature_count"), 0)) for g in geometries),
+        "normalization_applied_count": sum(int(_none_default(g.get("normalization_applied_count"), 0)) for g in geometries),
+        "no_geometry_car_count": sum(int(_none_default(g.get("no_geometry_car_count"), 0)) for g in geometries),
         "no_geometry_car_ids": [car for g in geometries for car in (g.get("no_geometry_car_ids") or [])],
-        "no_polygonal_car_count": sum(int(g.get("no_polygonal_car_count") or 0) for g in geometries),
+        "no_polygonal_car_count": sum(int(_none_default(g.get("no_polygonal_car_count"), 0)) for g in geometries),
         "no_polygonal_car_ids": [car for g in geometries for car in (g.get("no_polygonal_car_ids") or [])],
-        "discarded_line_components": sum(int(g.get("discarded_line_components") or 0) for g in geometries),
-        "discarded_line_length_m": round(sum(float(g.get("discarded_line_length_m") or 0.0) for g in geometries), 6),
-        "discarded_point_components": sum(int(g.get("discarded_point_components") or 0) for g in geometries),
-        "normalized_polygon_area_before_m2": round(sum(float(g.get("normalized_polygon_area_before_m2") or 0.0) for g in geometries), 6),
-        "normalized_polygon_area_after_m2": round(sum(float(g.get("normalized_polygon_area_after_m2") or 0.0) for g in geometries), 6),
-        "normalized_polygon_area_difference_m2": round(sum(float(g.get("normalized_polygon_area_difference_m2") or 0.0) for g in geometries), 9),
+        "discarded_line_components": sum(int(_none_default(g.get("discarded_line_components"), 0)) for g in geometries),
+        "discarded_line_length_m": round(sum(float(_none_default(g.get("discarded_line_length_m"), 0.0)) for g in geometries), 6),
+        "discarded_point_components": sum(int(_none_default(g.get("discarded_point_components"), 0)) for g in geometries),
+        "normalized_polygon_area_before_m2": round(sum(float(_none_default(g.get("normalized_polygon_area_before_m2"), 0.0)) for g in geometries), 6),
+        "normalized_polygon_area_after_m2": round(sum(float(_none_default(g.get("normalized_polygon_area_after_m2"), 0.0)) for g in geometries), 6),
+        "normalized_polygon_area_difference_m2": round(sum(float(_none_default(g.get("normalized_polygon_area_difference_m2"), 0.0)) for g in geometries), 9),
     }
 
     payload = {

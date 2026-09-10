@@ -39,6 +39,10 @@ def die(message: str) -> None:
     raise RuntimeError(message)
 
 
+def _none_default(value: Any, default: Any) -> Any:
+    return default if value is None else value
+
+
 def utcnow() -> str:
     return dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -214,13 +218,13 @@ def upload_immutable_file(bucket: Any, local_path: Path, object_name: str, metad
         remote_meta = blob.metadata or {}
         if remote_meta.get("sha256") != local_sha:
             die(f"immutable_object_sha_conflict:{object_name}")
-        if int(blob.size or -1) != local_path.stat().st_size:
+        if int(_none_default(blob.size, -1)) != local_path.stat().st_size:
             die(f"immutable_object_size_conflict:{object_name}")
         disposition = "reused_identical"
     return {
         "object": object_name,
         "generation": str(blob.generation or ""),
-        "size_bytes": int(blob.size or local_path.stat().st_size),
+        "size_bytes": int(_none_default(blob.size, local_path.stat().st_size)),
         "sha256": local_sha,
         "disposition": disposition,
         "elapsed_seconds": round(time.perf_counter() - started, 3),
@@ -234,13 +238,13 @@ def _audit_record(row: Any, car_code: str) -> dict[str, Any]:
         "render_geometry_type": row.get("render_geometry_type"),
         "source_geometry_fingerprint": row.get("source_geometry_fingerprint"),
         "render_geometry_fingerprint": row.get("render_geometry_fingerprint"),
-        "discarded_line_components": int(row.get("discarded_line_components") or 0),
-        "discarded_line_length_m": round(float(row.get("discarded_line_length_m") or 0.0), 6),
-        "discarded_point_components": int(row.get("discarded_point_components") or 0),
-        "polygon_area_before_m2": round(float(row.get("polygon_area_before_m2") or 0.0), 6),
-        "polygon_area_after_m2": round(float(row.get("polygon_area_after_m2") or 0.0), 6),
-        "polygon_area_difference_m2": round(float(row.get("polygon_area_difference_m2") or 0.0), 9),
-        "polygon_area_tolerance_m2": round(float(row.get("polygon_area_tolerance_m2") or 0.0), 9),
+        "discarded_line_components": int(_none_default(row.get("discarded_line_components"), 0)),
+        "discarded_line_length_m": round(float(_none_default(row.get("discarded_line_length_m"), 0.0)), 6),
+        "discarded_point_components": int(_none_default(row.get("discarded_point_components"), 0)),
+        "polygon_area_before_m2": round(float(_none_default(row.get("polygon_area_before_m2"), 0.0)), 6),
+        "polygon_area_after_m2": round(float(_none_default(row.get("polygon_area_after_m2"), 0.0)), 6),
+        "polygon_area_difference_m2": round(float(_none_default(row.get("polygon_area_difference_m2"), 0.0)), 9),
+        "polygon_area_tolerance_m2": round(float(_none_default(row.get("polygon_area_tolerance_m2"), 0.0)), 9),
     }
 
 
@@ -248,10 +252,10 @@ def row_to_feature(row: Any, uf: str, snapshot: str) -> tuple[dict[str, Any] | N
     car_code = str(row.get("id_imovel") or "")
     if not car_code.startswith(f"{uf}-"):
         die(f"wrong_uf_car_detected:{uf}:{car_code}")
-    source_rows = int(row.get("source_row_count") or 0)
+    source_rows = int(_none_default(row.get("source_row_count"), 0))
     if source_rows <= 0:
         die(f"invalid_source_row_count:{car_code}:{source_rows}")
-    geometry_rows = int(row.get("geometry_row_count") or 0)
+    geometry_rows = int(_none_default(row.get("geometry_row_count"), 0))
     if geometry_rows == 0:
         return None, 0, "no_geometry_published", {
             "car_code": car_code,
@@ -264,8 +268,8 @@ def row_to_feature(row: Any, uf: str, snapshot: str) -> tuple[dict[str, Any] | N
         record["snapshot"] = snapshot
         return None, 0, "no_polygonal_component", record
 
-    difference = float(row.get("polygon_area_difference_m2") or 0.0)
-    tolerance = float(row.get("polygon_area_tolerance_m2") or 0.0)
+    difference = float(_none_default(row.get("polygon_area_difference_m2"), 0.0))
+    tolerance = float(_none_default(row.get("polygon_area_tolerance_m2"), 0.0))
     if difference > tolerance:
         die(f"polygon_area_invariant_failed:{car_code}:{difference}>{tolerance}")
 
@@ -310,7 +314,7 @@ def extract_geojsonl(*, client: Any, bigquery: Any, uf: str, snapshot: dt.date, 
     ]
     dry_config = bigquery.QueryJobConfig(query_parameters=params, dry_run=True, use_query_cache=False)
     dry_job = client.query(extraction_sql(), job_config=dry_config)
-    estimated_bytes = int(dry_job.total_bytes_processed or 0)
+    estimated_bytes = int(_none_default(dry_job.total_bytes_processed, 0))
     if estimated_bytes > MAX_BQ_BYTES:
         die(f"bigquery_dryrun_guard:{estimated_bytes}>{MAX_BQ_BYTES}")
 
@@ -342,7 +346,7 @@ def extract_geojsonl(*, client: Any, bigquery: Any, uf: str, snapshot: dt.date, 
                 die(f"non_deterministic_car_order:{previous_car}:{car_code}")
             previous_car = car_code
             distinct_car_count += 1
-            row_count = int(row.get("source_row_count") or 0)
+            row_count = int(_none_default(row.get("source_row_count"), 0))
             if row_count <= 0:
                 die(f"invalid_source_row_count:{car_code}:{row_count}")
             source_row_count_actual += row_count
@@ -364,13 +368,13 @@ def extract_geojsonl(*, client: Any, bigquery: Any, uf: str, snapshot: dt.date, 
                 die(f"feature_missing_without_exclusion:{car_code}")
 
             polygon_count += parts
-            total_geometry_points += int(row.get("geometry_points") or 0)
+            total_geometry_points += int(_none_default(row.get("geometry_points"), 0))
             if audit is not None:
                 normalization_applied_count += 1
                 normalization_records.append(audit)
-                discarded_line_components += int(audit.get("discarded_line_components") or 0)
-                discarded_point_components += int(audit.get("discarded_point_components") or 0)
-                discarded_line_length_m += float(audit.get("discarded_line_length_m") or 0.0)
+                discarded_line_components += int(_none_default(audit.get("discarded_line_components"), 0))
+                discarded_point_components += int(_none_default(audit.get("discarded_point_components"), 0))
+                discarded_line_length_m += float(_none_default(audit.get("discarded_line_length_m"), 0.0))
 
             line = (json.dumps(feature, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
             out.write(line)
@@ -397,8 +401,8 @@ def extract_geojsonl(*, client: Any, bigquery: Any, uf: str, snapshot: dt.date, 
         **geometry_contract.normalization_contract_fields(),
         "dry_run_bytes": estimated_bytes,
         "maximum_bytes_billed": MAX_BQ_BYTES,
-        "total_bytes_processed": int(job.total_bytes_processed or 0),
-        "total_bytes_billed": int(job.total_bytes_billed or 0),
+        "total_bytes_processed": int(_none_default(job.total_bytes_processed, 0)),
+        "total_bytes_billed": int(_none_default(job.total_bytes_billed, 0)),
         "page_size": PAGE_SIZE,
         "elapsed_seconds": round(elapsed, 3),
         "source_row_count_expected": int(expected_source_rows),
@@ -445,7 +449,7 @@ def main() -> None:
         die(f"canonical_snapshot_unavailable:{uf}")
     snapshot_text = str(entry.get("snapshot") or "")
     snapshot = dt.date.fromisoformat(snapshot_text)
-    expected_source_rows = int(((entry.get("tables") or {}).get("area_imovel") or {}).get("row_count") or 0)
+    expected_source_rows = int(_none_default(((entry.get("tables") or {}).get("area_imovel") or {}).get("row_count"), 0))
     if expected_source_rows <= 0:
         die(f"canonical_area_imovel_count_missing:{uf}")
     requested_snapshot = os.getenv("RX_V48_SNAPSHOT", snapshot_text).strip()

@@ -11,6 +11,7 @@ if str(REPO_ROOT) not in sys.path:
 
 import sicar_geometry_normalization_v48 as contract
 from scripts import v48_national_worker as worker
+from scripts import v48_national_finalize as finalizer_module
 
 
 def require(value: bool, message: str) -> None:
@@ -129,16 +130,41 @@ def main() -> None:
         require(token in national, f"national geometry evidence missing:{token}")
     require("unexpected_geometry_type" not in national, "obsolete GeometryCollection reject path remains")
 
+    zero_commit = {
+        "analysis_geometry_normalization": contract.NORMALIZATION_VERSION,
+        "map_geometry_normalization": contract.NORMALIZATION_VERSION,
+        "source_geometry_set_fingerprint_sha256": "source",
+        "render_geometry_set_fingerprint_sha256": "render",
+        "normalization_applied_count": 0,
+        "no_geometry_car_count": 0,
+        "no_polygonal_car_count": 0,
+        "distinct_car_count": 1,
+        "feature_count": 1,
+        "no_geometry_car_ids": [],
+        "no_polygonal_car_ids": [],
+        "run_metrics": {"source": {"normalization_applied_count": 9, "no_geometry_car_count": 7, "no_polygonal_car_count": 4, "distinct_car_count": 99, "feature_count": 88, "normalization_records": []}},
+    }
+    zero_evidence = finalizer_module._geometry_evidence(zero_commit)
+    require(zero_evidence["normalization_applied_count"] == 0, "finalizer replaced legitimate zero normalization count")
+    require(zero_evidence["no_geometry_car_count"] == 0, "finalizer replaced legitimate zero no-geometry count")
+    require(zero_evidence["no_polygonal_car_count"] == 0, "finalizer replaced legitimate zero no-polygon count")
+    require(zero_evidence["distinct_car_count"] == 1 and zero_evidence["feature_count"] == 1, "finalizer ignored explicit commit counters")
+
     recovery = text("scripts/v48_national_recovery_contract.py")
     require("recovery_requires_full_geometry_evidence_rebuild" in recovery, "evidence-poor recovery does not fail closed")
 
     finalizer = text("scripts/v48_national_finalize.py")
     require("geometry_evidence_valid" in finalizer, "national finalizer does not gate geometry evidence")
+    require("_first_not_none" in finalizer, "national finalizer must preserve legitimate zero before fallback")
+    require('commit.get("no_geometry_car_count") or source.get("no_geometry_car_count")' not in finalizer, "zero may not fall through to stale source count")
     require("normalized_polygon_area_before_m2" in finalizer and "normalized_polygon_area_after_m2" in finalizer, "national area normalization totals missing")
     require("discarded_line_length_m" in finalizer and "discarded_point_components" in finalizer, "national dimensional discard totals missing")
 
     real_gate = text("scripts/v48_geometry_truth_real_gate.py")
     require("geometrycollection_sentinel_provenance" in real_gate, "real gate does not persist sentinel provenance")
+    require("RX_V48_REAL_MA_NO_GEOMETRY_DISCOVERED" in real_gate, "MA id must print before assertions")
+    require("ma_discovered_pre_assertion" in real_gate, "MA evidence must persist before assertions")
+    require("geometry_raw is None" in real_gate and "source_raw is None" in real_gate, "MA numeric classification must validate None explicitly")
     require("GEOMETRYCOLLECTION_REGRESSION_UF" in real_gate, "real gate hardcodes stale GeometryCollection UF")
     require("SE-2800209-07D88A428D8B4ED5B5647683275F103" not in real_gate, "invalid log-derived sentinel remains in real gate")
 

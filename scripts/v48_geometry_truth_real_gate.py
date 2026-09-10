@@ -25,6 +25,31 @@ def die(message: str) -> None:
     raise RuntimeError(message)
 
 
+def _none_default(value: Any, default: Any) -> Any:
+    return default if value is None else value
+
+
+def _write_evidence_artifact(*, gate_status: str, evidence: dict[str, Any], provenance: dict[str, Any], total_dry: int, total_processed: int, total_billed: int) -> dict[str, Any]:
+    payload = {
+        "schema_version": "v48-geometry-truth-real-gate-2",
+        **contract.normalization_contract_fields(),
+        "gate_status": gate_status,
+        "geometrycollection_sentinel_provenance": provenance,
+        "project": PROJECT,
+        "sentinels": evidence,
+        "total_dry_run_bytes": total_dry,
+        "total_bytes_processed": total_processed,
+        "total_bytes_billed": total_billed,
+        "national_generation_executed": False,
+        "active_json_updated": False,
+    }
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    payload["content_fingerprint_sha256"] = hashlib.sha256(raw).hexdigest()
+    OUT.parent.mkdir(parents=True, exist_ok=True)
+    OUT.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True, default=str), encoding="utf-8")
+    return payload
+
+
 def case_sql() -> str:
     return f"""
     WITH source_rows AS (
@@ -97,7 +122,7 @@ def ma_no_geometry_sql() -> str:
 def query_with_guard(client: Any, bigquery: Any, sql: str, params: list[Any]) -> tuple[list[Any], dict[str, int]]:
     dry_cfg = bigquery.QueryJobConfig(query_parameters=params, dry_run=True, use_query_cache=False)
     dry = client.query(sql, job_config=dry_cfg)
-    dry_bytes = int(dry.total_bytes_processed or 0)
+    dry_bytes = int(_none_default(dry.total_bytes_processed, 0))
     if dry_bytes > MAX_BYTES_PER_QUERY:
         die(f"real_gate_dryrun_guard:{dry_bytes}>{MAX_BYTES_PER_QUERY}")
     cfg = bigquery.QueryJobConfig(
@@ -110,8 +135,8 @@ def query_with_guard(client: Any, bigquery: Any, sql: str, params: list[Any]) ->
     rows = list(job.result(timeout=1800))
     return rows, {
         "dry_run_bytes": dry_bytes,
-        "bytes_processed": int(job.total_bytes_processed or 0),
-        "bytes_billed": int(job.total_bytes_billed or 0),
+        "bytes_processed": int(_none_default(job.total_bytes_processed, 0)),
+        "bytes_billed": int(_none_default(job.total_bytes_billed, 0)),
     }
 
 
@@ -214,7 +239,7 @@ def main() -> None:
         die(f"curvelo_render_type_changed:{curvelo.get('render_geometry_type')}")
     if bool(curvelo.get("normalization_applied")):
         die("curvelo_must_not_be_marked_normalized")
-    if int(curvelo.get("geometry_row_count") or 0) <= 0:
+    if int(_none_default(curvelo.get("geometry_row_count"), 0)) <= 0:
         die("curvelo_geometry_missing")
 
     mixed = evidence["real_geometrycollection"]
@@ -226,14 +251,14 @@ def main() -> None:
         die("real_gc_normalization_not_applied")
     if not bool(mixed.get("discarded_nonpolygon_components")):
         die("real_gc_nonpolygon_discard_not_declared")
-    discarded_parts = int(mixed.get("discarded_line_components") or 0) + int(mixed.get("discarded_point_components") or 0)
+    discarded_parts = int(_none_default(mixed.get("discarded_line_components"), 0)) + int(_none_default(mixed.get("discarded_point_components"), 0))
     if discarded_parts <= 0:
         die("real_gc_discard_metrics_empty")
     if not mixed.get("source_geometry_fingerprint") or not mixed.get("render_geometry_fingerprint"):
         die("real_gc_dual_fingerprints_missing")
     if mixed.get("source_geometry_fingerprint") == mixed.get("render_geometry_fingerprint"):
         die("real_gc_source_render_fingerprints_unexpectedly_equal")
-    if float(mixed.get("polygon_area_difference_m2") or 0.0) > float(mixed.get("polygon_area_tolerance_m2") or 0.0):
+    if float(_none_default(mixed.get("polygon_area_difference_m2"), 0.0)) > float(_none_default(mixed.get("polygon_area_tolerance_m2"), 0.0)):
         die("real_gc_polygon_area_invariant_failed")
 
     ma_snapshot = canonical.canonical_snapshot_for_uf("MA")
@@ -247,34 +272,29 @@ def main() -> None:
     if len(ma_rows) != 1:
         die(f"ma_no_geometry_expected_1_found_{len(ma_rows)}")
     ma = row_payload(ma_rows[0])
-    if int(ma.get("source_row_count") or 0) <= 0 or int(ma.get("geometry_row_count") or -1) != 0:
-        die("ma_no_geometry_classification_invalid")
-    if ma.get("source_geometry_type") is not None or ma.get("render_geometry_type") is not None:
-        die("ma_no_geometry_must_not_gain_geometry_type")
     ma.update({
         "uf": "MA",
         "snapshot": ma_snapshot.isoformat(),
+        "classification": "no_geometry_published",
         "user_message": contract.no_geometry_user_message(canonical.date_pt(ma_snapshot)),
         "usage": ma_usage,
     })
     evidence["ma_no_geometry"] = ma
-
-    payload = {
-        "schema_version": "v48-geometry-truth-real-gate-2",
-        **contract.normalization_contract_fields(),
-        "geometrycollection_sentinel_provenance": provenance,
-        "project": PROJECT,
-        "sentinels": evidence,
-        "total_dry_run_bytes": total_dry,
-        "total_bytes_processed": total_processed,
-        "total_bytes_billed": total_billed,
-        "national_generation_executed": False,
-        "active_json_updated": False,
-    }
-    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
-    payload["content_fingerprint_sha256"] = hashlib.sha256(raw).hexdigest()
-    OUT.parent.mkdir(parents=True, exist_ok=True)
-    OUT.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True, default=str), encoding="utf-8")
+    print(f"RX_V48_REAL_MA_NO_GEOMETRY_DISCOVERED={ma.get('id_imovel')}", flush=True)
+    _write_evidence_artifact(gate_status="ma_discovered_pre_assertion", evidence=evidence, provenance=provenance, total_dry=total_dry, total_processed=total_processed, total_billed=total_billed)
+    source_raw = ma.get("source_row_count")
+    geometry_raw = ma.get("geometry_row_count")
+    if source_raw is None or geometry_raw is None:
+        die("ma_no_geometry_classification_missing_numeric_fields")
+    try:
+        source_rows = int(source_raw); geometry_rows = int(geometry_raw)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("ma_no_geometry_classification_non_integer") from exc
+    if source_rows <= 0 or geometry_rows != 0:
+        die("ma_no_geometry_classification_invalid")
+    if ma.get("source_geometry_type") is not None or ma.get("render_geometry_type") is not None:
+        die("ma_no_geometry_must_not_gain_geometry_type")
+    payload = _write_evidence_artifact(gate_status="pass", evidence=evidence, provenance=provenance, total_dry=total_dry, total_processed=total_processed, total_billed=total_billed)
 
     print("RX_V48_GEOMETRY_TRUTH_REAL_GATE=PASS")
     print(f"RX_V48_REAL_CURVELO={curvelo['id_imovel']}:{curvelo['source_geometry_type']}->{curvelo['render_geometry_type']}")
