@@ -12,6 +12,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 CANONICAL_FP = "25e14900fd0ea92d3ff82cb6f46da24449fb2b3bd233aff215ec8a2b645b64a4"
+GEOMETRY_NORMALIZATION_VERSION = "v48-polygonal-extraction-1"
 EXPECTED_UFS = {
     "AC", "AL", "AP", "AM", "BA", "CE", "DF", "ES", "GO", "MA", "MT", "MS", "MG",
     "PA", "PB", "PR", "PE", "PI", "RJ", "RN", "RS", "RO", "RR", "SC", "SP", "SE", "TO",
@@ -54,9 +55,11 @@ def main() -> None:
         "scripts/v48_national_batch_submit.py",
         "scripts/v48_national_finalize.py",
         "scripts/v48_national_recovery_contract.py",
+        "sicar_geometry_normalization_v48.py",
         ".github/workflows/v48-national-car-quadrica.yml",
+        ".github/workflows/v48-geometry-truth-gate.yml",
     )
-    for path in files[:4]:
+    for path in files[:5]:
         compile_file(path)
     import_gate()
 
@@ -65,6 +68,13 @@ def main() -> None:
     require(config.get("canonicalManifestFingerprint") == CANONICAL_FP, "canonical fingerprint config mismatch")
     require(config.get("snapshotScope") == "uf_canonical", "snapshot scope must be uf_canonical")
     require(config.get("analysisMapRule") == "analysis_snapshot == map_snapshot == canonical_snapshot_for_uf", "analysis/map rule mismatch")
+    require(config.get("geometryNormalizationVersion") == GEOMETRY_NORMALIZATION_VERSION, "geometry normalization version mismatch")
+    require(
+        config.get("analysisMapGeometryRule")
+        == "analysis_geometry_normalization == map_geometry_normalization == v48-polygonal-extraction-1",
+        "analysis/map geometry normalization invariant mismatch",
+    )
+    require("without published geometry" in str(config.get("noGeometryRule") or ""), "explicit no-geometry rule missing")
     require(config.get("batchRegion") == "us-central1", "national Batch region must be us-central1")
     require(config.get("machineType") == "e2-standard-8", "machine type mismatch")
     require(config.get("provisioningModel") == "SPOT", "provisioning must be Spot")
@@ -79,6 +89,9 @@ def main() -> None:
     require(config.get("activeJsonMutationAllowed") is False, "active.json mutation must remain blocked")
 
     import sicar_canonical_manifest_v48 as canonical
+    import sicar_geometry_normalization_v48 as geometry_contract
+    require(geometry_contract.NORMALIZATION_VERSION == GEOMETRY_NORMALIZATION_VERSION, "shared geometry contract version mismatch")
+    require("ST_DUMP(source_geometry, 2)" in geometry_contract.normalization_ctes("per_car_source"), "shared ST_DUMP dimension-2 normalization missing")
     manifest = canonical.load_manifest()
     require(manifest.get("content_fingerprint_sha256") == CANONICAL_FP, "pinned canonical manifest fingerprint mismatch")
     ufs = manifest.get("ufs") or {}
@@ -93,7 +106,15 @@ def main() -> None:
     require("MAX_BQ_BYTES = 2 * 1024**3" in worker, "worker byte guard mismatch")
     require("PAGE_SIZE = 10_000" in worker, "worker page size mismatch")
     require("canonical_area_imovel_row_count_drift" in worker, "source row-count drift fail-closed missing")
-    require("analysis_snapshot" in worker and "map_snapshot" in worker, "map/analysis identity missing")
+    require("geometry_contract.normalization_ctes('per_car_source')" in worker, "worker does not consume shared geometry normalization")
+    require("no_geometry_published" in worker and "no_geometry_car_ids" in worker, "explicit no-geometry classification/evidence missing")
+    require("no_polygonal_component" in worker and "no_polygonal_car_ids" in worker, "no-polygon classification/evidence missing")
+    require("normalization_records" in worker, "per-CAR normalization evidence missing")
+    require("discarded_line_length_m" in worker and "discarded_point_components" in worker, "discarded dimensional metrics missing")
+    require("source_geometry_set_fingerprint_sha256" in worker and "render_geometry_set_fingerprint_sha256" in worker, "dual geometry-set fingerprints missing")
+    require("analysis_geometry_normalization" in worker and "map_geometry_normalization" in worker, "map/analysis geometry identity missing")
+    require("unexpected_geometry_type" not in worker, "obsolete GeometryCollection rejection remains")
+    require("analysis_snapshot" in worker and "map_snapshot" in worker, "map/analysis snapshot identity missing")
     require("if_generation_match=0" in worker, "immutable upload precondition missing")
     require("prepared-receipt" in worker and "commit-manifest" in worker, "three-phase publication files missing")
     require("active.json" not in worker, "worker must not touch active.json")
@@ -110,6 +131,25 @@ def main() -> None:
 
     recovery = text("scripts/v48_national_recovery_contract.py")
     require("RECONCILE_MANIFEST_ONLY" in recovery and "active_json_updated" in recovery, "recovery invariant missing")
+    require("recovery_requires_full_geometry_evidence_rebuild" in recovery, "evidence-poor recovery must fail closed")
+    require("geometry_evidence_preserved" in recovery, "complete recovery evidence marker missing")
+
+    finalizer = text("scripts/v48_national_finalize.py")
+    for token in (
+        "geometry_evidence_valid",
+        "normalization_records",
+        "discarded_line_components",
+        "discarded_line_length_m",
+        "discarded_point_components",
+        "normalized_polygon_area_before_m2",
+        "normalized_polygon_area_after_m2",
+        "normalized_polygon_area_difference_m2",
+        "no_geometry_car_ids",
+        "no_polygonal_car_ids",
+    ):
+        require(token in finalizer, f"national finalizer geometry evidence missing:{token}")
+    require("features + no_geometry + no_polygon == distinct" in finalizer, "national finalizer geometry reconciliation missing")
+    require("len(records) == normalized" in finalizer, "national finalizer per-CAR normalization reconciliation missing")
 
     workflow = text(".github/workflows/v48-national-car-quadrica.yml")
     require("workflow_dispatch:" in workflow, "national workflow must be manually dispatched")
@@ -120,6 +160,11 @@ def main() -> None:
     require("GENERATE_27_UFS" in workflow, "explicit national confirmation token missing")
     require("actions/download-artifact@v4" in workflow and "v48_national_finalize.py" in workflow, "real-results finalizer missing")
     require("active.json" not in workflow, "workflow must not mutate active.json")
+
+    truth_workflow = text(".github/workflows/v48-geometry-truth-gate.yml")
+    require("workflow_dispatch:" in truth_workflow, "geometry truth workflow must be manual")
+    require("\n  push:" not in truth_workflow and "\n  schedule:" not in truth_workflow, "geometry truth workflow gained automatic trigger")
+    require("v48_national_batch_submit.py" not in truth_workflow and "GENERATE_27_UFS" not in truth_workflow, "geometry truth gate must not start national generation")
 
     permanent = text("REGRA_PERMANENTE_WORKFLOW_DISPATCH.md")
     require("gate afirma invariante, nunca estágio" in permanent, "invariant-only gate rule missing")
