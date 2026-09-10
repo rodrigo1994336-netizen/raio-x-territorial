@@ -159,6 +159,25 @@ def build_recovery_commit(
     pmtiles_generation: str,
 ) -> dict[str, Any]:
     _validate_geometry_truth(receipt)
+
+    # The prepared receipt proves identity/counts but the complete dimensional
+    # evidence (per-CAR discarded line/point metrics and before/after polygonal
+    # areas) lives in the normal-build commit's run_metrics.source. If execution
+    # died before that commit existed, reconstructing a poorer manifest would
+    # silently erase the approved audit trail. Fail closed and rebuild the UF.
+    required_recovery_evidence = (
+        "normalization_records",
+        "discarded_line_components",
+        "discarded_line_length_m",
+        "discarded_point_components",
+        "normalized_polygon_area_before_m2",
+        "normalized_polygon_area_after_m2",
+        "normalized_polygon_area_difference_m2",
+    )
+    missing = [key for key in required_recovery_evidence if key not in receipt]
+    if missing:
+        raise ValueError("recovery_requires_full_geometry_evidence_rebuild:" + ",".join(missing))
+
     return {
         "schema_version": "v48-national-publication-commit-1",
         "status": "committed",
@@ -181,6 +200,13 @@ def build_recovery_commit(
         "no_polygonal_car_count": int(receipt["no_polygonal_car_count"]),
         "no_polygonal_car_ids": list(receipt.get("no_polygonal_car_ids") or []),
         "normalization_applied_count": int(receipt["normalization_applied_count"]),
+        "normalization_records": list(receipt["normalization_records"]),
+        "discarded_line_components": int(receipt["discarded_line_components"]),
+        "discarded_line_length_m": float(receipt["discarded_line_length_m"]),
+        "discarded_point_components": int(receipt["discarded_point_components"]),
+        "normalized_polygon_area_before_m2": float(receipt["normalized_polygon_area_before_m2"]),
+        "normalized_polygon_area_after_m2": float(receipt["normalized_polygon_area_after_m2"]),
+        "normalized_polygon_area_difference_m2": float(receipt["normalized_polygon_area_difference_m2"]),
         "pmtiles": {
             "object": pmtiles_object,
             "generation": str(pmtiles_generation),
@@ -194,6 +220,7 @@ def build_recovery_commit(
         "recovery": {
             "mode": "RECONCILE_MANIFEST_ONLY",
             "original_run_metrics_available": False,
+            "geometry_evidence_preserved": True,
         },
         "active_json_updated": False,
     }
