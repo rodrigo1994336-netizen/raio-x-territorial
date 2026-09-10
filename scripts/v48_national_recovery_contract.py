@@ -10,6 +10,7 @@ ALL_UFS = (
     "PA", "PB", "PR", "PE", "PI", "RJ", "RN", "RS", "RO", "RR", "SC", "SP", "SE", "TO",
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+GEOMETRY_NORMALIZATION_VERSION = "v48-polygonal-extraction-1"
 
 
 class PublicationState(str, Enum):
@@ -86,6 +87,38 @@ def expected_identity(
     }
 
 
+def _validate_geometry_truth(receipt: Mapping[str, Any]) -> None:
+    analysis_norm = str(receipt.get("analysis_geometry_normalization") or "")
+    map_norm = str(receipt.get("map_geometry_normalization") or "")
+    if analysis_norm != GEOMETRY_NORMALIZATION_VERSION or map_norm != GEOMETRY_NORMALIZATION_VERSION:
+        raise ValueError("receipt_geometry_normalization_mismatch")
+    require_sha256(str(receipt.get("source_geometry_set_fingerprint_sha256") or ""), "source_geometry_set_fingerprint")
+    require_sha256(str(receipt.get("render_geometry_set_fingerprint_sha256") or ""), "render_geometry_set_fingerprint")
+
+    distinct = int(receipt.get("distinct_car_count") or 0)
+    features = int(receipt.get("feature_count") or 0)
+    no_geometry = int(receipt.get("no_geometry_car_count") or 0)
+    no_polygon = int(receipt.get("no_polygonal_car_count") or 0)
+    no_geometry_ids = list(receipt.get("no_geometry_car_ids") or [])
+    no_polygon_ids = list(receipt.get("no_polygonal_car_ids") or [])
+    normalized = int(receipt.get("normalization_applied_count") or 0)
+
+    if distinct <= 0 or features <= 0:
+        raise ValueError("receipt_geometry_counts_invalid")
+    if len(no_geometry_ids) != no_geometry:
+        raise ValueError("receipt_no_geometry_id_count_mismatch")
+    if len(no_polygon_ids) != no_polygon:
+        raise ValueError("receipt_no_polygon_id_count_mismatch")
+    if len(set(map(str, no_geometry_ids))) != len(no_geometry_ids):
+        raise ValueError("receipt_duplicate_no_geometry_ids")
+    if len(set(map(str, no_polygon_ids))) != len(no_polygon_ids):
+        raise ValueError("receipt_duplicate_no_polygon_ids")
+    if features + no_geometry + no_polygon != distinct:
+        raise ValueError("receipt_geometry_classification_reconciliation_failed")
+    if normalized < 0 or normalized > features:
+        raise ValueError("receipt_normalization_count_invalid")
+
+
 def validate_receipt(
     receipt: Mapping[str, Any],
     *,
@@ -113,6 +146,7 @@ def validate_receipt(
         raise ValueError("receipt_snapshot_mismatch")
     if int(receipt.get("source_row_count_expected") or 0) != int(receipt.get("source_row_count_actual") or -1):
         raise ValueError("receipt_source_row_count_mismatch")
+    _validate_geometry_truth(receipt)
     return identity
 
 
@@ -124,6 +158,7 @@ def build_recovery_commit(
     pmtiles_object: str,
     pmtiles_generation: str,
 ) -> dict[str, Any]:
+    _validate_geometry_truth(receipt)
     return {
         "schema_version": "v48-national-publication-commit-1",
         "status": "committed",
@@ -132,10 +167,20 @@ def build_recovery_commit(
         "snapshot_date": receipt["snapshot_date"],
         "analysis_snapshot": receipt["snapshot_date"],
         "map_snapshot": receipt["snapshot_date"],
+        "analysis_geometry_normalization": receipt["analysis_geometry_normalization"],
+        "map_geometry_normalization": receipt["map_geometry_normalization"],
         "source_fingerprint_sha256": receipt["source_fingerprint_sha256"],
+        "source_geometry_set_fingerprint_sha256": receipt["source_geometry_set_fingerprint_sha256"],
+        "render_geometry_set_fingerprint_sha256": receipt["render_geometry_set_fingerprint_sha256"],
         "source_row_count_expected": int(receipt["source_row_count_expected"]),
         "source_row_count_actual": int(receipt["source_row_count_actual"]),
+        "distinct_car_count": int(receipt["distinct_car_count"]),
         "feature_count": int(receipt["feature_count"]),
+        "no_geometry_car_count": int(receipt["no_geometry_car_count"]),
+        "no_geometry_car_ids": list(receipt.get("no_geometry_car_ids") or []),
+        "no_polygonal_car_count": int(receipt["no_polygonal_car_count"]),
+        "no_polygonal_car_ids": list(receipt.get("no_polygonal_car_ids") or []),
+        "normalization_applied_count": int(receipt["normalization_applied_count"]),
         "pmtiles": {
             "object": pmtiles_object,
             "generation": str(pmtiles_generation),
