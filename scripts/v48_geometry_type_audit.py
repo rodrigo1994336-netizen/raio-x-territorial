@@ -28,7 +28,9 @@ def die(message: str) -> None:
 
 
 def git_blob_sha1(path: Path) -> str:
-    data = path.read_bytes()
+    # Git may check text files out with CRLF on Windows; normalize to repository LF
+    # before comparing with the GitHub blob identity.
+    data = path.read_bytes().replace(b"\r\n", b"\n")
     header = f"blob {len(data)}\0".encode("ascii")
     return hashlib.sha1(header + data).hexdigest()
 
