@@ -12,8 +12,27 @@ AREA_RELATIVE_TOLERANCE = 1e-9
 
 CURVELO_POLYGON_REGRESSION_CAR = "MG-3120904-DFB380BECD7A4323AD8AA68FA14D011F"
 CURVELO_POLYGON_REGRESSION_SNAPSHOT = "2026-08-04"
-GEOMETRYCOLLECTION_REGRESSION_CAR = "SE-2800209-07D88A428D8B4ED5B5647683275F103"
+
+# Permanent real GeometryCollection regression sentinel.
+# Audit #6 established that MG has 202 GeometryCollection CARs at the canonical
+# 2026-08-04 snapshot. The audit artifact intentionally stored counts, not IDs.
+# Discovery run 34527676691 then selected the lexicographically first matching
+# id_imovel with the same post-ST_UNION_AGG semantics and validated the full CAR
+# format. Identifiers copied from logs are not admissible as regression data.
+GEOMETRYCOLLECTION_REGRESSION_UF = "MG"
+GEOMETRYCOLLECTION_REGRESSION_CAR = "MG-3100708-4B47889790D4418F8941396E87C461F0"
 GEOMETRYCOLLECTION_REGRESSION_SNAPSHOT = "2026-08-04"
+GEOMETRYCOLLECTION_SENTINEL_SOURCE_AUDIT_RUN_ID = 34519865245
+GEOMETRYCOLLECTION_SENTINEL_SOURCE_AUDIT_FINGERPRINT = (
+    "2c718fe0c6f5798430f65eb32a9bb9a9e0b51710ee6de34ce2dd72aac83830cd"
+)
+GEOMETRYCOLLECTION_SENTINEL_DISCOVERY_RUN_ID = 34527676691
+GEOMETRYCOLLECTION_SENTINEL_DISCOVERY_FINGERPRINT = (
+    "3ab26311d90b56e0d57a40680d3d1c363431810c251c2f7bd99554edb62c2ed1"
+)
+GEOMETRYCOLLECTION_SENTINEL_SELECTION_RULE = (
+    "lexicographically first canonical MG GeometryCollection after ST_UNION_AGG"
+)
 
 NORMALIZATION_USER_NOTICE = (
     "A geometria publicada para este imóvel contém elementos que não são área "
@@ -23,6 +42,18 @@ NORMALIZATION_USER_NOTICE = (
 
 def no_geometry_user_message(date_pt: str) -> str:
     return f"este imóvel não possui geometria publicada na base do CAR em {date_pt}"
+
+
+def geometrycollection_sentinel_provenance() -> dict[str, object]:
+    return {
+        "source_audit_run_id": GEOMETRYCOLLECTION_SENTINEL_SOURCE_AUDIT_RUN_ID,
+        "source_audit_content_fingerprint_sha256": GEOMETRYCOLLECTION_SENTINEL_SOURCE_AUDIT_FINGERPRINT,
+        "source_audit_fact": "MG has 202 ST_GeometryCollection CARs after ST_UNION_AGG at canonical snapshot 2026-08-04",
+        "discovery_run_id": GEOMETRYCOLLECTION_SENTINEL_DISCOVERY_RUN_ID,
+        "discovery_content_fingerprint_sha256": GEOMETRYCOLLECTION_SENTINEL_DISCOVERY_FINGERPRINT,
+        "selection_rule": GEOMETRYCOLLECTION_SENTINEL_SELECTION_RULE,
+        "identifier_source": "authenticated canonical BigQuery query; never copied from log output",
+    }
 
 
 def normalization_ctes(source_cte: str = "per_car_source") -> str:
