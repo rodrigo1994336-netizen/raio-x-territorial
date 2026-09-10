@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -155,6 +156,20 @@ def main() -> None:
     if len(manifest.get("ufs") or {}) != 27:
         die("canonical_manifest_not_27_ufs")
 
+    provenance = contract.geometrycollection_sentinel_provenance()
+    if contract.GEOMETRYCOLLECTION_REGRESSION_UF != "MG":
+        die("geometrycollection_sentinel_uf_must_be_mg")
+    if not re.fullmatch(r"MG-\d{7}-[0-9A-F]{32}", contract.GEOMETRYCOLLECTION_REGRESSION_CAR):
+        die("geometrycollection_sentinel_invalid_car_format")
+    if provenance.get("source_audit_run_id") != 34519865245:
+        die("geometrycollection_sentinel_audit_run_provenance_drift")
+    if provenance.get("source_audit_content_fingerprint_sha256") != "2c718fe0c6f5798430f65eb32a9bb9a9e0b51710ee6de34ce2dd72aac83830cd":
+        die("geometrycollection_sentinel_audit_fingerprint_provenance_drift")
+    if provenance.get("discovery_run_id") != 34527676691:
+        die("geometrycollection_sentinel_discovery_run_provenance_drift")
+    if provenance.get("discovery_content_fingerprint_sha256") != "3ab26311d90b56e0d57a40680d3d1c363431810c251c2f7bd99554edb62c2ed1":
+        die("geometrycollection_sentinel_discovery_fingerprint_provenance_drift")
+
     client = bigquery.Client(project=PROJECT)
     cases = (
         (
@@ -165,7 +180,7 @@ def main() -> None:
         ),
         (
             "real_geometrycollection",
-            "SE",
+            contract.GEOMETRYCOLLECTION_REGRESSION_UF,
             contract.GEOMETRYCOLLECTION_REGRESSION_SNAPSHOT,
             contract.GEOMETRYCOLLECTION_REGRESSION_CAR,
         ),
@@ -245,8 +260,9 @@ def main() -> None:
     evidence["ma_no_geometry"] = ma
 
     payload = {
-        "schema_version": "v48-geometry-truth-real-gate-1",
+        "schema_version": "v48-geometry-truth-real-gate-2",
         **contract.normalization_contract_fields(),
+        "geometrycollection_sentinel_provenance": provenance,
         "project": PROJECT,
         "sentinels": evidence,
         "total_dry_run_bytes": total_dry,
@@ -263,6 +279,9 @@ def main() -> None:
     print("RX_V48_GEOMETRY_TRUTH_REAL_GATE=PASS")
     print(f"RX_V48_REAL_CURVELO={curvelo['id_imovel']}:{curvelo['source_geometry_type']}->{curvelo['render_geometry_type']}")
     print(f"RX_V48_REAL_GEOMETRYCOLLECTION={mixed['id_imovel']}:{mixed['source_geometry_type']}->{mixed['render_geometry_type']}")
+    print(f"RX_V48_REAL_GEOMETRYCOLLECTION_SOURCE_AUDIT_RUN={provenance['source_audit_run_id']}")
+    print(f"RX_V48_REAL_GEOMETRYCOLLECTION_SOURCE_AUDIT_FINGERPRINT={provenance['source_audit_content_fingerprint_sha256']}")
+    print(f"RX_V48_REAL_GEOMETRYCOLLECTION_DISCOVERY_RUN={provenance['discovery_run_id']}")
     print(f"RX_V48_REAL_MA_NO_GEOMETRY={ma['id_imovel']}")
     print(f"RX_V48_GEOMETRY_TRUTH_TOTAL_BILLED_BYTES={total_billed}")
     print(f"RX_V48_GEOMETRY_TRUTH_FINGERPRINT={payload['content_fingerprint_sha256']}")
