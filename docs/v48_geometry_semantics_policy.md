@@ -13,6 +13,10 @@ Run `34519865245`, commit `0872cfc9452e16922329a5f4d0055867938f2e74`:
 - total de CARs distintos: 8.467.886;
 - Curvelo `MG-3120904-DFB380BECD7A4323AD8AA68FA14D011F`: `ST_Polygon` tanto na linha que a V47 escolheria quanto após `ST_UNION_AGG`.
 
+Fingerprint canônico aceito do conteúdo do audit #6:
+
+`2c718fe0c6f5798430f65eb32a9bb9a9e0b51710ee6de34ce2dd72aac83830cd`
+
 ## Invariantes permanentes
 
 Assim como `analysis_snapshot == map_snapshot`, ficam congeladas as regras:
@@ -89,9 +93,31 @@ Para imóvel sem geometria canônica, mapa/KML/PNG permanecem indisponíveis em 
 Dois sentinelas reais e complementares ficam congelados:
 
 - **Polygon de controle:** `MG-3120904-DFB380BECD7A4323AD8AA68FA14D011F` (Curvelo), snapshot MG `2026-08-04`. Deve continuar `ST_Polygon` antes e depois da normalização e não pode ser marcado como normalizado.
-- **GeometryCollection real:** `SE-2800209-07D88A428D8B4ED5B5647683275F103`, snapshot SE `2026-08-04`. Foi observado no run nacional que revelou o defeito. Deve continuar sendo reconhecido como `ST_GeometryCollection` na origem, produzir geometria renderizável exclusivamente poligonal após a normalização, declarar descarte não poligonal e preservar fingerprints source/render independentes.
+- **GeometryCollection real:** `MG-3100708-4B47889790D4418F8941396E87C461F0`, snapshot MG `2026-08-04`. Deve continuar sendo reconhecido como `ST_GeometryCollection` na origem, produzir geometria renderizável exclusivamente poligonal após a normalização, declarar descarte não poligonal e preservar fingerprints source/render independentes.
+
+### Proveniência obrigatória do sentinela GeometryCollection
+
+O audit geométrico #6 (`run 34519865245`) provou que MG contém **202** CARs `ST_GeometryCollection` após `ST_UNION_AGG` no snapshot canônico `2026-08-04`. O artifact do audit guardou as contagens, mas não os `id_imovel` individuais.
+
+O identificador permanente foi então obtido por consulta autenticada mínima e determinística no `V48 Geometry Sentinel Discovery`, run `34527676691`, usando exatamente a semântica `ST_GEOMETRYTYPE` após `ST_UNION_AGG`, `ORDER BY id_imovel LIMIT 1`. O resultado foi:
+
+`MG-3100708-4B47889790D4418F8941396E87C461F0`
+
+Proveniência congelada:
+
+- source audit run: `34519865245`;
+- source audit content fingerprint: `2c718fe0c6f5798430f65eb32a9bb9a9e0b51710ee6de34ce2dd72aac83830cd`;
+- discovery run: `34527676691`;
+- discovery content fingerprint: `3ab26311d90b56e0d57a40680d3d1c363431810c251c2f7bd99554edb62c2ed1`;
+- regra de seleção: `lexicographically first canonical MG GeometryCollection after ST_UNION_AGG`.
 
 O gate real também deve provar o estado do CAR sem geometria do Maranhão e registrar nominalmente seu `id_imovel`.
+
+## Regra permanente — identificadores de regressão
+
+**Identificador copiado de log não vale como dado canônico.** Logs podem truncar, mascarar, concatenar ou reformatar valores. Um identificador usado como sentinela permanente só é admissível quando tiver sido obtido e validado por consulta estruturada ou artifact verificável, com snapshot, semântica da consulta e proveniência registradas.
+
+O antigo código de SE `SE-2800209-07D88A428D8B4ED5B5647683275F103`, copiado de mensagem de erro de VM, foi rejeitado: a consulta canônica retornou zero linhas e o sufixo não atende ao formato completo de 32 caracteres hexadecimais. Ele não pode voltar a ser usado como sentinela ou evidência cadastral.
 
 ## Evidência e recuperação
 
