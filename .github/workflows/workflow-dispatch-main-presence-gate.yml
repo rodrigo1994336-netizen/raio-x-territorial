@@ -1,0 +1,80 @@
+name: Workflow Dispatch Main Presence Gate
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  enforce-v48-manual-workflow-bootstrap:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout exact pull request head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Fetch current main
+        run: git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+
+      - name: Require V48 workflow_dispatch files on main before work is mixed in
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          import subprocess
+          import sys
+
+          root = Path('.github/workflows')
+          candidates = sorted({*root.glob('v48-*.yml'), *root.glob('v48-*.yaml')})
+          dispatch_re = re.compile(r'(?m)^\s*workflow_dispatch\s*:')
+
+          manual = []
+          for path in candidates:
+              try:
+                  content = path.read_text(encoding='utf-8')
+              except Exception as exc:
+                  raise SystemExit(f'RX_WORKFLOW_DISPATCH_MAIN_GATE=FAIL unreadable={path}:{exc}')
+              if dispatch_re.search(content):
+                  manual.append(path.as_posix())
+
+          missing = []
+          for rel in manual:
+              exists = subprocess.run(
+                  ['git', 'cat-file', '-e', f'origin/main:{rel}'],
+                  stdout=subprocess.DEVNULL,
+                  stderr=subprocess.DEVNULL,
+                  check=False,
+              ).returncode == 0
+              if not exists:
+                  missing.append(rel)
+
+          changed = subprocess.check_output(
+              ['git', 'diff', '--name-only', 'origin/main...HEAD'],
+              text=True,
+          ).splitlines()
+          changed = [x.strip() for x in changed if x.strip()]
+
+          if not missing:
+              print('RX_WORKFLOW_DISPATCH_MAIN_GATE=PASS all_manual_v48_workflows_present_on_main')
+              raise SystemExit(0)
+
+          missing_set = set(missing)
+          changed_set = set(changed)
+          if changed_set == missing_set:
+              print('RX_WORKFLOW_DISPATCH_MAIN_GATE=PASS bootstrap_only')
+              print('RX_WORKFLOW_DISPATCH_BOOTSTRAP_FILES=' + ','.join(sorted(missing_set)))
+              raise SystemExit(0)
+
+          extras = sorted(changed_set - missing_set)
+          print('RX_WORKFLOW_DISPATCH_MAIN_GATE=FAIL manual_v48_workflow_absent_on_main')
+          print('RX_WORKFLOW_DISPATCH_MISSING_ON_MAIN=' + ','.join(sorted(missing_set)))
+          print('RX_WORKFLOW_DISPATCH_MIXED_FILES=' + (','.join(extras) if extras else 'NONE'))
+          print('Create and merge a bootstrap PR containing only the missing workflow YAML(s) before continuing work.')
+          raise SystemExit(1)
+          PY
