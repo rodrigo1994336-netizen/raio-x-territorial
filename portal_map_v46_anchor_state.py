@@ -36,6 +36,15 @@ once(
     "v46_panel_type_render_missing",
 )
 
+# The compact V46 card is the first property-specific panel the customer sees.
+# The dimensional-normalization declaration must therefore be visible there too,
+# but only when the canonical backend actually supplied geometry_notice.
+once(
+    '<div class="rx46-code">${esc(p?.car_code||\'—\')}</div><button type="button" class="rx46-demo"',
+    '<div class="rx46-code">${esc(p?.car_code||\'—\')}</div>${p?.geometry_notice?`<div class="rx-v48-geometry-notice">${esc(p.geometry_notice)}</div>`:\'\'}<button type="button" class="rx46-demo"',
+    "v48_geometry_notice_compact_card_missing",
+)
+
 # The CTA must materialize the truthful V45 shell synchronously from the data
 # already selected on the map. The authoritative /map-panel request remains the
 # asynchronous enrichment path; a slow upstream CAR must not leave the CTA blank.
@@ -99,7 +108,7 @@ once(
 
 html = html.replace(
     "</body>",
-    "<!-- RX_MAP_V46_PANEL_NORMALIZATION -->\n<!-- RX_MAP_V46_CTA_IMMEDIATE_V45 -->\n<!-- RX_MAP_V46_ANCHOR_STATE -->\n<!-- RX_MAP_V46_CLICK_PROPAGATION_GUARD -->\n<!-- RX_MAP_V46_DOM_EMPTY_CLOSE_GUARD -->\n</body>",
+    "<!-- RX_MAP_V46_PANEL_NORMALIZATION -->\n<!-- RX_MAP_V46_CTA_IMMEDIATE_V45 -->\n<!-- RX_MAP_V46_ANCHOR_STATE -->\n<!-- RX_MAP_V46_CLICK_PROPAGATION_GUARD -->\n<!-- RX_MAP_V46_DOM_EMPTY_CLOSE_GUARD -->\n<!-- RX_MAP_V46_GEOMETRY_NOTICE -->\n</body>",
 )
 portal_v8.PORTAL_HTML = html
 
@@ -108,3 +117,4 @@ print("RX_MAP_V46_CTA_IMMEDIATE_V45=local_truth_shell_then_async_enrichment", fl
 print("RX_MAP_V46_ANCHOR_STATE=late_enrichment_never_reopens_closed_card", flush=True)
 print("RX_MAP_V46_CLICK_PROPAGATION=parcel_click_never_closes_anchor", flush=True)
 print("RX_MAP_V46_DOM_EMPTY_CLOSE=bare_map_background_closes_anchor", flush=True)
+print("RX_MAP_V46_GEOMETRY_NOTICE=only_when_canonical_normalization_applied", flush=True)
