@@ -13,7 +13,8 @@ EXPECTED_UFS = (
     "PA", "PB", "PR", "PE", "PI", "RJ", "RN", "RS", "RO", "RR", "SC", "SP", "SE", "TO",
 )
 CANONICAL_FP = "25e14900fd0ea92d3ff82cb6f46da24449fb2b3bd233aff215ec8a2b645b64a4"
-SCHEMA = "v48-national-generation-summary-1"
+GEOMETRY_NORMALIZATION_VERSION = "v48-polygonal-extraction-1"
+SCHEMA = "v48-national-generation-summary-2"
 
 
 def parse_rfc3339(value: Any) -> dt.datetime | None:
@@ -65,9 +66,86 @@ def load_results(input_dir: Path) -> dict[str, dict[str, Any]]:
     return {uf: data for uf, (_, data) in selected.items()}
 
 
+def _geometry_evidence(commit: dict[str, Any]) -> dict[str, Any]:
+    source = ((commit.get("run_metrics") or {}).get("source") or {})
+    records = list(source.get("normalization_records") or [])
+    normalized = int(commit.get("normalization_applied_count") or source.get("normalization_applied_count") or 0)
+    no_geometry = int(commit.get("no_geometry_car_count") or source.get("no_geometry_car_count") or 0)
+    no_polygon = int(commit.get("no_polygonal_car_count") or source.get("no_polygonal_car_count") or 0)
+    distinct = int(commit.get("distinct_car_count") or source.get("distinct_car_count") or 0)
+    features = int(commit.get("feature_count") or source.get("feature_count") or 0)
+
+    valid = (
+        commit.get("analysis_geometry_normalization") == GEOMETRY_NORMALIZATION_VERSION
+        and commit.get("map_geometry_normalization") == GEOMETRY_NORMALIZATION_VERSION
+        and bool(commit.get("source_geometry_set_fingerprint_sha256"))
+        and bool(commit.get("render_geometry_set_fingerprint_sha256"))
+        and distinct > 0
+        and features + no_geometry + no_polygon == distinct
+        and len(records) == normalized
+    )
+
+    line_components = 0
+    line_length_m = 0.0
+    point_components = 0
+    area_before_m2 = 0.0
+    area_after_m2 = 0.0
+    area_difference_m2 = 0.0
+    normalized_ids: list[str] = []
+    for record in records:
+        car = str(record.get("car_code") or "")
+        if not car:
+            valid = False
+            continue
+        normalized_ids.append(car)
+        line_components += int(record.get("discarded_line_components") or 0)
+        line_length_m += float(record.get("discarded_line_length_m") or 0.0)
+        point_components += int(record.get("discarded_point_components") or 0)
+        before = float(record.get("polygon_area_before_m2") or 0.0)
+        after = float(record.get("polygon_area_after_m2") or 0.0)
+        difference = float(record.get("polygon_area_difference_m2") or 0.0)
+        tolerance = float(record.get("polygon_area_tolerance_m2") or 0.0)
+        area_before_m2 += before
+        area_after_m2 += after
+        area_difference_m2 += difference
+        if difference > tolerance:
+            valid = False
+        if not record.get("source_geometry_fingerprint") or not record.get("render_geometry_fingerprint"):
+            valid = False
+    if len(set(normalized_ids)) != len(normalized_ids):
+        valid = False
+
+    no_geometry_ids = list(commit.get("no_geometry_car_ids") or source.get("no_geometry_car_ids") or [])
+    no_polygon_ids = list(commit.get("no_polygonal_car_ids") or source.get("no_polygonal_car_ids") or [])
+    if len(no_geometry_ids) != no_geometry or len(no_polygon_ids) != no_polygon:
+        valid = False
+
+    return {
+        "valid": valid,
+        "normalization_version": commit.get("analysis_geometry_normalization"),
+        "source_geometry_set_fingerprint_sha256": commit.get("source_geometry_set_fingerprint_sha256"),
+        "render_geometry_set_fingerprint_sha256": commit.get("render_geometry_set_fingerprint_sha256"),
+        "distinct_car_count": distinct,
+        "feature_count": features,
+        "normalization_applied_count": normalized,
+        "normalized_car_ids": normalized_ids,
+        "no_geometry_car_count": no_geometry,
+        "no_geometry_car_ids": no_geometry_ids,
+        "no_polygonal_car_count": no_polygon,
+        "no_polygonal_car_ids": no_polygon_ids,
+        "discarded_line_components": line_components,
+        "discarded_line_length_m": round(line_length_m, 6),
+        "discarded_point_components": point_components,
+        "normalized_polygon_area_before_m2": round(area_before_m2, 6),
+        "normalized_polygon_area_after_m2": round(area_after_m2, 6),
+        "normalized_polygon_area_difference_m2": round(area_difference_m2, 9),
+        "normalization_records": records,
+    }
+
+
 def uf_summary(uf: str, result: dict[str, Any] | None) -> dict[str, Any]:
     if not result:
-        return {"uf": uf, "status": "missing_result", "published": False}
+        return {"uf": uf, "status": "missing_result", "published": False, "geometry_evidence_valid": False}
     status = str(result.get("status") or "failed")
     commit = result.get("commit") or {}
     batch = result.get("batch") or {}
@@ -75,10 +153,12 @@ def uf_summary(uf: str, result: dict[str, Any] | None) -> dict[str, Any]:
     source = metrics.get("source") or {}
     tippecanoe = metrics.get("tippecanoe") or {}
     pmtiles = commit.get("pmtiles") or {}
-    published = status == "success" and commit.get("status") == "committed"
+    geometry = _geometry_evidence(commit) if commit else {"valid": False}
+    structurally_published = status == "success" and commit.get("status") == "committed"
+    published = structurally_published and bool(geometry.get("valid"))
     return {
         "uf": uf,
-        "status": status,
+        "status": status if published else ("geometry_evidence_invalid" if structurally_published else status),
         "published": published,
         "snapshot": result.get("snapshot") or commit.get("snapshot_date"),
         "publication_state": result.get("publication_state"),
@@ -103,6 +183,8 @@ def uf_summary(uf: str, result: dict[str, Any] | None) -> dict[str, Any]:
         "batch_update_time": batch.get("update_time"),
         "recovery_mode": (commit.get("recovery") or {}).get("mode"),
         "original_run_metrics_available": (commit.get("recovery") or {}).get("original_run_metrics_available"),
+        "geometry_evidence_valid": bool(geometry.get("valid")),
+        "geometry": geometry,
         "error": result.get("error"),
     }
 
@@ -122,6 +204,25 @@ def main(input_dir: Path, output: Path) -> dict[str, Any]:
     starts = [x for x in starts if x is not None]
     ends = [x for x in ends if x is not None]
     wall_seconds = (max(ends) - min(starts)).total_seconds() if starts and ends else None
+
+    geometries = [item.get("geometry") or {} for item in published]
+    national_geometry = {
+        "normalization_version": GEOMETRY_NORMALIZATION_VERSION,
+        "distinct_car_count": sum(int(g.get("distinct_car_count") or 0) for g in geometries),
+        "feature_count": sum(int(g.get("feature_count") or 0) for g in geometries),
+        "normalization_applied_count": sum(int(g.get("normalization_applied_count") or 0) for g in geometries),
+        "no_geometry_car_count": sum(int(g.get("no_geometry_car_count") or 0) for g in geometries),
+        "no_geometry_car_ids": [car for g in geometries for car in (g.get("no_geometry_car_ids") or [])],
+        "no_polygonal_car_count": sum(int(g.get("no_polygonal_car_count") or 0) for g in geometries),
+        "no_polygonal_car_ids": [car for g in geometries for car in (g.get("no_polygonal_car_ids") or [])],
+        "discarded_line_components": sum(int(g.get("discarded_line_components") or 0) for g in geometries),
+        "discarded_line_length_m": round(sum(float(g.get("discarded_line_length_m") or 0.0) for g in geometries), 6),
+        "discarded_point_components": sum(int(g.get("discarded_point_components") or 0) for g in geometries),
+        "normalized_polygon_area_before_m2": round(sum(float(g.get("normalized_polygon_area_before_m2") or 0.0) for g in geometries), 6),
+        "normalized_polygon_area_after_m2": round(sum(float(g.get("normalized_polygon_area_after_m2") or 0.0) for g in geometries), 6),
+        "normalized_polygon_area_difference_m2": round(sum(float(g.get("normalized_polygon_area_difference_m2") or 0.0) for g in geometries), 9),
+    }
+
     payload = {
         "schema_version": SCHEMA,
         "canonical_manifest_fingerprint": CANONICAL_FP,
@@ -132,6 +233,8 @@ def main(input_dir: Path, output: Path) -> dict[str, Any]:
         "published_ufs": len(published),
         "failed_ufs": failed,
         "all_27_published": len(published) == 27,
+        "geometry_evidence_all_published_ufs_valid": all(item.get("geometry_evidence_valid") for item in published),
+        "geometry": national_geometry,
         "totals": {
             "pmtiles_size_bytes": pmtiles_total,
             "bigquery_processed_bytes": bq_processed_total,
@@ -150,6 +253,15 @@ def main(input_dir: Path, output: Path) -> dict[str, Any]:
     print(f"RX_V48_NATIONAL_FAILED_UFS={','.join(failed) if failed else 'NONE'}")
     print(f"RX_V48_NATIONAL_PMTILES_TOTAL_BYTES={pmtiles_total}")
     print(f"RX_V48_NATIONAL_BQ_BILLED_TOTAL_BYTES={bq_billed_total}")
+    print(f"RX_V48_NATIONAL_NORMALIZED_CARS={national_geometry['normalization_applied_count']}")
+    print(f"RX_V48_NATIONAL_NO_GEOMETRY_CARS={national_geometry['no_geometry_car_count']}")
+    print(f"RX_V48_NATIONAL_NO_POLYGON_CARS={national_geometry['no_polygonal_car_count']}")
+    print(f"RX_V48_NATIONAL_DISCARDED_LINES={national_geometry['discarded_line_components']}")
+    print(f"RX_V48_NATIONAL_DISCARDED_LINE_LENGTH_M={national_geometry['discarded_line_length_m']}")
+    print(f"RX_V48_NATIONAL_DISCARDED_POINTS={national_geometry['discarded_point_components']}")
+    print(f"RX_V48_NATIONAL_NORMALIZED_AREA_BEFORE_M2={national_geometry['normalized_polygon_area_before_m2']}")
+    print(f"RX_V48_NATIONAL_NORMALIZED_AREA_AFTER_M2={national_geometry['normalized_polygon_area_after_m2']}")
+    print(f"RX_V48_NATIONAL_NORMALIZED_AREA_DIFFERENCE_M2={national_geometry['normalized_polygon_area_difference_m2']}")
     print(f"RX_V48_NATIONAL_BATCH_SECONDS_SUM_KNOWN={round(sum(batch_seconds_known), 3)}")
     print(f"RX_V48_NATIONAL_WALL_SECONDS={round(wall_seconds, 3) if wall_seconds is not None else 'NA'}")
     print(f"RX_V48_NATIONAL_ALL_27_PUBLISHED={'YES' if len(published) == 27 else 'NO'}")
