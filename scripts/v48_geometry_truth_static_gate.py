@@ -36,6 +36,7 @@ def main() -> None:
         "portal_car_snapshot_ui_v48.py",
         "portal_map_v46_anchor_state.py",
         "scripts/v48_national_worker.py",
+        "scripts/v48_geometry_truth_real_gate.py",
     )
     for path in paths:
         compile_source(path)
@@ -44,7 +45,25 @@ def main() -> None:
     require(contract.AREA_ABSOLUTE_TOLERANCE_M2 == 0.01, "absolute area tolerance drift")
     require(contract.AREA_RELATIVE_TOLERANCE == 1e-9, "relative area tolerance drift")
     require(contract.CURVELO_POLYGON_REGRESSION_CAR == "MG-3120904-DFB380BECD7A4323AD8AA68FA14D011F", "Curvelo sentinel drift")
-    require(contract.GEOMETRYCOLLECTION_REGRESSION_CAR == "SE-2800209-07D88A428D8B4ED5B5647683275F103", "real GeometryCollection sentinel drift")
+    require(contract.GEOMETRYCOLLECTION_REGRESSION_UF == "MG", "real GeometryCollection sentinel UF drift")
+    require(contract.GEOMETRYCOLLECTION_REGRESSION_CAR == "MG-3100708-4B47889790D4418F8941396E87C461F0", "real GeometryCollection sentinel drift")
+    require(contract.GEOMETRYCOLLECTION_REGRESSION_SNAPSHOT == "2026-08-04", "real GeometryCollection snapshot drift")
+    require(contract.GEOMETRYCOLLECTION_SENTINEL_SOURCE_AUDIT_RUN_ID == 34519865245, "sentinel source audit run drift")
+    require(
+        contract.GEOMETRYCOLLECTION_SENTINEL_SOURCE_AUDIT_FINGERPRINT
+        == "2c718fe0c6f5798430f65eb32a9bb9a9e0b51710ee6de34ce2dd72aac83830cd",
+        "sentinel source audit fingerprint drift",
+    )
+    require(contract.GEOMETRYCOLLECTION_SENTINEL_DISCOVERY_RUN_ID == 34527676691, "sentinel discovery run drift")
+    require(
+        contract.GEOMETRYCOLLECTION_SENTINEL_DISCOVERY_FINGERPRINT
+        == "3ab26311d90b56e0d57a40680d3d1c363431810c251c2f7bd99554edb62c2ed1",
+        "sentinel discovery fingerprint drift",
+    )
+    provenance = contract.geometrycollection_sentinel_provenance()
+    require(provenance.get("source_audit_run_id") == 34519865245, "sentinel provenance audit run missing")
+    require("authenticated canonical BigQuery query" in str(provenance.get("identifier_source")), "sentinel query provenance missing")
+    require("never copied from log output" in str(provenance.get("identifier_source")), "log identifier prohibition missing")
     require(
         contract.NORMALIZATION_USER_NOTICE
         == "A geometria publicada para este imóvel contém elementos que não são área (linhas ou pontos). O Raio-X considera apenas a parte poligonal.",
@@ -118,6 +137,11 @@ def main() -> None:
     require("normalized_polygon_area_before_m2" in finalizer and "normalized_polygon_area_after_m2" in finalizer, "national area normalization totals missing")
     require("discarded_line_length_m" in finalizer and "discarded_point_components" in finalizer, "national dimensional discard totals missing")
 
+    real_gate = text("scripts/v48_geometry_truth_real_gate.py")
+    require("geometrycollection_sentinel_provenance" in real_gate, "real gate does not persist sentinel provenance")
+    require("GEOMETRYCOLLECTION_REGRESSION_UF" in real_gate, "real gate hardcodes stale GeometryCollection UF")
+    require("SE-2800209-07D88A428D8B4ED5B5647683275F103" not in real_gate, "invalid log-derived sentinel remains in real gate")
+
     config = json.loads(text("config/v48_uf_orchestration_contract.json"))
     require(config.get("geometryNormalizationVersion") == contract.NORMALIZATION_VERSION, "config normalization version mismatch")
     require(
@@ -178,7 +202,11 @@ def main() -> None:
         "discarded_nonpolygon_components": True,
         "normalization_applied": True,
     })
-    feature, parts, state, audit = worker.row_to_feature(mixed, "SE", contract.GEOMETRYCOLLECTION_REGRESSION_SNAPSHOT)
+    feature, parts, state, audit = worker.row_to_feature(
+        mixed,
+        contract.GEOMETRYCOLLECTION_REGRESSION_UF,
+        contract.GEOMETRYCOLLECTION_REGRESSION_SNAPSHOT,
+    )
     require(feature is not None and state is None and audit is not None, "GeometryCollection normalized path regression")
     require(feature["properties"]["geometry_normalized"] is True, "normalized feature flag missing")
     require(audit.get("source_geometry_fingerprint") != audit.get("render_geometry_fingerprint"), "dual sentinel fingerprints collapsed")
@@ -186,6 +214,8 @@ def main() -> None:
     print("RX_V48_GEOMETRY_TRUTH_STATIC_GATE=PASS")
     print(f"RX_V48_POLYGON_SENTINEL={contract.CURVELO_POLYGON_REGRESSION_CAR}")
     print(f"RX_V48_GEOMETRYCOLLECTION_SENTINEL={contract.GEOMETRYCOLLECTION_REGRESSION_CAR}")
+    print(f"RX_V48_GEOMETRYCOLLECTION_SENTINEL_SOURCE_AUDIT_RUN={contract.GEOMETRYCOLLECTION_SENTINEL_SOURCE_AUDIT_RUN_ID}")
+    print(f"RX_V48_GEOMETRYCOLLECTION_SENTINEL_SOURCE_AUDIT_FINGERPRINT={contract.GEOMETRYCOLLECTION_SENTINEL_SOURCE_AUDIT_FINGERPRINT}")
     print("RX_V48_NATIONAL_GENERATION_AUTHORIZED=NO")
 
 
