@@ -1,36 +1,49 @@
 from __future__ import annotations
 
-"""V47 hardening for CAR x CAR overlap.
+"""V47/V48 hardening for CAR x CAR overlap.
 
-Keeps the Block 2 engine isolated while ensuring duplicate geometries for the
-same CAR/snapshot are unioned before any spatial intersection is evaluated.
-The patch is intentionally narrow: only ``sicar_integrity_v47._overlap_sql``
-is replaced.
+Every CAR is unioned at the canonical snapshot and then passes through the same
+versioned polygonal normalization used by the map/export worker.  Neither the
+target nor its neighbours may use an independent raw-geometry path.
 """
 
 import sicar_integrity_v47 as sicar
+import sicar_geometry_normalization_v48 as geometry_contract
 
 
 def _overlap_sql_hardened() -> str:
     return f"""
-    WITH target AS (
-      SELECT ST_UNION_AGG(geometria) AS geometria
+    WITH source_rows AS (
+      SELECT id_imovel, geometria
       FROM `{sicar.DATASET}.area_imovel`
       WHERE sigla_uf=@uf AND data_extracao=@snapshot
-        AND id_imovel=@car_code AND geometria IS NOT NULL
-    ), others AS (
-      SELECT id_imovel, ST_UNION_AGG(geometria) AS geometria
-      FROM `{sicar.DATASET}.area_imovel`
-      WHERE sigla_uf=@uf AND data_extracao=@snapshot
-        AND id_imovel!=@car_code AND geometria IS NOT NULL
+    ), per_car_source AS (
+      SELECT id_imovel,
+             COUNT(*) AS source_row_count,
+             COUNTIF(geometria IS NOT NULL) AS geometry_row_count,
+             ST_UNION_AGG(geometria) AS source_geometry
+      FROM source_rows
       GROUP BY id_imovel
+    )
+    {geometry_contract.normalization_ctes('per_car_source')}
+    , target AS (
+      SELECT render_geometry AS geometria
+      FROM normalized_geometry_metrics
+      WHERE id_imovel=@car_code
+        AND render_geometry IS NOT NULL
+        AND polygon_area_difference_m2 <= polygon_area_tolerance_m2
+    ), others AS (
+      SELECT id_imovel, render_geometry AS geometria
+      FROM normalized_geometry_metrics
+      WHERE id_imovel!=@car_code
+        AND render_geometry IS NOT NULL
+        AND polygon_area_difference_m2 <= polygon_area_tolerance_m2
     ), hits AS (
       SELECT other.id_imovel,
              ST_INTERSECTION(target.geometria, other.geometria) AS inter
       FROM target
       JOIN others AS other
-        ON target.geometria IS NOT NULL
-       AND ST_INTERSECTS(target.geometria, other.geometria)
+        ON ST_INTERSECTS(target.geometria, other.geometria)
       WHERE ST_AREA(ST_INTERSECTION(target.geometria, other.geometria)) > 0
     )
     SELECT COUNT(*) AS distinct_car_count,
@@ -41,12 +54,14 @@ def _overlap_sql_hardened() -> str:
 
 def apply() -> None:
     sql = _overlap_sql_hardened()
-    assert "SELECT ST_UNION_AGG(geometria) AS geometria" in sql
-    assert "others AS" in sql and "GROUP BY id_imovel" in sql
-    assert "id_imovel!=@car_code" in sql
-    assert "ST_AREA(ST_INTERSECTION(target.geometria, other.geometria)) > 0" in sql
+    upper = sql.upper()
+    assert "ST_UNION_AGG(GEOMETRIA) AS SOURCE_GEOMETRY" in upper
+    assert "ST_DUMP(SOURCE_GEOMETRY, 2)" in upper
+    assert "RENDER_GEOMETRY AS GEOMETRIA" in upper
+    assert "ID_IMOVEL!=@CAR_CODE" in upper
+    assert "ST_AREA(ST_INTERSECTION(TARGET.GEOMETRIA, OTHER.GEOMETRIA)) > 0" in upper
     sicar._overlap_sql = _overlap_sql_hardened
 
 
 apply()
-print("RX_SICAR_OVERLAP_HARDENING_V47=duplicate_geometries_unioned", flush=True)
+print("RX_SICAR_OVERLAP_HARDENING_V48=both_sides_canonical_normalized", flush=True)
