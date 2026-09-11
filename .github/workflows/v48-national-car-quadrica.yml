@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       confirmation:
-        description: 'Digite GENERATE_27_UFS para autorizar os 27 jobs por UF'
+        description: 'Digite GENERATE_27_UFS ou GENERATE_MISSING_9'
         required: true
         type: string
 
@@ -31,8 +31,11 @@ jobs:
         env:
           CONFIRMATION: ${{ inputs.confirmation }}
         run: |
-          test "$CONFIRMATION" = 'GENERATE_27_UFS' || { echo 'RX_V48_NATIONAL_AUTHORIZATION=REJECTED'; exit 2; }
-          echo 'RX_V48_NATIONAL_AUTHORIZATION=ACCEPTED'
+          case "$CONFIRMATION" in
+            GENERATE_27_UFS) echo 'RX_V48_NATIONAL_AUTHORIZATION=ACCEPTED scope=FULL_27' ;;
+            GENERATE_MISSING_9) echo 'RX_V48_NATIONAL_AUTHORIZATION=ACCEPTED scope=MISSING_9 targets=AC,BA,GO,MA,MG,PA,RS,SC,SP' ;;
+            *) echo 'RX_V48_NATIONAL_AUTHORIZATION=REJECTED'; exit 2 ;;
+          esac
 
       - name: Compile every Python script before any paid compute
         run: python -m compileall -q scripts
@@ -55,6 +58,7 @@ jobs:
     env:
       GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
       GOOGLE_CLOUD_PROJECT: ${{ secrets.GCP_PROJECT_ID }}
+      RX_V48_CONFIRMATION: ${{ inputs.confirmation }}
     steps:
       - uses: actions/checkout@v4
 
@@ -83,7 +87,13 @@ jobs:
         run: pip install --disable-pip-version-check google-auth requests google-cloud-storage
 
       - name: Submit, observe and verify exactly one UF
-        run: python scripts/v48_national_batch_submit.py --uf '${{ matrix.uf }}'
+        shell: bash
+        run: |
+          if [ "$RX_V48_CONFIRMATION" = 'GENERATE_MISSING_9' ]; then
+            python scripts/v48_national_batch_submit.py --uf '${{ matrix.uf }}' --missing-only
+          else
+            python scripts/v48_national_batch_submit.py --uf '${{ matrix.uf }}'
+          fi
 
       - name: Upload immutable UF execution evidence
         if: always()

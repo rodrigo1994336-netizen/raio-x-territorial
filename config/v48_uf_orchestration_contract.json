@@ -17,7 +17,7 @@
   "batchRegion": "us-central1",
   "machineType": "e2-standard-8",
   "provisioningModel": "SPOT",
-  "maxRetryCount": 0,
+  "maxRetryCount": 3,
   "oneBatchJobPerUf": true,
   "maxRunDurationSeconds": 14400,
   "bigQuery": {
@@ -30,7 +30,7 @@
     "failFast": false,
     "maxParallel": 3,
     "reason": "Observed project quota has 32 global CPU vCPUs; three e2-standard-8 jobs consume 24 vCPUs and leave 8 vCPUs of static headroom. Current CPU usage was not measured.",
-    "rerunMode": "failed_jobs_only"
+    "rerunMode": "missing_only_complete_reused_guarded"
   },
   "publicationRoot": "car/national/25e14900fd0ea92d3ff82cb6f46da24449fb2b3bd233aff215ec8a2b645b64a4",
   "publicationProtocol": [
@@ -43,5 +43,20 @@
   "activeJsonMutationAllowed": false,
   "nationalSnapshotGate": "APPROVED_PER_UF_CANONICAL_MANIFEST_2026_09_09",
   "paidComputeWorkflowTrigger": "workflow_dispatch_only",
-  "historicalEsPilotMustRemainUntouched": true
+  "historicalEsPilotMustRemainUntouched": true,
+  "retryPolicy": {
+    "action": "RETRY_TASK",
+    "exitCodes": [
+      50001,
+      50002,
+      50003,
+      50004,
+      50006
+    ],
+    "excludedExitCodes": [
+      50005
+    ],
+    "attemptsTotalMax": 4,
+    "deterministicWorkerFailure": "FAIL_FIRST_ATTEMPT"
+  }
 }

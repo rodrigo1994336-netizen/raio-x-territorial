@@ -35,6 +35,9 @@ TIPPECANOE_URL = f"https://github.com/felt/tippecanoe/archive/refs/tags/{TIPPECA
 TERMINAL_STATES = {"SUCCEEDED", "FAILED", "DELETION_IN_PROGRESS"}
 POLL_SECONDS = 20
 MAX_WAIT_SECONDS = 15_000
+MAX_RETRY_COUNT = 3
+RETRYABLE_INFRA_EXIT_CODES = (50001, 50002, 50003, 50004, 50006)
+MISSING_ONLY_UFS = {"AC", "BA", "GO", "MA", "MG", "PA", "RS", "SC", "SP"}
 OUT_ROOT = REPO_ROOT / "artifacts" / "national"
 PUBLICATION_ROOT = f"car/national/{CANONICAL_FP}"
 DIAGNOSTIC_ROOT = "diagnostics"
@@ -434,7 +437,8 @@ def build_job(*, uf: str, snapshot: str, expected_source_fingerprint: str, run_i
             "taskSpec": {
                 "runnables": [{"script": {"text": script_text}}],
                 "computeResource": {"cpuMilli": "8000", "memoryMib": "30000"},
-                "maxRetryCount": 0,
+                "maxRetryCount": MAX_RETRY_COUNT,
+                "lifecyclePolicies": [{"action": "RETRY_TASK", "actionCondition": {"exitCodes": list(RETRYABLE_INFRA_EXIT_CODES)}}],
                 "maxRunDuration": "14400s",
                 "volumes": [{"deviceName": "rxv48", "mountPath": "/mnt/disks/rxv48", "mountOptions": ["rw", "async"]}],
             },
@@ -444,7 +448,7 @@ def build_job(*, uf: str, snapshot: str, expected_source_fingerprint: str, run_i
             "serviceAccount": {"email": RUNTIME_SA, "scopes": ["https://www.googleapis.com/auth/cloud-platform"]},
         },
         "logsPolicy": {"destination": "CLOUD_LOGGING"},
-        "labels": {"rx-phase": "v48-national-car", "rx-uf": uf.lower(), "rx-canonical": CANONICAL_FP[:12], "rx-retry": "zero"},
+        "labels": {"rx-phase": "v48-national-car", "rx-uf": uf.lower(), "rx-canonical": CANONICAL_FP[:12], "rx-retry": "infra-selective-3"},
     }
 
 
@@ -484,6 +488,34 @@ def poll_batch(session: Any, jid: str) -> tuple[dict[str, Any], list[dict[str, s
             die("batch_observation_timeout")
         time.sleep(POLL_SECONDS)
 
+
+def task_url(jid: str) -> str:
+    return f"{batch_url(jid)}/taskGroups/group0/tasks/0"
+
+def fetch_task(session: Any, jid: str) -> dict[str, Any]:
+    status, body = request_json(session, "GET", task_url(jid))
+    if status != 200:
+        die(f"batch_task_get_http_{status}:{str(body)[:1500]}")
+    return body
+
+def task_attempt_evidence(task: dict[str, Any]) -> list[dict[str, Any]]:
+    attempts: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    for event in ((task.get("status") or {}).get("statusEvents") or []):
+        desc = str(event.get("description") or "")
+        m = re.search(r"zones/([^/]+)/instances/([0-9]+)", desc)
+        if not m:
+            continue
+        key = m.group(2)
+        if key not in attempts:
+            attempts[key] = {"attempt": len(order), "zone": m.group(1), "instance_id": key, "exit_code": None, "events": []}
+            order.append(key)
+        x = attempts[key]
+        ex = re.search(r"exit code ([0-9]+)", desc)
+        if ex:
+            x["exit_code"] = int(ex.group(1))
+        x["events"].append({"event_time": event.get("eventTime"), "task_state": event.get("taskState"), "description": desc})
+    return [attempts[k] for k in order]
 
 def terminal_detail(job: dict[str, Any]) -> dict[str, Any]:
     status = job.get("status") or {}
@@ -540,7 +572,7 @@ def write_out(uf: str, payload: dict[str, Any]) -> Path:
     return path
 
 
-def execute(uf: str) -> dict[str, Any]:
+def execute(uf: str, *, missing_only: bool = False) -> dict[str, Any]:
     import google.auth
     from google.auth.transport.requests import AuthorizedSession
 
@@ -549,7 +581,10 @@ def execute(uf: str) -> dict[str, Any]:
     session = AuthorizedSession(credentials)
     preflight = publication_preflight(session, uf=uf, snapshot=snapshot, expected_rows=expected_rows)
     if preflight["state"] == "COMPLETE_REUSED":
-        return {"schema_version": "v48-national-uf-result-1", "status": "success", "uf": uf, "snapshot": snapshot, "publication_state": "COMPLETE_REUSED", "batch": None, "commit": preflight["commit"]}
+        print(f"RX_V48_NATIONAL_REUSE=COMPLETE_REUSED uf={uf} no_batch=true no_tippecanoe=true no_bigquery=true")
+        return {"schema_version": "v48-national-uf-result-1", "status": "success", "uf": uf, "snapshot": snapshot, "publication_state": "COMPLETE_REUSED", "reuse_proof": {"no_batch": True, "no_tippecanoe": True, "no_bigquery": True}, "batch": None, "commit": preflight["commit"]}
+    if missing_only and uf not in MISSING_ONLY_UFS:
+        die(f"missing_only_non_target_not_reused:{uf}")
     if preflight["state"] == "RECONCILE_MANIFEST_ONLY":
         commit = reconcile_manifest(preflight)
         validate_commit(commit, uf=uf, snapshot=snapshot, expected_rows=expected_rows)
@@ -562,7 +597,9 @@ def execute(uf: str) -> dict[str, Any]:
     disposition = create_or_reuse_batch(session, jid=jid, payload=payload)
     job, observations = poll_batch(session, jid)
     detail = terminal_detail(job)
-    batch = {"job_id": jid, "region": REGION, "disposition": disposition, "observations": observations, **detail}
+    task = fetch_task(session, jid)
+    attempts = task_attempt_evidence(task)
+    batch = {"job_id": jid, "region": REGION, "disposition": disposition, "observations": observations, "max_retry_count": MAX_RETRY_COUNT, "retryable_infra_exit_codes": list(RETRYABLE_INFRA_EXIT_CODES), "task_attempts": attempts, "attempts_total": len(attempts), "retry_count_observed": max(0, len(attempts)-1), "task_status_events": ((task.get("status") or {}).get("statusEvents") or []), **detail}
     if detail["state"] != "SUCCEEDED":
         diagnostic = fetch_diagnostic_log(session, run_id=run_id, uf=uf)
         return {"schema_version": "v48-national-uf-result-1", "status": "failed", "uf": uf, "snapshot": snapshot, "publication_state": "BUILD_FAILED", "batch": batch, "diagnostic": diagnostic, "commit": None}
@@ -575,6 +612,7 @@ def cli() -> None:
     parser.add_argument("--uf")
     parser.add_argument("--import-check", action="store_true")
     parser.add_argument("--package-check", action="store_true")
+    parser.add_argument("--missing-only", action="store_true")
     args = parser.parse_args()
     if args.package_check:
         package_delivery_gate()
@@ -593,7 +631,7 @@ def cli() -> None:
         die(f"invalid_uf:{uf}")
     result: dict[str, Any]
     try:
-        result = execute(uf)
+        result = execute(uf, missing_only=args.missing_only)
     except Exception as exc:
         result = {"schema_version": "v48-national-uf-result-1", "status": "failed", "uf": uf, "error": f"{type(exc).__name__}:{exc}", "recorded_at": utcnow()}
         write_out(uf, result)

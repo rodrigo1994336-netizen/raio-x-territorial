@@ -78,11 +78,14 @@ def main() -> None:
     require(config.get("batchRegion") == "us-central1", "national Batch region must be us-central1")
     require(config.get("machineType") == "e2-standard-8", "machine type mismatch")
     require(config.get("provisioningModel") == "SPOT", "provisioning must be Spot")
-    require(config.get("maxRetryCount") == 0, "Batch retries must be zero")
+    require(config.get("maxRetryCount") == 3, "Batch retries must be exactly three")
+    retry = config.get("retryPolicy") or {}
+    require(retry.get("action") == "RETRY_TASK" and retry.get("exitCodes") == [50001,50002,50003,50004,50006], "selective infra retry policy mismatch")
+    require(retry.get("excludedExitCodes") == [50005] and retry.get("attemptsTotalMax") == 4, "retry exclusion/attempt ceiling mismatch")
     require(config.get("oneBatchJobPerUf") is True, "one Batch job per UF invariant missing")
     matrix = config.get("githubMatrix") or {}
     require(matrix.get("failFast") is False and matrix.get("maxParallel") == 3, "matrix must be fail-fast false / maxParallel 3")
-    require(matrix.get("rerunMode") == "failed_jobs_only", "isolated rerun contract missing")
+    require(matrix.get("rerunMode") == "missing_only_complete_reused_guarded", "missing-only reuse contract missing")
     bq = config.get("bigQuery") or {}
     require(bq.get("maximumBytesBilledPerUf") == 2 * 1024**3, "per-UF BigQuery guard must be 2 GiB")
     require(bq.get("exactSnapshotOnly") is True and bq.get("latestFallbackAllowed") is False, "snapshot fallback must be disabled")
@@ -130,7 +133,12 @@ def main() -> None:
     require('REGION = "us-central1"' in submit, "submitter must use us-central1")
     require('"machineType": "e2-standard-8"' in submit, "submitter machine mismatch")
     require('"provisioningModel": "SPOT"' in submit, "submitter Spot invariant missing")
-    require('"maxRetryCount": 0' in submit, "submitter retry count must be zero")
+    require('"maxRetryCount": MAX_RETRY_COUNT' in submit and 'MAX_RETRY_COUNT = 3' in submit, "submitter retry ceiling must be three")
+    require('RETRYABLE_INFRA_EXIT_CODES = (50001, 50002, 50003, 50004, 50006)' in submit, "selective infra exit-code allowlist missing")
+    require('"action": "RETRY_TASK"' in submit and '"lifecyclePolicies"' in submit, "Batch lifecycle retry policy missing")
+    require('50005' not in submit.split('RETRYABLE_INFRA_EXIT_CODES =',1)[1].split('\n',1)[0], "50005 must not be retried")
+    require('RX_V48_NATIONAL_REUSE=COMPLETE_REUSED' in submit and 'no_batch=true no_tippecanoe=true no_bigquery=true' in submit, "explicit COMPLETE_REUSED proof marker missing")
+    require('task_attempt_evidence' in submit and '"zone"' in submit and '"retry_count_observed"' in submit, "attempt zone/retry evidence missing")
     require('"maxRunDuration": "14400s"' in submit, "Batch max duration mismatch")
     require("RECONCILE_MANIFEST_ONLY" in submit and "orphan_pmtiles_without_receipt_cannot_be_reconciled" in submit, "recovery paths missing")
     require("active.json" not in submit, "submitter must not touch active.json")
@@ -165,6 +173,9 @@ def main() -> None:
     for uf in sorted(EXPECTED_UFS):
         require(re.search(rf"\b{uf}\b", workflow) is not None, f"workflow matrix missing UF:{uf}")
     require("GENERATE_27_UFS" in workflow, "explicit national confirmation token missing")
+    require("GENERATE_MISSING_9" in workflow and "--missing-only" in workflow, "missing-only workflow token/path missing")
+    for uf in ("AC","BA","GO","MA","MG","PA","RS","SC","SP"):
+        require(uf in workflow, f"missing-only target absent:{uf}")
     require("actions/download-artifact@v4" in workflow and "v48_national_finalize.py" in workflow, "real-results finalizer missing")
     require("active.json" not in workflow, "workflow must not mutate active.json")
 

@@ -192,6 +192,11 @@ def uf_summary(uf: str, result: dict[str, Any] | None) -> dict[str, Any]:
         "batch_run_seconds": duration_seconds(batch.get("run_duration")),
         "batch_create_time": batch.get("create_time"),
         "batch_update_time": batch.get("update_time"),
+        "max_retry_count": batch.get("max_retry_count"),
+        "attempts_total": batch.get("attempts_total"),
+        "retry_count_observed": batch.get("retry_count_observed"),
+        "task_attempts": batch.get("task_attempts") or [],
+        "reuse_proof": result.get("reuse_proof"),
         "recovery_mode": (commit.get("recovery") or {}).get("mode"),
         "original_run_metrics_available": (commit.get("recovery") or {}).get("original_run_metrics_available"),
         "geometry_evidence_valid": bool(geometry.get("valid")),
@@ -210,6 +215,8 @@ def main(input_dir: Path, output: Path) -> dict[str, Any]:
     bq_billed_total = sum(int(_none_default(item.get("bigquery_billed_bytes"), 0)) for item in published)
     worker_seconds_total = sum(float(_none_default(item.get("worker_total_seconds"), 0)) for item in published)
     batch_seconds_known = [float(item["batch_run_seconds"]) for item in per_uf if item.get("batch_run_seconds") is not None]
+    retries_total = sum(int(_none_default(item.get("retry_count_observed"), 0)) for item in per_uf)
+    reused_ufs = [item["uf"] for item in per_uf if item.get("publication_state") == "COMPLETE_REUSED"]
     starts = [parse_rfc3339(item.get("batch_create_time")) for item in per_uf]
     ends = [parse_rfc3339(item.get("batch_update_time")) for item in per_uf]
     starts = [x for x in starts if x is not None]
@@ -254,6 +261,8 @@ def main(input_dir: Path, output: Path) -> dict[str, Any]:
             "batch_run_seconds_sum_known": round(sum(batch_seconds_known), 3),
             "batch_run_seconds_known_ufs": len(batch_seconds_known),
             "national_wall_seconds_batch_span": round(wall_seconds, 3) if wall_seconds is not None else None,
+            "retry_count_observed_total": retries_total,
+            "complete_reused_ufs": reused_ufs,
         },
         "per_uf": per_uf,
     }
@@ -274,6 +283,8 @@ def main(input_dir: Path, output: Path) -> dict[str, Any]:
     print(f"RX_V48_NATIONAL_NORMALIZED_AREA_AFTER_M2={national_geometry['normalized_polygon_area_after_m2']}")
     print(f"RX_V48_NATIONAL_NORMALIZED_AREA_DIFFERENCE_M2={national_geometry['normalized_polygon_area_difference_m2']}")
     print(f"RX_V48_NATIONAL_BATCH_SECONDS_SUM_KNOWN={round(sum(batch_seconds_known), 3)}")
+    print(f"RX_V48_NATIONAL_RETRIES_OBSERVED={retries_total}")
+    print(f"RX_V48_NATIONAL_COMPLETE_REUSED_UFS={','.join(reused_ufs) if reused_ufs else 'NONE'}")
     print(f"RX_V48_NATIONAL_WALL_SECONDS={round(wall_seconds, 3) if wall_seconds is not None else 'NA'}")
     print(f"RX_V48_NATIONAL_ALL_27_PUBLISHED={'YES' if len(published) == 27 else 'NO'}")
     return payload
