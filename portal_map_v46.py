@@ -175,7 +175,7 @@ def once(old: str, new: str, error: str) -> None:
 # Errors remain visible.
 once(
     "function setMapState(t){let el=qs('#rxMapState');if(!el){el=document.createElement('div');el.id='rxMapState';el.className='rx-map-state';qs('.main')?.appendChild(el)}if(el)el.textContent=t||''}",
-    "function setMapState(t){const msg=String(t||'');let el=qs('#rxMapState');const keep=!!el&&/^Mostrando \\d+ imóveis\\. Há mais nesta área\\.$/.test(el.textContent||'')&&/^Carregando imóveis rurais\\b/i.test(msg);if(keep)return;const quiet=!msg||/^Aproxime\\b/i.test(msg)||/^Busque um município/i.test(msg)||/imóvel\\(is\\) CAR carregado/i.test(msg)||/imóveis rurais nesta área/i.test(msg)||/aproxime o mapa para ver os imóveis/i.test(msg);if(!el&&!quiet){el=document.createElement('div');el.id='rxMapState';el.className='rx-map-state';qs('.main')?.appendChild(el)}if(!el)return;if(quiet){el.textContent='';return}el.textContent=msg}",
+    "function setMapState(t,truncatedState){const msg=String(t||'');let el=qs('#rxMapState');const legacy=!!el&&/^Mostrando \\d+ imóveis\\. Há mais nesta área\\.$/.test(el.textContent||'');const confirmed=!!el&&(el.dataset.rxTruncated==='1'||legacy);const keep=confirmed&&truncatedState===undefined&&/^Carregando imóveis rurais\\b/i.test(msg);if(keep)return;const quiet=!msg||/^Aproxime\\b/i.test(msg)||/^Busque um município/i.test(msg)||/imóvel\\(is\\) CAR carregado/i.test(msg)||/imóveis rurais nesta área/i.test(msg)||/aproxime o mapa para ver os imóveis/i.test(msg);if(!el&&!quiet){el=document.createElement('div');el.id='rxMapState';el.className='rx-map-state';qs('.main')?.appendChild(el)}if(!el)return;if(truncatedState===true)el.dataset.rxTruncated='1';else if(truncatedState===false||!msg)delete el.dataset.rxTruncated;if(quiet){el.textContent='';return}el.textContent=msg}",
     "v46_map_state_patch_missing",
 )
 
@@ -204,7 +204,7 @@ once(
 # count, never the requested URL limit and never an estimated total.
 once(
     "setMapState(`${d.features?.length||0} imóvel(is) CAR carregado(s) nesta área${d.truncated?' · aproxime para ver mais':''}. Clique em um polígono.`)",
-    "setMapState(d.truncated?`Mostrando ${d.features?.length||0} imóveis. Há mais nesta área.`:'')",
+    "setMapState(d.truncated?`Mostrando ${d.features?.length||0} imóveis. Há mais nesta área.`:'',!!d.truncated)",
     "v48_t_truncation_notice_patch_missing",
 )
 
