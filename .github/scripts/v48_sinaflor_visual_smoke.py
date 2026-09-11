@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
+from datetime import datetime, timezone
 from pathlib import Path
 
 from playwright.async_api import async_playwright
@@ -10,6 +12,7 @@ BASE = "http://127.0.0.1:8000/"
 CAR = "MG-3120904-DFB380BECD7A4323AD8AA68FA14D011F"
 OUT = Path("artifacts-v48-sinaflor")
 VIEWPORTS = ((375, 812, "375"), (768, 900, "768"), (1440, 900, "1440"))
+SINAFLOR_FRESHNESS_DAYS = 45
 ORIGINAL_EIGHT = {
     "embargo": "Embargos",
     "prodes": "PRODES",
@@ -73,7 +76,19 @@ async def open_panel(page):
     return panel
 
 
-async def assert_contract(page, label):
+def _source_data_date_contract(source):
+    raw = str(source.get("data_date") or "").strip()
+    assert re.match(r"^\d{4}-\d{2}-\d{2}", raw), ("sinaflor_data_date_missing_or_unparseable", source)
+    parsed = datetime.strptime(raw[:10], "%Y-%m-%d").date()
+    today = datetime.now(timezone.utc).date()
+    age_days = (today - parsed).days
+    assert -1 <= age_days <= SINAFLOR_FRESHNESS_DAYS, (
+        "sinaflor_data_date_outside_freshness_window", raw, age_days, SINAFLOR_FRESHNESS_DAYS
+    )
+    return parsed.strftime("%d/%m/%Y"), age_days
+
+
+async def assert_contract(page, label, sina_source):
     panel = page.locator(f'.rx45-panel-card[data-car="{CAR}"]')
     text = await panel.inner_text()
     rows = panel.locator('.rx45-check')
@@ -103,7 +118,12 @@ async def assert_contract(page, label):
     assert "territorial ampla" in folded and "não identifica este car" in folded, (label, sina_text)
     assert "o imóvel não foi declarado como autorizado" in folded, (label, sina_text)
     assert "fonte: ibama/pamgia" in folded, (label, sina_text)
-    assert "07/09/2026" in sina_text, (label, sina_text)
+    expected_data_date, data_age_days = _source_data_date_contract(sina_source)
+    displayed_date = re.search(r"\bdado:\s*(\d{2}\/\d{2}\/\d{4})\b", sina_text, re.IGNORECASE)
+    assert displayed_date, (label, "sinaflor_displayed_data_date_missing", sina_text)
+    assert displayed_date.group(1) == expected_data_date, (
+        label, "sinaflor_source_display_date_mismatch", sina_source.get("data_date"), displayed_date.group(1), sina_text
+    )
     assert await sina.get_attribute("data-state") == "checked_spatial_record_unconfirmed", (label, sina_text)
     assert await sina.get_attribute("data-answered") == "1", (label, sina_text)
     assert await sina.locator('.rx45-dot.checked_spatial_record_unconfirmed').count() == 1, (label, sina_text)
@@ -141,7 +161,7 @@ async def assert_contract(page, label):
     assert not geometry.get("missing"), geometry
     assert not geometry.get("clipped"), geometry
     assert geometry["scrollWidth"] <= geometry["clientWidth"] + 1, geometry
-    return {"panel_text": text, "mte_text": mte_text, "sinaflor_text": sina_text, "audit": audit_text, "audit_detail": detail}
+    return {"panel_text": text, "mte_text": mte_text, "sinaflor_text": sina_text, "sinaflor_data_date": sina_source.get("data_date"), "sinaflor_data_age_days": data_age_days, "audit": audit_text, "audit_detail": detail}
 
 
 async def assert_no_visible_error_status(page, label, stage):
@@ -177,8 +197,12 @@ async def run_viewport(browser, width, height, label):
     page.on("console", lambda msg: errors.append(f"console:{msg.type}:{msg.text}") if msg.type == "error" else None)
     await page.goto(BASE, wait_until="domcontentloaded", timeout=30000)
     await wait_runtime(page)
-    await open_panel(page)
-    evidence = await assert_contract(page, label)
+    async with page.expect_response(lambda r: f"/v1/live/conformity/sinaflor/{CAR}" in r.url) as sina_response_info:
+        await open_panel(page)
+    sina_response = await sina_response_info.value
+    assert sina_response.ok, (label, "sinaflor_source_http", sina_response.status)
+    sina_source = await sina_response.json()
+    evidence = await assert_contract(page, label, sina_source)
     assert not errors, errors
 
     await position_conformity(page, "top")
