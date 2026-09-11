@@ -18,6 +18,9 @@ app = portal_v8.app
 _V46_VIEWPORT_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 _V46_VIEWPORT_TTL = 300
 _V46_VIEWPORT_MAX = 180
+# Cache schema bump for V48-T. Old V46 entries without limit/zoom must never
+# collide with post-fix entries, even during overlapping process lifetimes.
+_V46_VIEWPORT_CACHE_SCHEMA = "V48T1"
 
 
 def _snap_bounds(west: float, south: float, east: float, north: float) -> tuple[float, float, float, float, float]:
@@ -73,7 +76,10 @@ async def live_sicar_viewport_v46(
         raise HTTPException(status_code=422, detail="Área visível ampla demais para carregar limites CAR.")
 
     w, s, e, n, step = _snap_bounds(west, south, east, north)
-    auto_key = f"AUTO:{w:.6f}:{s:.6f}:{e:.6f}:{n:.6f}:{step:.4f}"
+    cap = max(1, min(int(limit or 200), 240))
+    zoom_key = str(int(zoom)) if zoom is not None else "NA"
+    key_suffix = f":limit={cap}:zoom={zoom_key}"
+    auto_key = f"{_V46_VIEWPORT_CACHE_SCHEMA}:AUTO:{w:.6f}:{s:.6f}:{e:.6f}:{n:.6f}:{step:.4f}{key_suffix}"
     if not uf:
         hit = _cache_get(auto_key)
         if hit is not None:
@@ -82,7 +88,7 @@ async def live_sicar_viewport_v46(
         center_lon = (w + e) / 2
         uf = await portal_v8.base._reverse_uf(center_lat, center_lon)
     uf = str(uf).upper()
-    key = f"{uf}:{w:.6f}:{s:.6f}:{e:.6f}:{n:.6f}:{step:.4f}"
+    key = f"{_V46_VIEWPORT_CACHE_SCHEMA}:{uf}:{w:.6f}:{s:.6f}:{e:.6f}:{n:.6f}:{step:.4f}{key_suffix}"
     hit = _cache_get(key)
     if hit is not None:
         if auto_key != key:
@@ -131,7 +137,6 @@ async def live_sicar_viewport_v46(
             seen.add(dedupe)
             features.append(feature)
 
-    cap = max(1, min(int(limit or 200), 240))
     if len(features) > cap:
         truncated = True
         features = features[:cap]
@@ -165,10 +170,12 @@ def once(old: str, new: str, error: str) -> None:
     html = html.replace(old, new, 1)
 
 
-# Opening and low-zoom states must be quiet. Loading/errors are still allowed.
+# Opening and low-zoom states must be quiet. A confirmed truncation notice stays
+# visible while the next viewport loads; only the next settled result clears it.
+# Errors remain visible.
 once(
     "function setMapState(t){let el=qs('#rxMapState');if(!el){el=document.createElement('div');el.id='rxMapState';el.className='rx-map-state';qs('.main')?.appendChild(el)}if(el)el.textContent=t||''}",
-    "function setMapState(t){const msg=String(t||'');const quiet=!msg||/^Aproxime\\b/i.test(msg)||/^Busque um município/i.test(msg)||/imóvel\\(is\\) CAR carregado/i.test(msg)||/imóveis rurais nesta área/i.test(msg)||/aproxime o mapa para ver os imóveis/i.test(msg);let el=qs('#rxMapState');if(!el&&!quiet){el=document.createElement('div');el.id='rxMapState';el.className='rx-map-state';qs('.main')?.appendChild(el)}if(!el)return;if(quiet){el.textContent='';return}el.textContent=msg}",
+    "function setMapState(t,truncatedState){const msg=String(t||'');let el=qs('#rxMapState');const legacy=!!el&&/^Mostrando \\d+ imóveis\\. Há mais nesta área\\.$/.test(el.textContent||'');const confirmed=!!el&&(el.dataset.rxTruncated==='1'||legacy);const keep=confirmed&&truncatedState===undefined&&/^Carregando imóveis rurais\\b/i.test(msg);if(keep)return;const quiet=!msg||/^Aproxime\\b/i.test(msg)||/^Busque um município/i.test(msg)||/imóvel\\(is\\) CAR carregado/i.test(msg)||/imóveis rurais nesta área/i.test(msg)||/aproxime o mapa para ver os imóveis/i.test(msg);if(!el&&!quiet){el=document.createElement('div');el.id='rxMapState';el.className='rx-map-state';qs('.main')?.appendChild(el)}if(!el)return;if(truncatedState===true)el.dataset.rxTruncated='1';else if(truncatedState===false||!msg)delete el.dataset.rxTruncated;if(quiet){el.textContent='';return}el.textContent=msg}",
     "v46_map_state_patch_missing",
 )
 
@@ -191,6 +198,14 @@ once(
     "u.searchParams.set('limit',window.rxFieldMode?'35':'80');const r=await (window.rxFieldFetch?window.rxFieldFetch(u,window.rxFieldMode?6500:10000):fetch(u));const d=await r.json();",
     "u.searchParams.set('limit',window.rxFieldMode?'120':'200');u.searchParams.set('zoom',String(z));const pack=window.rx46ViewportRequest?await window.rx46ViewportRequest(u):null;const r=pack?pack.response:await (window.rxFieldFetch?window.rxFieldFetch(u,window.rxFieldMode?6500:10000):fetch(u));const d=pack?pack.data:await r.json();",
     "v46_viewport_fetch_patch_missing",
+)
+
+# A partial viewport must never look complete. Use the actual delivered feature
+# count, never the requested URL limit and never an estimated total.
+once(
+    "setMapState(`${d.features?.length||0} imóvel(is) CAR carregado(s) nesta área${d.truncated?' · aproxime para ver mais':''}. Clique em um polígono.`)",
+    "setMapState(d.truncated?`Mostrando ${d.features?.length||0} imóveis. Há mais nesta área.`:'',!!d.truncated)",
+    "v48_t_truncation_notice_patch_missing",
 )
 
 # Polygon clicks no longer call V45/V43 directly. They select the V46 anchor card.
