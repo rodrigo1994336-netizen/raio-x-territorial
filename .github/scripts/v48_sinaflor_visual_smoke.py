@@ -71,7 +71,12 @@ async def open_panel(page):
     await panel.wait_for(state="visible", timeout=15000)
     await wait_panel_hydrated(page)
     await panel.locator('.rx45-check[data-source="sinaflor"]').wait_for(state="visible", timeout=45000)
-    await page.wait_for_timeout(250)
+    await page.wait_for_function(
+        """car=>{const r=document.querySelector('.rx45-panel-card[data-car="'+car+'"] .rx45-check[data-source="sinaflor"]');const state=r?.dataset.state||'';return !!r && !['','on_demand','checking'].includes(state)}""",
+        arg=CAR,
+        timeout=60000,
+    )
+    await page.wait_for_timeout(200)
     return panel
 
 
@@ -200,9 +205,8 @@ async def run_viewport(browser, width, height, label):
     page.on("console", lambda msg: errors.append(f"console:{msg.type}:{msg.text}") if msg.type == "error" else None)
     await page.goto(BASE, wait_until="domcontentloaded", timeout=30000)
     await wait_runtime(page)
-    async with page.expect_response(lambda r: f"/v1/live/conformity/sinaflor/{CAR}" in r.url) as sina_response_info:
-        await open_panel(page)
-    sina_response = await sina_response_info.value
+    await open_panel(page)
+    sina_response = await page.request.get(f"{BASE}v1/live/conformity/sinaflor/{CAR}", timeout=60000)
     assert sina_response.ok, (label, "sinaflor_source_http", sina_response.status)
     sina_source = await sina_response.json()
     evidence = await assert_contract(page, label, sina_source)
