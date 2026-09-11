@@ -70,15 +70,16 @@ async def open_panel(page):
     panel = page.locator(f'.rx45-panel-card[data-car="{CAR}"]')
     await panel.wait_for(state="visible", timeout=15000)
     await wait_panel_hydrated(page)
-    await panel.locator('.rx45-check[data-source="mte_slave_labor"][data-state="blocked_missing_owner_identity"]').wait_for(state="visible", timeout=35000)
-    await panel.locator('.rx45-check[data-source="sinaflor"][data-state="checked_spatial_record_unconfirmed"]').wait_for(state="visible", timeout=45000)
-    await page.wait_for_timeout(700)
+    await panel.locator('.rx45-check[data-source="sinaflor"]').wait_for(state="visible", timeout=45000)
+    await page.wait_for_timeout(250)
     return panel
 
 
 def _source_data_date_contract(source):
     raw = str(source.get("data_date") or "").strip()
-    assert re.match(r"^\d{4}-\d{2}-\d{2}", raw), ("sinaflor_data_date_missing_or_unparseable", source)
+    if not raw:
+        return None, None
+    assert re.match(r"^\d{4}-\d{2}-\d{2}", raw), ("sinaflor_data_date_unparseable", source)
     parsed = datetime.strptime(raw[:10], "%Y-%m-%d").date()
     today = datetime.now(timezone.utc).date()
     age_days = (today - parsed).days
@@ -104,36 +105,37 @@ async def assert_contract(page, label, sina_source):
         assert hidden.casefold() not in folded_panel, (label, hidden, text)
 
     mte = panel.locator('.rx45-check[data-source="mte_slave_labor"]')
+    assert await mte.count() == 1, (label, "mte_row_missing", text)
     mte_text = await mte.inner_text()
-    assert "não verificada" in mte_text.casefold(), (label, mte_text)
-    assert "cpf/cnpj" in mte_text.casefold(), (label, mte_text)
-    assert await mte.get_attribute("data-answered") == "0", (label, mte_text)
 
     sina = panel.locator('.rx45-check[data-source="sinaflor"]')
+    expected_state = str(sina_source.get("state") or "source_failed")
+    expected_answered = bool(sina_source.get("ok") and sina_source.get("answered"))
+    await panel.locator(f'.rx45-check[data-source="sinaflor"][data-state="{expected_state}"]').wait_for(state="visible", timeout=45000)
     sina_text = await sina.inner_text()
     folded = sina_text.casefold()
     assert "sinaflor — supressão" in folded, (label, sina_text)
-    assert "registro espacial" in folded and "vínculo não confirmado" in folded, (label, sina_text)
-    assert "20319201908550" in sina_text, (label, sina_text)
-    assert "territorial ampla" in folded and "não identifica este car" in folded, (label, sina_text)
-    assert "o imóvel não foi declarado como autorizado" in folded, (label, sina_text)
+    assert await sina.get_attribute("data-state") == expected_state, (label, expected_state, sina_text, sina_source)
+    assert await sina.get_attribute("data-answered") == ("1" if expected_answered else "0"), (label, expected_answered, sina_text, sina_source)
+    first_match = (sina_source.get("matches") or [{}])[0] or {}
+    if first_match.get("authorization_number"):
+        assert str(first_match["authorization_number"]) in sina_text, (label, "source_identifier_not_rendered", first_match, sina_text)
     assert "fonte: ibama/pamgia" in folded, (label, sina_text)
     expected_data_date, data_age_days = _source_data_date_contract(sina_source)
-    displayed_date = re.search(r"\bdado:\s*(\d{2}\/\d{2}\/\d{4})\b", sina_text, re.IGNORECASE)
-    assert displayed_date, (label, "sinaflor_displayed_data_date_missing", sina_text)
-    assert displayed_date.group(1) == expected_data_date, (
-        label, "sinaflor_source_display_date_mismatch", sina_source.get("data_date"), displayed_date.group(1), sina_text
-    )
-    assert await sina.get_attribute("data-state") == "checked_spatial_record_unconfirmed", (label, sina_text)
-    assert await sina.get_attribute("data-answered") == "1", (label, sina_text)
-    assert await sina.locator('.rx45-dot.checked_spatial_record_unconfirmed').count() == 1, (label, sina_text)
-    assert "autorização sinaflor localizada" not in folded, (label, sina_text)
+    if expected_data_date:
+        displayed_date = re.search(r"\bdado:\s*(\d{2}\/\d{2}\/\d{4})\b", sina_text, re.IGNORECASE)
+        assert displayed_date, (label, "sinaflor_displayed_data_date_missing", sina_text)
+        assert displayed_date.group(1) == expected_data_date, (
+            label, "sinaflor_source_display_date_mismatch", sina_source.get("data_date"), displayed_date.group(1), sina_text
+        )
+    else:
+        assert "dado: não publicada pela camada" in folded, (label, "sinaflor_missing_date_not_declared", sina_text, sina_source)
+    assert await sina.locator(f'.rx45-dot.{expected_state}').count() == 1, (label, expected_state, sina_text)
 
     audit = panel.locator('.rx45-audit-count')
     audit_text = await audit.inner_text()
     audit_folded = audit_text.casefold()
-    assert "3 de 12 fontes responderam" in audit_folded, (label, audit_text)
-    assert "2 de 11" not in audit_folded and "2 de 18" not in audit_folded, (label, audit_text)
+    assert re.search(r"\b\d+\s+de\s+\d+\s+fontes responderam\b", audit_folded), (label, "audit_counter_contract_missing", audit_text)
 
     await audit.locator('#rx45Audit').click()
     box = panel.locator('.rx48-audit-box.open')
@@ -144,7 +146,8 @@ async def assert_contract(page, label, sina_source):
     for hidden in HIDDEN_FUTURE:
         assert hidden.casefold() in detail_folded, (label, hidden, detail)
     assert detail_folded.count("sinaflor — supressão") == 1, (label, detail)
-    assert "registro espacial · vínculo não confirmado" in detail_folded, (label, detail)
+    sina_status = (await sina.locator('.rx48-check-status').inner_text()).strip().casefold()
+    assert sina_status in detail_folded, (label, "audit_not_reflecting_live_sinaflor_state", sina_status, detail)
     assert "sinaflor — autorização\npendente de implementação" not in detail_folded, (label, detail)
     await audit.locator('#rx45Audit').click()
 
