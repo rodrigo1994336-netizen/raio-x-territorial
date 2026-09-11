@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import base64
 import datetime as dt
 import hashlib
@@ -25,6 +26,8 @@ CANONICAL_FP = "25e14900fd0ea92d3ff82cb6f46da24449fb2b3bd233aff215ec8a2b645b64a4
 CANONICAL_MANIFEST_REL = f"car/manifests/sicar-canonical-snapshots-v1-{CANONICAL_FP}.json"
 WORKER_REL = "scripts/v48_national_worker.py"
 CANONICAL_HELPER_REL = "sicar_canonical_manifest_v48.py"
+GEOMETRY_HELPER_REL = "sicar_geometry_normalization_v48.py"
+PACKAGED_LOCAL_MODULES = (CANONICAL_HELPER_REL, GEOMETRY_HELPER_REL)
 RECOVERY_REL = "scripts/v48_national_recovery_contract.py"
 TIPPECANOE_VERSION = "2.79.0"
 TIPPECANOE_SHA256 = "b0fd9df49b6efc988288ea48774822c6de19eb48428017f27ee0b3b01d44f05d"
@@ -34,6 +37,7 @@ POLL_SECONDS = 20
 MAX_WAIT_SECONDS = 15_000
 OUT_ROOT = REPO_ROOT / "artifacts" / "national"
 PUBLICATION_ROOT = f"car/national/{CANONICAL_FP}"
+DIAGNOSTIC_ROOT = "diagnostics"
 
 
 def utcnow() -> str:
@@ -51,6 +55,59 @@ def sha256_bytes(data: bytes) -> str:
 def file_payload(relative: str) -> tuple[str, str]:
     data = (REPO_ROOT / relative).read_bytes()
     return sha256_bytes(data), base64.b64encode(data).decode("ascii")
+
+
+def _repo_python_module_map() -> dict[str, str]:
+    modules: dict[str, str] = {}
+    for file in REPO_ROOT.rglob("*.py"):
+        if ".git" in file.parts or "__pycache__" in file.parts:
+            continue
+        rel = file.relative_to(REPO_ROOT).as_posix()
+        if rel.endswith("/__init__.py"):
+            module = rel[:-12].replace("/", ".")
+        else:
+            module = rel[:-3].replace("/", ".")
+        modules[module] = rel
+    return modules
+
+
+def package_delivery_gate() -> list[str]:
+    module_map = _repo_python_module_map()
+    required: set[str] = set()
+    queue = [WORKER_REL]
+    visited: set[str] = set()
+    while queue:
+        relative = queue.pop(0)
+        if relative in visited:
+            continue
+        visited.add(relative)
+        tree = ast.parse((REPO_ROOT / relative).read_text(encoding="utf-8"), filename=relative)
+        for node in ast.walk(tree):
+            candidates: list[str] = []
+            if isinstance(node, ast.Import):
+                candidates.extend(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom):
+                if node.level:
+                    die(f"package_gate_relative_import_unsupported:{relative}:{node.module or ''}")
+                if node.module:
+                    candidates.append(node.module)
+                    candidates.extend(f"{node.module}.{alias.name}" for alias in node.names if alias.name != "*")
+            for module in candidates:
+                local_rel = module_map.get(module)
+                if local_rel and local_rel != WORKER_REL and local_rel not in required:
+                    required.add(local_rel)
+                    queue.append(local_rel)
+    packaged = set(PACKAGED_LOCAL_MODULES)
+    missing = sorted(required - packaged)
+    if missing:
+        die(f"package_gate_missing_local_modules:{','.join(missing)}")
+    missing_files = sorted(rel for rel in packaged if not (REPO_ROOT / rel).is_file())
+    if missing_files:
+        die(f"package_gate_declared_file_missing:{','.join(missing_files)}")
+    print(f"RX_V48_NATIONAL_PACKAGE_GATE_REQUIRED={','.join(sorted(required))}")
+    print(f"RX_V48_NATIONAL_PACKAGE_GATE_PACKAGED={','.join(sorted(packaged))}")
+    print("RX_V48_NATIONAL_PACKAGE_GATE=PASS")
+    return sorted(required)
 
 
 def request_json(session: Any, method: str, url: str, **kwargs: Any) -> tuple[int, Any]:
@@ -239,56 +296,138 @@ def job_id(uf: str, run_id: str, run_attempt: str) -> str:
     return value
 
 
-def build_task_script(*, uf: str, snapshot: str, expected_source_fingerprint: str) -> str:
+def build_task_script(*, uf: str, snapshot: str, expected_source_fingerprint: str, run_id: str) -> str:
+    package_delivery_gate()
     worker_sha, worker_b64 = file_payload(WORKER_REL)
     helper_sha, helper_b64 = file_payload(CANONICAL_HELPER_REL)
+    geometry_sha, geometry_b64 = file_payload(GEOMETRY_HELPER_REL)
     manifest_sha, manifest_b64 = file_payload(CANONICAL_MANIFEST_REL)
     expectation = expected_source_fingerprint or ""
-    return f"""#!/usr/bin/env bash
+    script = r"""#!/usr/bin/env bash
 set -euo pipefail
 export PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
 export DEBIAN_FRONTEND=noninteractive
 SECONDS=0
-if [ \"$(id -u)\" -eq 0 ]; then SUDO=\"\"; elif command -v sudo >/dev/null 2>&1; then SUDO='sudo -n'; else exit 20; fi
+DIAG_RUN_ID='__RX_RUN_ID__'
+DIAG_UF='__RX_UF__'
+DIAG_LOCAL='/tmp/rxv48-diagnostic.log'
+DIAG_FAILED_COMMAND=''
+DIAG_FAILED_EXIT_CODE=''
+exec 3>&1
+rx_diag_err() {
+  local rc=$?
+  DIAG_FAILED_EXIT_CODE="$rc"
+  DIAG_FAILED_COMMAND="$BASH_COMMAND"
+  return "$rc"
+}
+rx_diag_exit() {
+  local rc=$?
+  trap - ERR
+  set +e
+  local failed_command="$DIAG_FAILED_COMMAND"
+  local failed_rc="$DIAG_FAILED_EXIT_CODE"
+  [ -n "$failed_command" ] || failed_command='NONE'
+  [ -n "$failed_rc" ] || failed_rc="$rc"
+  printf 'RX_V48_DIAGNOSTIC_FINAL_EXIT_CODE=%s\n' "$rc" >> "$DIAG_LOCAL"
+  printf 'RX_V48_DIAGNOSTIC_FAILED_COMMAND_EXIT_CODE=%s\n' "$failed_rc" >> "$DIAG_LOCAL"
+  printf 'RX_V48_DIAGNOSTIC_FAILED_COMMAND=%s\n' "$failed_command" >> "$DIAG_LOCAL"
+  printf 'RX_V48_DIAGNOSTIC_OBJECT=gs://__RX_BUCKET__/diagnostics/%s/%s.log\n' "$DIAG_RUN_ID" "$DIAG_UF" >> "$DIAG_LOCAL"
+  sleep 1
+  if command -v curl >/dev/null 2>&1 && command -v sed >/dev/null 2>&1; then
+    local token_json token upload_url
+    token_json="$(curl --fail --silent --show-error -H 'Metadata-Flavor: Google' 'http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token')"
+    token="$(printf '%s' "$token_json" | sed -n 's/.*"access_token"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+    if [ -n "$token" ]; then
+      upload_url="https://storage.googleapis.com/upload/storage/v1/b/__RX_BUCKET__/o?uploadType=media&name=diagnostics%2F$DIAG_RUN_ID%2F$DIAG_UF.log&ifGenerationMatch=0"
+      if curl --fail --silent --show-error -X POST -H "Authorization: Bearer $token" -H 'Content-Type: text/plain; charset=utf-8' --data-binary @"$DIAG_LOCAL" "$upload_url" >/tmp/rxv48-diagnostic-upload-response.json; then
+        printf 'RX_V48_DIAGNOSTIC_UPLOAD=PASS gs://__RX_BUCKET__/diagnostics/%s/%s.log\n' "$DIAG_RUN_ID" "$DIAG_UF" >&3
+      else
+        printf 'RX_V48_DIAGNOSTIC_UPLOAD=FAIL_HTTP gs://__RX_BUCKET__/diagnostics/%s/%s.log\n' "$DIAG_RUN_ID" "$DIAG_UF" >&3
+      fi
+    else
+      printf 'RX_V48_DIAGNOSTIC_UPLOAD=FAIL_NO_METADATA_TOKEN\n' >&3
+    fi
+  else
+    printf 'RX_V48_DIAGNOSTIC_UPLOAD=FAIL_CURL_OR_SED_MISSING\n' >&3
+  fi
+  exit "$rc"
+}
+trap rx_diag_err ERR
+trap rx_diag_exit EXIT
+exec > >(tee -a "$DIAG_LOCAL" >&3) 2>&1
+printf 'RX_V48_DIAGNOSTIC_CAPTURE=START run_id=%s uf=%s\n' "$DIAG_RUN_ID" "$DIAG_UF"
+if [ "$(id -u)" -eq 0 ]; then SUDO=""; elif command -v sudo >/dev/null 2>&1; then SUDO='sudo -n'; else exit 20; fi
 S=$SECONDS; $SUDO apt-get update -y; T_APT_UPDATE=$((SECONDS-S))
 S=$SECONDS; $SUDO apt-get install -y --no-install-recommends build-essential gcc g++ coreutils ca-certificates curl libsqlite3-dev python3 python3-pip python3-venv zlib1g-dev; T_APT_INSTALL=$((SECONDS-S))
 cd /tmp
-S=$SECONDS; curl --fail --location --retry 3 --connect-timeout 20 --output tippecanoe.tar.gz '{TIPPECANOE_URL}'; T_TIPPECANOE_DOWNLOAD=$((SECONDS-S))
-echo '{TIPPECANOE_SHA256}  tippecanoe.tar.gz' | sha256sum -c -
+S=$SECONDS; curl --fail --location --retry 3 --connect-timeout 20 --output tippecanoe.tar.gz '__RX_TIPPECANOE_URL__'; T_TIPPECANOE_DOWNLOAD=$((SECONDS-S))
+echo '__RX_TIPPECANOE_SHA256__  tippecanoe.tar.gz' | sha256sum -c -
 tar -xzf tippecanoe.tar.gz
-cd 'tippecanoe-{TIPPECANOE_VERSION}'
+cd 'tippecanoe-__RX_TIPPECANOE_VERSION__'
 S=$SECONDS; make -j8; T_TIPPECANOE_BUILD=$((SECONDS-S))
 $SUDO make install PREFIX=/usr/local
 S=$SECONDS; python3 -m venv /tmp/rxv48-venv; /tmp/rxv48-venv/bin/pip install --disable-pip-version-check --no-cache-dir 'google-cloud-bigquery==3.45.0' 'google-cloud-storage==3.13.1' 'shapely==2.1.2' 'psutil==7.2.2'; T_PYTHON_ENV=$((SECONDS-S))
 cat > /tmp/worker.b64 <<'RX_WORKER'
-{worker_b64}
+__RX_WORKER_B64__
 RX_WORKER
 base64 --decode /tmp/worker.b64 > /tmp/v48_national_worker.py
-echo '{worker_sha}  /tmp/v48_national_worker.py' | sha256sum -c -
+echo '__RX_WORKER_SHA__  /tmp/v48_national_worker.py' | sha256sum -c -
 cat > /tmp/helper.b64 <<'RX_HELPER'
-{helper_b64}
+__RX_HELPER_B64__
 RX_HELPER
 base64 --decode /tmp/helper.b64 > /tmp/sicar_canonical_manifest_v48.py
-echo '{helper_sha}  /tmp/sicar_canonical_manifest_v48.py' | sha256sum -c -
+echo '__RX_HELPER_SHA__  /tmp/sicar_canonical_manifest_v48.py' | sha256sum -c -
+cat > /tmp/geometry.b64 <<'RX_GEOMETRY'
+__RX_GEOMETRY_B64__
+RX_GEOMETRY
+base64 --decode /tmp/geometry.b64 > /tmp/sicar_geometry_normalization_v48.py
+echo '__RX_GEOMETRY_SHA__  /tmp/sicar_geometry_normalization_v48.py' | sha256sum -c -
 cat > /tmp/manifest.b64 <<'RX_MANIFEST'
-{manifest_b64}
+__RX_MANIFEST_B64__
 RX_MANIFEST
-base64 --decode /tmp/manifest.b64 > /tmp/sicar-canonical-snapshots-v1-{CANONICAL_FP}.json
-echo '{manifest_sha}  /tmp/sicar-canonical-snapshots-v1-{CANONICAL_FP}.json' | sha256sum -c -
+base64 --decode /tmp/manifest.b64 > /tmp/sicar-canonical-snapshots-v1-__RX_CANONICAL_FP__.json
+echo '__RX_MANIFEST_SHA__  /tmp/sicar-canonical-snapshots-v1-__RX_CANONICAL_FP__.json' | sha256sum -c -
 rm -f /tmp/*.b64
-export GCP_PROJECT_ID='{PROJECT}' GOOGLE_CLOUD_PROJECT='{PROJECT}' RX_V48_UF='{uf}' RX_V48_SNAPSHOT='{snapshot}' RX_V48_GCS_BUCKET='{BUCKET}' RX_V48_WORKDIR='/mnt/disks/rxv48'
-export RX_SICAR_CANONICAL_MANIFEST='/tmp/sicar-canonical-snapshots-v1-{CANONICAL_FP}.json'
-export RX_V48_EXPECT_SOURCE_FINGERPRINT='{expectation}'
+export GCP_PROJECT_ID='__RX_PROJECT__' GOOGLE_CLOUD_PROJECT='__RX_PROJECT__' RX_V48_UF='__RX_UF__' RX_V48_SNAPSHOT='__RX_SNAPSHOT__' RX_V48_GCS_BUCKET='__RX_BUCKET__' RX_V48_WORKDIR='/mnt/disks/rxv48'
+export RX_SICAR_CANONICAL_MANIFEST='/tmp/sicar-canonical-snapshots-v1-__RX_CANONICAL_FP__.json'
+export RX_V48_EXPECT_SOURCE_FINGERPRINT='__RX_EXPECTATION__'
 mkdir -p /mnt/disks/rxv48
-printf 'RX_V48_BATCH_UF={uf} RX_V48_BATCH_SNAPSHOT={snapshot} RX_V48_BATCH_REGION={REGION} RX_V48_BATCH_MACHINE=e2-standard-8 RX_V48_BATCH_PROVISIONING=SPOT RX_V48_BATCH_RETRY_COUNT=0\\n'
+printf 'RX_V48_BATCH_UF=__RX_UF__ RX_V48_BATCH_SNAPSHOT=__RX_SNAPSHOT__ RX_V48_BATCH_REGION=__RX_REGION__ RX_V48_BATCH_MACHINE=e2-standard-8 RX_V48_BATCH_PROVISIONING=SPOT RX_V48_BATCH_RETRY_COUNT=0\n'
 S=$SECONDS; cd /tmp; /tmp/rxv48-venv/bin/python /tmp/v48_national_worker.py; T_WORKER=$((SECONDS-S))
-printf 'RX_V48_BATCH_BOOTSTRAP_METRICS=apt_update_s=%s apt_install_s=%s tippecanoe_download_s=%s tippecanoe_build_s=%s python_env_s=%s worker_s=%s total_s=%s\\n' \"$T_APT_UPDATE\" \"$T_APT_INSTALL\" \"$T_TIPPECANOE_DOWNLOAD\" \"$T_TIPPECANOE_BUILD\" \"$T_PYTHON_ENV\" \"$T_WORKER\" \"$SECONDS\"
+printf 'RX_V48_BATCH_BOOTSTRAP_METRICS=apt_update_s=%s apt_install_s=%s tippecanoe_download_s=%s tippecanoe_build_s=%s python_env_s=%s worker_s=%s total_s=%s\n' "$T_APT_UPDATE" "$T_APT_INSTALL" "$T_TIPPECANOE_DOWNLOAD" "$T_TIPPECANOE_BUILD" "$T_PYTHON_ENV" "$T_WORKER" "$SECONDS"
 echo 'RX_V48_NATIONAL_BATCH_RUNNABLE=PASS'
 """
-
-
-def build_job(*, uf: str, snapshot: str, expected_source_fingerprint: str) -> dict[str, Any]:
-    script_text = build_task_script(uf=uf, snapshot=snapshot, expected_source_fingerprint=expected_source_fingerprint)
+    replacements = {
+        "__RX_RUN_ID__": run_id,
+        "__RX_UF__": uf,
+        "__RX_BUCKET__": BUCKET,
+        "__RX_TIPPECANOE_URL__": TIPPECANOE_URL,
+        "__RX_TIPPECANOE_SHA256__": TIPPECANOE_SHA256,
+        "__RX_TIPPECANOE_VERSION__": TIPPECANOE_VERSION,
+        "__RX_WORKER_B64__": worker_b64,
+        "__RX_WORKER_SHA__": worker_sha,
+        "__RX_HELPER_B64__": helper_b64,
+        "__RX_HELPER_SHA__": helper_sha,
+        "__RX_GEOMETRY_B64__": geometry_b64,
+        "__RX_GEOMETRY_SHA__": geometry_sha,
+        "__RX_MANIFEST_B64__": manifest_b64,
+        "__RX_MANIFEST_SHA__": manifest_sha,
+        "__RX_CANONICAL_FP__": CANONICAL_FP,
+        "__RX_PROJECT__": PROJECT,
+        "__RX_SNAPSHOT__": snapshot,
+        "__RX_EXPECTATION__": expectation,
+        "__RX_REGION__": REGION,
+    }
+    for marker, value in replacements.items():
+        if marker not in script:
+            die(f"batch_template_marker_missing:{marker}")
+        script = script.replace(marker, value)
+    leftovers = sorted(set(re.findall(r"__RX_[A-Z0-9_]+__", script)))
+    if leftovers:
+        die(f"batch_template_unresolved_markers:{','.join(leftovers)}")
+    return script
+def build_job(*, uf: str, snapshot: str, expected_source_fingerprint: str, run_id: str) -> dict[str, Any]:
+    script_text = build_task_script(uf=uf, snapshot=snapshot, expected_source_fingerprint=expected_source_fingerprint, run_id=run_id)
     return {
         "taskGroups": [{
             "taskCount": "1", "parallelism": "1",
@@ -367,6 +506,33 @@ def fetch_committed_result(session: Any, *, uf: str, snapshot: str, expected_row
     return commit
 
 
+def diagnostic_object_name(run_id: str, uf: str) -> str:
+    return f"{DIAGNOSTIC_ROOT}/{run_id}/{uf}.log"
+
+
+def fetch_diagnostic_log(session: Any, *, run_id: str, uf: str) -> dict[str, Any]:
+    object_name = diagnostic_object_name(run_id, uf)
+    gs_uri = f"gs://{BUCKET}/{object_name}"
+    url = f"https://storage.googleapis.com/download/storage/v1/b/{quote(BUCKET, safe='')}/o/{quote(object_name, safe='')}"
+    response = session.get(url, params={"alt": "media"}, timeout=90)
+    if response.status_code == 404:
+        print(f"RX_V48_NATIONAL_DIAGNOSTIC_LOG=MISSING:{gs_uri}", file=sys.stderr)
+        return {"exists": False, "http_status": 404, "object": gs_uri}
+    if response.status_code != 200:
+        print(f"RX_V48_NATIONAL_DIAGNOSTIC_LOG=FETCH_ERROR_HTTP_{response.status_code}:{gs_uri}", file=sys.stderr)
+        return {"exists": False, "http_status": response.status_code, "object": gs_uri}
+    OUT_ROOT.mkdir(parents=True, exist_ok=True)
+    local_path = OUT_ROOT / f"{uf}.log"
+    local_path.write_bytes(response.content)
+    text_payload = response.content.decode("utf-8", errors="replace")
+    print(f"RX_V48_NATIONAL_DIAGNOSTIC_LOG_BEGIN={gs_uri}")
+    sys.stdout.write(text_payload)
+    if text_payload and not text_payload.endswith("\n"):
+        sys.stdout.write("\n")
+    print(f"RX_V48_NATIONAL_DIAGNOSTIC_LOG_END={gs_uri}")
+    return {"exists": True, "http_status": 200, "object": gs_uri, "size_bytes": len(response.content), "artifact_path": f"artifacts/national/{uf}.log"}
+
+
 def write_out(uf: str, payload: dict[str, Any]) -> Path:
     OUT_ROOT.mkdir(parents=True, exist_ok=True)
     path = OUT_ROOT / f"{uf}.json"
@@ -392,13 +558,14 @@ def execute(uf: str) -> dict[str, Any]:
     run_id = os.getenv("GITHUB_RUN_ID", "")
     run_attempt = os.getenv("GITHUB_RUN_ATTEMPT", "")
     jid = job_id(uf, run_id, run_attempt)
-    payload = build_job(uf=uf, snapshot=snapshot, expected_source_fingerprint=str(preflight.get("expected_source_fingerprint") or ""))
+    payload = build_job(uf=uf, snapshot=snapshot, expected_source_fingerprint=str(preflight.get("expected_source_fingerprint") or ""), run_id=run_id)
     disposition = create_or_reuse_batch(session, jid=jid, payload=payload)
     job, observations = poll_batch(session, jid)
     detail = terminal_detail(job)
     batch = {"job_id": jid, "region": REGION, "disposition": disposition, "observations": observations, **detail}
     if detail["state"] != "SUCCEEDED":
-        return {"schema_version": "v48-national-uf-result-1", "status": "failed", "uf": uf, "snapshot": snapshot, "publication_state": "BUILD_FAILED", "batch": batch, "commit": None}
+        diagnostic = fetch_diagnostic_log(session, run_id=run_id, uf=uf)
+        return {"schema_version": "v48-national-uf-result-1", "status": "failed", "uf": uf, "snapshot": snapshot, "publication_state": "BUILD_FAILED", "batch": batch, "diagnostic": diagnostic, "commit": None}
     commit = fetch_committed_result(session, uf=uf, snapshot=snapshot, expected_rows=expected_rows)
     return {"schema_version": "v48-national-uf-result-1", "status": "success", "uf": uf, "snapshot": snapshot, "publication_state": "COMMITTED", "batch": batch, "commit": commit}
 
@@ -407,11 +574,16 @@ def cli() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--uf")
     parser.add_argument("--import-check", action="store_true")
+    parser.add_argument("--package-check", action="store_true")
     args = parser.parse_args()
+    if args.package_check:
+        package_delivery_gate()
+        return
     if args.import_check:
+        package_delivery_gate()
         import sicar_canonical_manifest_v48  # noqa: F401
         from scripts import v48_national_recovery_contract  # noqa: F401
-        for relative in (WORKER_REL, CANONICAL_HELPER_REL, CANONICAL_MANIFEST_REL, RECOVERY_REL):
+        for relative in (WORKER_REL, *PACKAGED_LOCAL_MODULES, CANONICAL_MANIFEST_REL, RECOVERY_REL):
             if not (REPO_ROOT / relative).exists():
                 die(f"required_file_missing:{relative}")
         print("RX_V48_NATIONAL_BATCH_SUBMIT_IMPORT_CHECK=PASS")

@@ -34,6 +34,12 @@ jobs:
           test "$CONFIRMATION" = 'GENERATE_27_UFS' || { echo 'RX_V48_NATIONAL_AUTHORIZATION=REJECTED'; exit 2; }
           echo 'RX_V48_NATIONAL_AUTHORIZATION=ACCEPTED'
 
+      - name: Compile every Python script before any paid compute
+        run: python -m compileall -q scripts
+
+      - name: Package closure gate before any paid compute
+        run: python scripts/v48_national_batch_submit.py --package-check
+
       - name: Run national invariant gate before any paid compute
         run: python scripts/v48_national_static_gate.py
 
@@ -84,7 +90,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: v48-national-uf-${{ matrix.uf }}-a${{ github.run_attempt }}
-          path: artifacts/national/${{ matrix.uf }}.json
+          path: |
+            artifacts/national/${{ matrix.uf }}.json
+            artifacts/national/${{ matrix.uf }}.log
           if-no-files-found: warn
           retention-days: 14
 

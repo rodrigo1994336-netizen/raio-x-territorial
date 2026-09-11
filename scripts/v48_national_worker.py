@@ -8,6 +8,7 @@ import math
 import os
 import platform
 import shutil
+import shlex
 import subprocess
 import sys
 import threading
@@ -178,7 +179,18 @@ class ResourceSampler:
 
 
 def run_tippecanoe(ndjson: Path, output: Path, log_path: Path) -> dict[str, Any]:
-    version = subprocess.run(["tippecanoe", "--version"], check=True, text=True, capture_output=True).stdout.strip()
+    version_command = ["tippecanoe", "--version"]
+    print(f"RX_V48_DIAGNOSTIC_PROCESS_COMMAND={shlex.join(version_command)}")
+    try:
+        version = subprocess.run(version_command, check=True, text=True, capture_output=True).stdout.strip()
+    except subprocess.CalledProcessError as exc:
+        print(f"RX_V48_DIAGNOSTIC_PROCESS_EXIT_CODE={exc.returncode}", file=sys.stderr)
+        print(f"RX_V48_DIAGNOSTIC_PROCESS_FAILED_COMMAND={shlex.join([str(x) for x in exc.cmd])}", file=sys.stderr)
+        if exc.stdout:
+            print(exc.stdout, end="" if exc.stdout.endswith("\n") else "\n", file=sys.stderr)
+        if exc.stderr:
+            print(exc.stderr, end="" if exc.stderr.endswith("\n") else "\n", file=sys.stderr)
+        raise
     if TIPPECANOE_VERSION not in version:
         die(f"tippecanoe_version_mismatch:{version}")
     command = [
@@ -187,11 +199,15 @@ def run_tippecanoe(ndjson: Path, output: Path, log_path: Path) -> dict[str, Any]
         "--read-parallel", "--no-feature-limit", "--no-tile-size-limit", "--force", str(ndjson),
     ]
     started = time.perf_counter()
+    print(f"RX_V48_DIAGNOSTIC_PROCESS_COMMAND={shlex.join(command)}")
     with log_path.open("w", encoding="utf-8") as log:
         proc = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, text=True, check=False)
     elapsed = time.perf_counter() - started
     if proc.returncode != 0:
         tail = log_path.read_text(encoding="utf-8", errors="replace")[-4000:]
+        print(f"RX_V48_DIAGNOSTIC_PROCESS_EXIT_CODE={proc.returncode}", file=sys.stderr)
+        print(f"RX_V48_DIAGNOSTIC_PROCESS_FAILED_COMMAND={shlex.join(command)}", file=sys.stderr)
+        print(tail, file=sys.stderr)
         die(f"tippecanoe_failed:{proc.returncode}:{tail}")
     if not output.exists() or output.stat().st_size <= 127:
         die("pmtiles_missing_or_too_small")
