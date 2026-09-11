@@ -118,6 +118,13 @@ def main() -> None:
     require("if_generation_match=0" in worker, "immutable upload precondition missing")
     require("prepared-receipt" in worker and "commit-manifest" in worker, "three-phase publication files missing")
     require("active.json" not in worker, "worker must not touch active.json")
+    require("stdout = _normalize_process_text(proc.stdout)" in worker, "tippecanoe stdout capture missing")
+    require("stderr = _normalize_process_text(proc.stderr)" in worker, "tippecanoe stderr capture missing")
+    require("tippecanoe_version_mismatch:expected=" in worker, "tippecanoe evidence-rich mismatch missing")
+    probe_at = worker.index("tippecanoe_probe = probe_tippecanoe_version()")
+    bq_at = worker.index("bq = bigquery.Client(project=PROJECT)")
+    extract_at = worker.index("extraction = extract_geojsonl(")
+    require(probe_at < bq_at < extract_at, "tippecanoe preflight must precede BigQuery and NDJSON extraction")
 
     submit = text("scripts/v48_national_batch_submit.py")
     require('REGION = "us-central1"' in submit, "submitter must use us-central1")

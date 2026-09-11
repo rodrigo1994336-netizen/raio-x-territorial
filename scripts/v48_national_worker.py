@@ -178,21 +178,31 @@ class ResourceSampler:
             pass
 
 
-def run_tippecanoe(ndjson: Path, output: Path, log_path: Path) -> dict[str, Any]:
-    version_command = ["tippecanoe", "--version"]
-    print(f"RX_V48_DIAGNOSTIC_PROCESS_COMMAND={shlex.join(version_command)}")
-    try:
-        version = subprocess.run(version_command, check=True, text=True, capture_output=True).stdout.strip()
-    except subprocess.CalledProcessError as exc:
-        print(f"RX_V48_DIAGNOSTIC_PROCESS_EXIT_CODE={exc.returncode}", file=sys.stderr)
-        print(f"RX_V48_DIAGNOSTIC_PROCESS_FAILED_COMMAND={shlex.join([str(x) for x in exc.cmd])}", file=sys.stderr)
-        if exc.stdout:
-            print(exc.stdout, end="" if exc.stdout.endswith("\n") else "\n", file=sys.stderr)
-        if exc.stderr:
-            print(exc.stderr, end="" if exc.stderr.endswith("\n") else "\n", file=sys.stderr)
-        raise
-    if TIPPECANOE_VERSION not in version:
-        die(f"tippecanoe_version_mismatch:{version}")
+def _normalize_process_text(value: str | None) -> str:
+    return " ".join(str(value or "").split())
+
+
+def probe_tippecanoe_version() -> dict[str, Any]:
+    command = ["tippecanoe", "--version"]
+    print(f"RX_V48_DIAGNOSTIC_PROCESS_COMMAND={shlex.join(command)}")
+    proc = subprocess.run(command, text=True, capture_output=True, check=False)
+    stdout = _normalize_process_text(proc.stdout)
+    stderr = _normalize_process_text(proc.stderr)
+    combined = " ".join(x for x in (stdout, stderr) if x)
+    channels = "+".join(name for name, value in (("stdout", stdout), ("stderr", stderr)) if value) or "none"
+    print(f"RX_V48_TIPPECANOE_VERSION_EXIT_CODE={proc.returncode}")
+    print(f"RX_V48_TIPPECANOE_VERSION_CHANNELS={channels}")
+    print(f"RX_V48_TIPPECANOE_VERSION_STDOUT={stdout!r}")
+    print(f"RX_V48_TIPPECANOE_VERSION_STDERR={stderr!r}")
+    if proc.returncode != 0:
+        die(f"tippecanoe_version_probe_failed:exit_code={proc.returncode}:channels={channels}:stdout={stdout!r}:stderr={stderr!r}")
+    if TIPPECANOE_VERSION not in combined:
+        die(f"tippecanoe_version_mismatch:expected={TIPPECANOE_VERSION}:exit_code={proc.returncode}:channels={channels}:stdout={stdout!r}:stderr={stderr!r}")
+    return {"version": combined, "stdout": stdout, "stderr": stderr, "channels": channels, "exit_code": proc.returncode}
+
+
+def run_tippecanoe(ndjson: Path, output: Path, log_path: Path, version_probe: dict[str, Any] | None = None) -> dict[str, Any]:
+    probe = version_probe or probe_tippecanoe_version()
     command = [
         "tippecanoe", "--output", str(output), "--layer", "car",
         "--minimum-zoom", str(MIN_ZOOM), "--maximum-zoom", str(MAX_ZOOM),
@@ -214,8 +224,7 @@ def run_tippecanoe(ndjson: Path, output: Path, log_path: Path) -> dict[str, Any]
     with output.open("rb") as handle:
         if not handle.read(7).startswith(b"PMTiles"):
             die("pmtiles_magic_invalid")
-    return {"version": version, "elapsed_seconds": round(elapsed, 3), "log_bytes": log_path.stat().st_size}
-
+    return {"version": probe["version"], "version_channels": probe["channels"], "version_exit_code": probe["exit_code"], "elapsed_seconds": round(elapsed, 3), "log_bytes": log_path.stat().st_size}
 
 def upload_immutable_file(bucket: Any, local_path: Path, object_name: str, metadata: dict[str, str], content_type: str) -> dict[str, Any]:
     from google.api_core.exceptions import PreconditionFailed
@@ -489,6 +498,16 @@ def main() -> None:
     commit_path = work / "commit-manifest.json"
     metrics_path = work / "worker-metrics.json"
 
+    tippecanoe_probe = probe_tippecanoe_version()
+    print("RX_V48_TOOLCHAIN_PREFLIGHT=PASS tippecanoe_before_bigquery=true")
+    bucket_name = os.getenv("RX_V48_GCS_BUCKET", BUCKET).strip() or BUCKET
+    try:
+        location_bucket = storage.Client(project=PROJECT).bucket(bucket_name)
+        location_bucket.reload()
+        print(f"RX_V48_RUNTIME_BUCKET_LOCATION={location_bucket.location}")
+    except Exception as exc:
+        print(f"RX_V48_RUNTIME_BUCKET_LOCATION=UNAVAILABLE:{type(exc).__name__}:{exc}")
+
     sampler = ResourceSampler(base, psutil)
     overall_started = time.perf_counter()
     sampler.start()
@@ -506,7 +525,7 @@ def main() -> None:
         source_fp = extraction["fingerprint_sha256"]
         if expected_fp and source_fp != expected_fp:
             die(f"rebuild_source_fingerprint_changed:{source_fp}!={expected_fp}")
-        tippecanoe = run_tippecanoe(ndjson, pmtiles, tippecanoe_log)
+        tippecanoe = run_tippecanoe(ndjson, pmtiles, tippecanoe_log, tippecanoe_probe)
         pmtiles_sha = sha256_file(pmtiles)
         pmtiles_size = pmtiles.stat().st_size
 
