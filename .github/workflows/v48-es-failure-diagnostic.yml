@@ -34,7 +34,7 @@ jobs:
         env:
           CONFIRMATION: ${{ inputs.confirmation }}
         run: |
-          test "$CONFFIRMATION" = 'DIAGNOSE_ES_ONLY' || { echo 'RX_V48_ES_DIAGNOSTIC_AUTHORIZATION=REJECTED'; exit 2; }
+          test "$CONFIRMATION" = 'DIAGNOSE_ES_ONLY' || { echo 'RX_V48_ES_DIAGNOSTIC_AUTHORIZATION=REJECTED'; exit 2; }
           echo 'RX_V48_ES_DIAGNOSTIC_AUTHORIZATION=ACCEPTED'
           echo 'RX_V48_ES_DIAGNOSTIC_SCOPE=ES_ONLY'
           echo 'RX_V48_ES_DIAGNOSTIC_JOB_REGION=us-central1'
