@@ -1,0 +1,107 @@
+name: V48 ES Failure Diagnostic
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: 'Digite DIAGNOSE_ES_ONLY para executar somente ES e coletar diagnóstico'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v48-es-failure-diagnostic
+  cancel-in-progress: false
+
+jobs:
+  es-diagnostic:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+      GOOGLE_CLOUD_PROJECT: ${{ secrets.GCP_PROJECT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Require explicit ES-only diagnostic authorization
+        shell: bash
+        env:
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          test "$CONFFIRMATION" = 'DIAGNOSE_ES_ONLY' || { echo 'RX_V48_ES_DIAGNOSTIC_AUTHORIZATION=REJECTED'; exit 2; }
+          echo 'RX_V48_ES_DIAGNOSTIC_AUTHORIZATION=ACCEPTED'
+          echo 'RX_V48_ES_DIAGNOSTIC_SCOPE=ES_ONLY'
+          echo 'RX_V48_ES_DIAGNOSTIC_JOB_REGION=us-central1'
+          echo 'RX_V48_ES_DIAGNOSTIC_BUCKET=raio-x-territorial-car-metodo-afp-plataforma'
+
+      - name: Compile every Python script before any paid compute
+        run: python -m compileall -q scripts
+
+      - name: Package closure gate before any paid compute
+        run: python scripts/v48_national_batch_submit.py --package-check
+
+      - name: Run national invariant gate before any paid compute
+        run: python scripts/v48_national_static_gate.py
+
+      - name: Reject missing Google Cloud configuration
+        shell: bash
+        env:
+          GCP_SA_KEY_PRESENT: ${{ secrets.GCP_SA_KEY }}
+        run: |
+          test -n "$GCP_PROJECT_ID" || { echo 'GCP_PROJECT_ID ausente'; exit 2; }
+          test "$GCP_PROJECT_ID" = 'metodo-afp-plataforma' || { echo 'Projeto GCP inesperado'; exit 2; }
+          test -n "$GCP_SA_KEY_PRESENT" || { echo 'GCP_SA_KEY ausente'; exit 2; }
+
+      - name: Authenticate orchestrator to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - name: Install orchestrator dependencies
+        run: pip install --disable-pip-version-check google-auth requests google-cloud-storage
+
+      - name: Submit exactly ES and print worker diagnostics on failure
+        run: python scripts/v48_national_batch_submit.py --uf ES
+
+      - name: Upload ES diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v48-es-failure-diagnostic-a${{ github.run_attempt }}
+          path: |
+            artifacts/national/ES.json
+            artifacts/national/ES.log
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: List live bucket prefixes and bucket location
+        if: always()
+        shell: bash
+        run: |
+          python - <<'PY'
+          from google.cloud import storage
+          project = 'metodo-afp-plataforma'
+          bucket_name = 'raio-x-territorial-car-metodo-afp-plataforma'
+          client = storage.Client(project=project)
+          bucket = client.bucket(bucket_name)
+          try:
+              bucket.reload()
+              print(f'RX_V48_LIVE_BUCKET_LOCATION={bucket.location}')
+          except Exception as exc:
+              print(f'RX_V48_LIVE_BUCKET_LOCATION=UNAVAILABLE:{type(exc).__name__}:{exc}')
+          for prefix in ('car/national/', 'diagnostics/'):
+              blobs = list(client.list_blobs(bucket_name, prefix=prefix))
+              print(f'RX_V48_LIVE_PREFIX_BEGIN={prefix} count={len(blobs)}')
+              for blob in blobs:
+                  print(f'RX_V48_LIVE_OBJECT={blob.name}|size={blob.size}|generation={blob.generation}|updated={blob.updated}')
+              print(f'RX_V48_LIVE_PREFIX_END={prefix}')
+          PY
