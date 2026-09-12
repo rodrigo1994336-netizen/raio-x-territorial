@@ -140,7 +140,8 @@ async def assert_contract(page, label, sina_source):
     audit = panel.locator('.rx45-audit-count')
     audit_text = await audit.inner_text()
     audit_folded = audit_text.casefold()
-    assert re.search(r"\b\d+\s+de\s+\d+\s+fontes responderam\b", audit_folded), (label, "audit_counter_contract_missing", audit_text)
+    assert "2 de 11 fontes responderam nesta consulta" in audit_folded, (label, "audit_counter_contract_missing", audit_text)
+    assert "resolução de identidade" not in audit_folded, (label, audit_text)
 
     await audit.locator('#rx45Audit').click()
     box = panel.locator('.rx48-audit-box.open')
@@ -239,7 +240,7 @@ async def main():
         finally:
             await browser.close()
     (OUT / "results.json").write_text(json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8")
-    (OUT / "browser-executed.txt").write_text("V48_SINAFLOR_ORIGINAL8_MTE_SINAFLOR_DENOMINATOR12_FUTURE6_AUDIT_ONLY_375_768_1440_NO_VISIBLE_ERROR_STATUS\n", encoding="utf-8")
+    (OUT / "browser-executed.txt").write_text("V48_SINAFLOR_ORIGINAL8_MTE_SINAFLOR_DENOMINATOR11_CANONICAL_FUTURE6_AUDIT_ONLY_375_768_1440_NO_VISIBLE_ERROR_STATUS\n", encoding="utf-8")
     print("RX_V48_SINAFLOR_VISUAL_SMOKE=PASS")
 
 

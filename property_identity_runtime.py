@@ -146,8 +146,8 @@ def _seed_identity(code:str,items:list[dict[str,Any]])->dict[str,Any]|None:
     conflict=seed.conflict_by_car(code)
     if conflict:
         return {
-            'ok':True,'car_code':code,'name':None,'source':seed.SOURCE,
-            'confidence':'unresolved','method':'audited_osm_conflict','candidates':items[:5],
+            'ok':False,'car_code':code,'name':None,'source':seed.SOURCE,
+            'detail':'property_name_ambiguous','confidence':'unresolved','method':'audited_osm_conflict','candidates':items[:5],
             'candidate_count':len(items),'osm_candidates_inside_car':len(conflict.get('names') or []),'osm_conflict':True,
             'conflicting_public_names':conflict.get('names') or [],
             'display_kind':'UNRESOLVED','validation_status':'AMBIGUOUS','panel_name_eligible':False,
@@ -157,8 +157,8 @@ def _seed_identity(code:str,items:list[dict[str,Any]])->dict[str,Any]|None:
     item=seed.by_car(code)
     if not item:return None
     return {
-        'ok':True,'car_code':code,'name':None,'source':seed.SOURCE,
-        'confidence':'medium','method':'audited_osm_point_inside_exact_car',
+        'ok':False,'car_code':code,'name':None,'source':seed.SOURCE,
+        'detail':'property_name_unvalidated_reference','confidence':'medium','method':'audited_osm_point_inside_exact_car',
         'display_kind':'REFERENCE','validation_status':'UNVALIDATED','panel_name_eligible':False,
         'reference_kind':'OSM_AUDITED','map_anchor':'GEOGRAPHIC_POINT',
         'geographic_reference_names':[item['name']],
@@ -189,8 +189,8 @@ def resolve_property_identity_sync(car_code:str)->dict[str,Any]:
     if out is None:
         osm=_osm_identity_candidate(car.get('geometry'),car.get('bbox') or [])
         out={
-            'ok':True,'car_code':code,'name':None,'source':'SICAR + SIGEF + OpenStreetMap',
-            'confidence':'unresolved','method':'no_validated_property_name',
+            'ok':False,'car_code':code,'name':None,'source':'SICAR + SIGEF + OpenStreetMap',
+            'detail':'property_name_unresolved','confidence':'unresolved','method':'no_validated_property_name',
             'display_kind':'UNRESOLVED','validation_status':'UNRESOLVED','panel_name_eligible':False,
             'candidates':items[:5],'candidate_count':len(items),
             'osm_candidates_inside_car':len(osm.get('items') or []),'osm_conflict':bool(osm.get('conflict')),
@@ -206,7 +206,8 @@ def resolve_property_identity_sync(car_code:str)->dict[str,Any]:
 @app.get('/v1/live/property-identity/{car_code}')
 async def property_identity(car_code:str):
     out=await asyncio.to_thread(resolve_property_identity_sync,car_code)
-    if not out.get('ok'):raise HTTPException(status_code=404 if out.get('detail')!='invalid_car_format' else 422,detail=out)
+    if not out.get('ok') and not out.get('validation_status'):
+        raise HTTPException(status_code=404 if out.get('detail')!='invalid_car_format' else 422, detail=out)
     return out
 
 

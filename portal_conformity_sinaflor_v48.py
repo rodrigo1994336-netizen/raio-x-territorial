@@ -20,35 +20,20 @@ def _panel_sync_sinaflor_v48(car_code: str) -> dict[str, Any]:
     if not base.get("ok"):
         return dict(base)
 
-    # Preserve the MTE wrapper's immutability/idempotency contract.
+    # The canonical registry already contains SINAFLOR. Enrich its row only;
+    # never increment or reconstruct the denominator in this wrapper.
     out = dict(base)
-    sources = [dict(x) for x in (base.get("sources") or [])]
-    compliance = [
-        dict(x)
-        for x in (base.get("compliance_sources") or [])
-        if str((x or {}).get("id") or "") != "sinaflor"
-    ]
-    out["sources"] = sources
-    out["compliance_sources"] = [
-        *compliance,
-        {
-            "id": "sinaflor",
-            "label": "SINAFLOR — Supressão",
-            "state": "on_demand",
-            "reason": "Aguardando confronto espacial com a camada pública IBAMA/PAMGIA.",
-        },
-    ]
-
+    out["sources"] = [dict(x) for x in (base.get("sources") or [])]
+    compliance = [dict(x) for x in (base.get("compliance_sources") or [])]
+    sinaflor = next((x for x in compliance if str(x.get("id") or "") == "sinaflor"), None)
+    if sinaflor is None:
+        raise RuntimeError("sinaflor_source_missing_from_canonical_registry")
+    sinaflor.update({
+        "state": "on_demand",
+        "reason": "Aguardando confronto espacial com a camada pública IBAMA/PAMGIA.",
+    })
+    out["compliance_sources"] = compliance
     audit = dict(base.get("source_audit") or {})
-    # MTE production contract is 11 implemented sources. SINAFLOR becomes the 12th.
-    audit["total"] = int(audit.get("total") or (len(sources) + len(compliance))) + 1
-    planned = [
-        dict(x)
-        for x in (audit.get("hidden_planned_sources") or [])
-        if str((x or {}).get("id") or "") != "sinaflor"
-    ]
-    audit["hidden_planned_sources"] = planned
-    audit["hidden_planned_count"] = len(planned)
     audit["visible_compliance"] = len(out["compliance_sources"])
     out["source_audit"] = audit
     return out
@@ -65,18 +50,8 @@ async def conformity_sinaflor_v48(car_code: str):
     return await asyncio.to_thread(query_sinaflor_authorization, code)
 
 
-# MTE owns the shared audit UI. Source 2 removes SINAFLOR from its pending-only
-# client catalog and makes the audit renderer generic for any implemented row
-# carrying the rx48 status contract. Fail loudly if the frozen MTE pattern drifts.
-_PENDING_LITERAL = "  ['SINAFLOR — autorização','IBAMA / SINAFLOR'],\n"
-_GENERIC_OLD = "if(id==='mte_slave_labor'){const status=row.querySelector('.rx48-check-status')?.textContent?.trim()||'NÃO VERIFICADA',detail=row.querySelector('.rx48-check-reason')?.textContent?.trim()||'';items.push(auditItem(label,status,detail))}else{items.push(auditItem(label,'NÃO CONSULTADA','Fonte preservada do painel original; ausência não presumida.'))}"
-_GENERIC_NEW = "if(row.querySelector('.rx48-check-status')){const status=row.querySelector('.rx48-check-status')?.textContent?.trim()||'NÃO VERIFICADA',detail=row.querySelector('.rx48-check-reason')?.textContent?.trim()||'';items.push(auditItem(label,status,detail))}else{items.push(auditItem(label,'NÃO CONSULTADA','Fonte preservada do painel original; ausência não presumida.'))}"
-if _PENDING_LITERAL not in portal_v8.PORTAL_HTML:
-    raise RuntimeError("v48_sinaflor_mte_pending_contract_drift")
-if _GENERIC_OLD not in portal_v8.PORTAL_HTML:
-    raise RuntimeError("v48_sinaflor_mte_audit_contract_drift")
-portal_v8.PORTAL_HTML = portal_v8.PORTAL_HTML.replace(_PENDING_LITERAL, "", 1).replace(_GENERIC_OLD, _GENERIC_NEW, 1)
-
+# MTE owns the shared audit UI and now renders every canonical registry row
+# generically. SINAFLOR must not patch or duplicate that registry/audit renderer.
 
 UI = r'''
 <style id="rxConformitySinaflorV48">
@@ -113,4 +88,4 @@ UI = r'''
 if "RX_CONFORMITY_SINAFLOR_V48" not in portal_v8.PORTAL_HTML:
     portal_v8.PORTAL_HTML = portal_v8.PORTAL_HTML.replace("</body>", UI + "<!-- RX_CONFORMITY_SINAFLOR_V48 --></body>")
 
-print("RX_PORTAL_CONFORMITY_SINAFLOR_V48=implemented12_exact_spatial_broad_scope_guard_future6_audit_only", flush=True)
+print("RX_PORTAL_CONFORMITY_SINAFLOR_V48=canonical11_exact_spatial_broad_scope_guard_future6_audit_only", flush=True)

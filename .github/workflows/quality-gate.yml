@@ -23,6 +23,8 @@ jobs:
       - name: Compile Python modules
         run: |
           python -m compileall -q .
+      - name: D0 canonical source registry and identity truth gate
+        run: PYTHONPATH=. python scripts/d0_source_registry_gate.py
       - name: Import standalone engines
         env:
           RX_RELEASE: OFF

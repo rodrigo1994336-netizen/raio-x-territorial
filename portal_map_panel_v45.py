@@ -9,6 +9,7 @@ from fastapi import HTTPException
 import portal_v8
 from car_resilient import CAR_RE, fetch_car_live_resilient
 from property_identity_runtime import resolve_property_identity_sync
+from source_audit_registry_v49 import build_source_audit, compliance_sources as audit_compliance_sources
 
 app = portal_v8.app
 _CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
@@ -80,39 +81,18 @@ def _panel_sync(car_code: str) -> dict[str, Any]:
         ]
     refs = list(dict.fromkeys(str(x).strip() for x in refs if str(x).strip()))[:3]
 
-    # V45 is a fast panel. Deep restriction sources stay explicitly gray until
-    # they are actually queried. "Not consulted" is never converted to green.
-    compliance_sources = [
-        {"id": "embargo", "label": "Embargos", "state": "not_consulted"},
-        {"id": "prodes", "label": "PRODES", "state": "not_consulted"},
-        {"id": "indigenous_land", "label": "Terra Indígena", "state": "not_consulted"},
-        {"id": "legal_reserve", "label": "Reserva Legal", "state": "not_consulted"},
-        {"id": "conservation_unit", "label": "Un. Conservação", "state": "not_consulted"},
-        {"id": "registry", "label": "Matrícula", "state": "not_consulted"},
-        {"id": "public_forest", "label": "Floresta Pública", "state": "not_consulted"},
-        {"id": "snci", "label": "SNCI", "state": "not_consulted"},
-    ]
-
+    # The counter has exactly one canonical implemented-source registry.
+    # Identity resolution is a process, not a source, and never enters it.
+    source_audit = build_source_audit({"car": "ANSWERED_HIT"})
+    compliance_sources = audit_compliance_sources(source_audit)
     sources = [
         {
             "id": "car",
             "label": "CAR / SICAR",
             "state": "available",
             "detail": "Perímetro e atributos cadastrais públicos disponíveis.",
-        },
-        {
-            "id": "denomination",
-            "label": "Denominação",
-            "state": "validated" if name_eligible else "diligence",
-            "detail": (
-                f"Validada — {identity.get('origin_label') or identity.get('source') or 'fonte pública'}"
-                if name_eligible
-                else "Nenhuma denominação validada para este CAR. Referências geográficas não são promovidas."
-            ),
-        },
+        }
     ]
-    responded_count = 1 + (1 if identity_ok else 0)
-    total_source_count = len(sources) + len(compliance_sources)
 
     out = {
         "ok": True,
@@ -137,11 +117,7 @@ def _panel_sync(car_code: str) -> dict[str, Any]:
         "bbox": car.get("bbox"),
         "sources": sources,
         "compliance_sources": compliance_sources,
-        "source_audit": {
-            "responded": responded_count,
-            "total": total_source_count,
-            "deep_sources_requested": False,
-        },
+        "source_audit": source_audit,
         "risk": {
             "state": "not_classified",
             "label": "RISCO NÃO CLASSIFICADO",
@@ -181,7 +157,8 @@ body.rx43-dossier-open #panel{background:transparent!important;pointer-events:no
 .rx45-top{display:flex;gap:8px;align-items:flex-start}.rx45-title{min-width:0;flex:1}.rx45-eyebrow{font-size:8px;font-weight:900;letter-spacing:1px;text-transform:uppercase;color:var(--rx45-green)}.rx45-title h2{font-size:19px;line-height:1.18;margin:4px 0 0;overflow-wrap:anywhere}.rx45-place{font-size:10px;color:var(--rx45-muted);margin-top:5px}.rx45-close{width:34px;height:34px;border-radius:11px;border:1px solid var(--rx45-line);background:#10271d;color:var(--rx45-text);font-size:18px;cursor:pointer;flex:0 0 auto}
 .rx45-tools{display:flex;gap:5px;flex:0 0 auto}.rx45-tool{height:30px;border:1px solid var(--rx45-line);border-radius:9px;background:#10271d;color:var(--rx45-text);padding:0 8px;font-size:7px;font-weight:900;cursor:pointer}
 .rx45-code{font:700 8px/1.35 ui-monospace,SFMono-Regular,Menlo,monospace;color:#789789;overflow-wrap:anywhere}.rx45-name-note{font-size:8px;color:var(--rx45-muted);line-height:1.45;margin-top:4px}
-.rx45-risk{border:1px solid var(--rx45-line);border-left:4px solid var(--rx45-gray);background:var(--rx45-card);border-radius:12px;padding:9px 10px}.rx45-risk strong{display:block;font-size:9px;letter-spacing:.45px}.rx45-risk span{display:block;color:var(--rx45-muted);font-size:8px;line-height:1.45;margin-top:4px}.rx45-risk.clear{border-left-color:var(--rx45-green)}.rx45-risk.diligence{border-left-color:var(--rx45-yellow)}.rx45-risk.probable_impediment{border-left-color:var(--rx45-red)}
+.rx45-risk{border:1px solid var(--rx45-line);border-left:4px solid var(--rx45-gray);background:var(--rx45-card);border-radius:12px;padding:9px 10px}
+.rx45-audit-unavailable{border:1px solid var(--rx45-yellow);border-left:4px solid var(--rx45-yellow);background:var(--rx45-card);border-radius:12px;padding:9px 10px;font-size:8px;line-height:1.45}.rx45-audit-unavailable strong{display:block;font-size:8px;letter-spacing:.35px;margin-bottom:4px}.rx45-panel-card[data-audit-available="0"]{border-color:var(--rx45-yellow)}.rx45-risk strong{display:block;font-size:9px;letter-spacing:.45px}.rx45-risk span{display:block;color:var(--rx45-muted);font-size:8px;line-height:1.45;margin-top:4px}.rx45-risk.clear{border-left-color:var(--rx45-green)}.rx45-risk.diligence{border-left-color:var(--rx45-yellow)}.rx45-risk.probable_impediment{border-left-color:var(--rx45-red)}
 .rx45-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}.rx45-kpi{background:var(--rx45-card);border:1px solid var(--rx45-line);border-radius:12px;padding:9px;min-height:58px}.rx45-kpi small{display:block;font-size:7px;letter-spacing:.6px;text-transform:uppercase;color:var(--rx45-muted)}.rx45-kpi b{display:block;font-size:11px;line-height:1.3;margin-top:4px}.rx45-kpi.wide{grid-column:1/-1}
 .rx45-section{border:1px solid var(--rx45-line);background:var(--rx45-card);border-radius:13px;padding:10px}.rx45-section h4{font-size:9px;margin:0 0 7px;text-transform:uppercase;letter-spacing:.7px}.rx45-row{display:grid;grid-template-columns:minmax(105px,.8fr) minmax(0,1.2fr);gap:8px;padding:6px 0;border-top:1px solid #1d382c;font-size:8px;line-height:1.45}.rx45-row:first-of-type{border-top:0}.rx45-row span{color:var(--rx45-muted)}
 .rx45-compliance{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}.rx45-check{display:flex;align-items:center;gap:6px;min-width:0;padding:7px;border-radius:9px;background:#0c1d16;font-size:8px}.rx45-dot{width:7px;height:7px;border-radius:50%;background:var(--rx45-gray);flex:0 0 auto}.rx45-dot.clear,.rx45-dot.available,.rx45-dot.validated{background:var(--rx45-green)}.rx45-dot.diligence{background:var(--rx45-yellow)}.rx45-dot.probable_impediment{background:var(--rx45-red)}.rx45-dot.not_consulted,.rx45-dot.on_demand,.rx45-dot.unresolved{background:var(--rx45-gray)}
@@ -214,7 +191,7 @@ body.rx43-dossier-open #panel{background:transparent!important;pointer-events:no
  const text=v=>(v===null||v===undefined||v==='')?'Não informado':String(v);
  const currentCar=()=>String((window.current||{}).car_code||'').trim().toUpperCase();
  let activeCar='',activeData=null,busy=false;
- function complianceRows(items){return (items||[]).map(x=>`<div class="rx45-check" data-source="${esc(x.id||'')}"><i class="rx45-dot ${esc(x.state||'not_consulted')}"></i><span>${esc(x.label||'Fonte')}</span></div>`).join('')}
+ function complianceRows(items){return (items||[]).map(x=>`<div class="rx45-check" data-source="${esc(x.id||'')}" data-audit-state="${esc(x.audit_state||'NOT_QUERIED')}"><i class="rx45-dot ${esc(x.state||'not_consulted')}"></i><span>${esc(x.label||'Fonte')}</span></div>`).join('')}
  function panelHtml(p){
    const named=!!p.validated_name;
    const name=named?p.validated_name:'IMÓVEL RURAL';
@@ -222,9 +199,11 @@ body.rx43-dossier-open #panel{background:transparent!important;pointer-events:no
    const ref=refs.length?`<div class="rx45-reference"><strong>REFERÊNCIA GEOGRÁFICA / CADASTRAL</strong><br>${refs.map(esc).join(' · ')}<br><span>Contexto cartográfico. Não é denominação do CAR.</span></div>`:'';
    const dates=[p.created_at?`Cadastro: ${esc(text(p.created_at))}`:'',p.updated_at?`Atualização: ${esc(text(p.updated_at))}`:''].filter(Boolean).join(' · ')||'Datas não informadas nesta fonte';
    const risk=p.risk||{state:'not_classified',label:'RISCO NÃO CLASSIFICADO',detail:'Fontes aprofundadas ainda não consultadas.'};
-   const audit=p.source_audit||{};
-   const count=(Number.isFinite(Number(audit.responded))&&Number.isFinite(Number(audit.total)))?`${Number(audit.responded)} de ${Number(audit.total)} fontes responderam`:'Auditoria de fontes disponível na análise completa';
-   return `<div class="rx45-panel-card" data-car="${esc(p.car_code)}"><div class="rx45-top"><div class="rx45-title"><div class="rx45-eyebrow">${named?'DENOMINAÇÃO VALIDADA':'IDENTIDADE DO IMÓVEL'}</div><h2>${esc(name)}</h2><div class="rx45-place">${esc(text(p.municipality))}${p.uf?' / '+esc(p.uf):''}</div><div class="rx45-code">CAR ${esc(p.car_code)}</div><div class="rx45-name-note">${named?esc(p.validated_name_source||'Denominação validada por protocolo de identidade.'):'O painel não inventa denominação e não herda nomes OSM/SIGEF.'}</div></div><div class="rx45-tools"><button class="rx45-tool" id="rx45Kml" type="button">KML</button><button class="rx45-tool" id="rx45Png" type="button">PNG</button></div><button class="rx45-close" id="rx45Close" aria-label="Fechar" type="button">×</button></div><div class="rx45-risk ${esc(risk.state||'not_classified')}"><strong>${esc(risk.label||'RISCO NÃO CLASSIFICADO')}</strong><span>${esc(risk.detail||'')}</span></div><div class="rx45-grid"><div class="rx45-kpi"><small>Área CAR</small><b>${fmt(p.area_ha,4)} ha</b></div><div class="rx45-kpi"><small>Área</small><b>${fmt(p.area_m2,2)} m²</b></div><div class="rx45-kpi"><small>Módulos fiscais</small><b>${fmt(p.fiscal_modules,4)}</b></div><div class="rx45-kpi"><small>Situação CAR</small><b>${esc(text(p.car_status))}</b></div><div class="rx45-kpi wide"><small>Datas</small><b>${dates}</b></div></div><section class="rx45-section"><h4>Cadastro</h4><div class="rx45-row"><b>Condição</b><span>${esc(text(p.condition))}</span></div><div class="rx45-row"><b>Tipo do imóvel</b><span>${esc(text(p.property_type))}</span></div></section><section class="rx45-section"><h4>Conformidade</h4><div class="rx45-compliance">${complianceRows(p.compliance_sources)}</div><div class="rx45-audit-count">${esc(count)} · <button type="button" class="rx45-audit-link" id="rx45Audit">ver auditoria</button></div></section>${ref}<div class="rx45-actions"><button class="primary" id="rx45Full" type="button">VER ANÁLISE COMPLETA</button><button class="rx45-pdf-link" id="rx45Pdf" type="button">gerar PDF</button></div></div>`;
+   const audit=p.source_audit;
+   const auditOk=!!audit&&audit.available===true&&Array.isArray(audit.registry)&&audit.registry.length>0&&Number.isInteger(audit.responded)&&Number.isInteger(audit.total)&&audit.total===audit.registry.length;
+   const count=auditOk?`${audit.responded} de ${audit.total} fontes responderam nesta consulta`:'Auditoria indisponível nesta consulta';
+   const auditBanner=auditOk?'':`<div class="rx45-audit-unavailable"><strong>NÃO FOI POSSÍVEL CONFERIR AS FONTES NESTA CONSULTA.</strong>Os dados cadastrais do CAR permanecem visíveis, mas a conformidade não foi avaliada. Tente novamente.</div>`;
+   return `<div class="rx45-panel-card" data-audit-available="${auditOk?'1':'0'}" data-car="${esc(p.car_code)}"><div class="rx45-top"><div class="rx45-title"><div class="rx45-eyebrow">${named?'DENOMINAÇÃO VALIDADA':'IDENTIDADE DO IMÓVEL'}</div><h2>${esc(name)}</h2><div class="rx45-place">${esc(text(p.municipality))}${p.uf?' / '+esc(p.uf):''}</div><div class="rx45-code">CAR ${esc(p.car_code)}</div><div class="rx45-name-note">${named?esc(p.validated_name_source||'Denominação validada por protocolo de identidade.'):'O painel não inventa denominação e não herda nomes OSM/SIGEF.'}</div></div><div class="rx45-tools"><button class="rx45-tool" id="rx45Kml" type="button">KML</button><button class="rx45-tool" id="rx45Png" type="button">PNG</button></div><button class="rx45-close" id="rx45Close" aria-label="Fechar" type="button">×</button></div>${auditBanner}<div class="rx45-risk ${esc(risk.state||'not_classified')}"><strong>${esc(risk.label||'RISCO NÃO CLASSIFICADO')}</strong><span>${esc(risk.detail||'')}</span></div><div class="rx45-grid"><div class="rx45-kpi"><small>Área CAR</small><b>${fmt(p.area_ha,4)} ha</b></div><div class="rx45-kpi"><small>Área</small><b>${fmt(p.area_m2,2)} m²</b></div><div class="rx45-kpi"><small>Módulos fiscais</small><b>${fmt(p.fiscal_modules,4)}</b></div><div class="rx45-kpi"><small>Situação CAR</small><b>${esc(text(p.car_status))}</b></div><div class="rx45-kpi wide"><small>Datas</small><b>${dates}</b></div></div><section class="rx45-section"><h4>Cadastro</h4><div class="rx45-row"><b>Condição</b><span>${esc(text(p.condition))}</span></div><div class="rx45-row"><b>Tipo do imóvel</b><span>${esc(text(p.property_type))}</span></div></section><section class="rx45-section"><h4>Conformidade</h4><div class="rx45-compliance">${complianceRows(p.compliance_sources)}</div><div class="rx45-audit-count">${esc(count)} · <button type="button" class="rx45-audit-link" id="rx45Audit">ver auditoria</button></div></section>${ref}<div class="rx45-actions"><button class="primary" id="rx45Full" type="button">VER ANÁLISE COMPLETA</button><button class="rx45-pdf-link" id="rx45Pdf" type="button">gerar PDF</button></div></div>`;
  }
  function geometry(){return activeData?.geometry||(window.current||{}).geometry||null}
  function coordsKml(g){
@@ -239,7 +218,7 @@ body.rx43-dossier-open #panel{background:transparent!important;pointer-events:no
  function downloadPng(){const g=geometry(),pts=flatten(g);if(!pts.length)return;const W=1200,H=800,pad=70,x=pts.map(p=>+p[0]),y=pts.map(p=>+p[1]),minX=Math.min(...x),maxX=Math.max(...x),minY=Math.min(...y),maxY=Math.max(...y),sx=(W-2*pad)/Math.max(maxX-minX,1e-9),sy=(H-2*pad)/Math.max(maxY-minY,1e-9),s=Math.min(sx,sy);const cv=document.createElement('canvas');cv.width=W;cv.height=H;const c=cv.getContext('2d');c.fillStyle='#07150f';c.fillRect(0,0,W,H);c.strokeStyle='#63e6a5';c.fillStyle='rgba(99,230,165,.16)';c.lineWidth=5;const drawRing=r=>{c.beginPath();r.forEach((p,i)=>{const px=(p[0]-minX)*s+pad,py=H-pad-(p[1]-minY)*s;i?c.lineTo(px,py):c.moveTo(px,py)});c.closePath();c.fill();c.stroke()};if(g.type==='Polygon')g.coordinates.forEach(drawRing);else if(g.type==='MultiPolygon')g.coordinates.forEach(poly=>poly.forEach(drawRing));c.fillStyle='#eef8f2';c.font='700 28px system-ui';c.fillText(activeData?.validated_name||'IMÓVEL RURAL',pad,38);c.fillStyle='#9fb5aa';c.font='18px ui-monospace';c.fillText(activeData?.car_code||'',pad,64);const a=document.createElement('a');a.href=cv.toDataURL('image/png');a.download=`${activeData?.car_code||'imovel'}.png`;a.click()}
  function runFull(){try{if(typeof window.rxProgressiveAnalyze==='function')window.rxProgressiveAnalyze();else if(typeof analyze==='function')analyze()}catch(e){}}
  function bind(){q('#rx45Close')?.addEventListener('click',()=>window.rx43CloseDossier?.());q('#rx45Full')?.addEventListener('click',runFull);q('#rx45Audit')?.addEventListener('click',runFull);q('#rx45Kml')?.addEventListener('click',downloadKml);q('#rx45Png')?.addEventListener('click',downloadPng);q('#rx45Pdf')?.addEventListener('click',()=>{try{window.downloadPDF?.()}catch(e){}})}
- function render(p){const h=q('#rx43SnapshotHost');if(!h||!p)return;h.innerHTML=panelHtml(p);bind()}
+ function render(p){const h=q('#rx43SnapshotHost');if(!h||!p)return;h.innerHTML=panelHtml(p);const card=h.querySelector('.rx45-panel-card');if(card)card.__rxSourceAudit=(p.source_audit&&Array.isArray(p.source_audit.registry))?JSON.parse(JSON.stringify(p.source_audit)):null;bind()}
  async function load(car){if(!car||busy)return;if(car===activeCar&&activeData){render(activeData);return}busy=true;try{const r=await fetch(`/v1/live/map-panel/${encodeURIComponent(car)}`),d=await r.json();if(r.ok&&d?.ok){activeCar=car;activeData=d;render(d)}}catch(e){}finally{busy=false}}
  function inspect(){const car=currentCar();const h=q('#rx43SnapshotHost');if(!car||!h)return;if(h.querySelector('.rx45-panel-card'))return;load(car)}
  function settle(car){[40,500,1800,9500].forEach(ms=>setTimeout(()=>{if(currentCar()===car)load(car)},ms))}
