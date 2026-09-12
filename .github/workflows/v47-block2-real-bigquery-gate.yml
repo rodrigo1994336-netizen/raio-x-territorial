@@ -55,6 +55,16 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: D1 name coverage national count - EXECUTE under reviewed 1 GiB cap
+        run: PYTHONPATH=. python scripts/d1_name_coverage_count.py
+      - name: Upload D1 exact count evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: d1-name-coverage-count
+          path: artifacts/d1_name_coverage_count.json
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Confirm authorized admin schema, estimate cost, then run real V47 gate
         run: |
           PYTHONPATH=. python - <<'PY'
