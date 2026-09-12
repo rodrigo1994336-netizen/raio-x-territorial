@@ -1,0 +1,42 @@
+name: V44 Name Source Audit
+on:
+  push:
+    branches: [ v44-property-sidebar ]
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: Query SICAR official search for exact CAR
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import requests,re,json
+          base='https://consultapublica.car.gov.br/publico/imoveis/'
+          h={'User-Agent':'Mozilla/5.0 (Raio-X Territorial public-source audit)','Accept':'application/json,text/javascript,*/*;q=0.01','X-Requested-With':'XMLHttpRequest'}
+          js=requests.get('https://consultapublica.car.gov.br/publico/public/javascripts/search-button.js',headers=h,timeout=20).text
+          print('SEARCH_BUTTON_JS_START')
+          for i,line in enumerate(js.splitlines(),1):
+              if 42<=i<=70: print(f'{i}: {line}')
+          print('SEARCH_BUTTON_JS_END')
+          cars=['MG-3120904-752581D6FFA24FBC802D7A56C99E0B0F','MG-3120904-DFB380BECD7A4323AD8AA68FA14D011F']
+          session=requests.Session();session.headers.update(h)
+          for car in cars:
+              print('\nCAR',car)
+              attempts=[
+                  ('GET_SEARCH_Q','search',{'q':car}),('GET_SEARCH_TEXT','search',{'text':car}),('GET_SEARCH_TERMO','search',{'termo':car}),('GET_SEARCH_CAR','search',{'car':car}),
+                  ('GET_SEARCH_QUERY','search',{'query':car}),('GET_SEARCH_SEARCH','search',{'search':car})
+              ]
+              for label,path,params in attempts:
+                  try:
+                      r=session.get(base+path,params=params,timeout=20)
+                      print(label,'status',r.status_code,'url',r.url,'type',r.headers.get('content-type'),'bytes',len(r.content),'body',r.text[:1000].replace('\n',' '))
+                  except Exception as e:print(label,'ERROR',type(e).__name__,str(e)[:180])
+              for url in [f'https://www.car.gov.br/#/consultar/{car}',f'https://consultapublica.car.gov.br/publico/imoveis/search?query={car}']:
+                  try:
+                      r=session.get(url,timeout=20);print('DIRECT','status',r.status_code,'url',r.url,'bytes',len(r.content),'body',r.text[:500].replace('\n',' '))
+                  except Exception as e:print('DIRECT_ERROR',type(e).__name__,str(e)[:180])
+          PY
