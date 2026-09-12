@@ -45,6 +45,16 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install google-cloud-bigquery google-auth shapely pyproj
+      - name: D1 name coverage national count - DRY RUN ONLY
+        run: PYTHONPATH=. python scripts/d1_name_coverage_dryrun.py
+      - name: Upload D1 dry-run evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: d1-name-coverage-dryrun
+          path: artifacts/d1_name_coverage_dryrun.json
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Confirm authorized admin schema, estimate cost, then run real V47 gate
         run: |
           PYTHONPATH=. python - <<'PY'
