@@ -8,7 +8,13 @@ from fastapi import HTTPException, Request
 
 import portal_v8
 from car_resilient import CAR_RE, fetch_car_live_resilient
-from property_identity_runtime import SIGEF_REFERENCE_MIN_OVERLAP, resolve_property_identity_sync
+from property_identity_runtime import (
+    NEGATIVE_TTL_SECONDS,
+    SIGEF_REFERENCE_MIN_OVERLAP,
+    forget_unanswered as _forget_identity_unanswered,
+    resolve_property_identity_sync,
+    sigef_reference_rank,
+)
 from source_audit_registry_v49 import build_source_audit, compliance_sources as audit_compliance_sources
 from external_process_lifecycle import ManagedOperationTimeout, RequestDisconnected, install_shutdown_cleanup, run_sync_with_request_lifecycle
 
@@ -17,6 +23,17 @@ install_shutdown_cleanup(app)
 _CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 _TTL_SECONDS = 600
 SIGEF_REFERENCE_ORIGIN = "SIGEF/INCRA · espelho público IBAMA/PAMGIA"
+
+
+def _unanswered_key(code: str) -> str:
+    return f"{code}|unanswered"
+
+
+def forget_unanswered(car_code: str) -> None:
+    """The explicit client retry: drop the brief memory of a reference query that did not answer."""
+    code = str(car_code or "").strip().upper()
+    _CACHE.pop(_unanswered_key(code), None)
+    _forget_identity_unanswered(code)
 
 
 def _first(props: dict[str, Any], *keys: str):
@@ -37,15 +54,17 @@ def _num(value: Any) -> float | None:
 
 
 def _sigef_reference(identity: dict[str, Any]) -> tuple[dict[str, Any] | None, str, int]:
-    """C2b: the SIGEF/INCRA parcel covering the largest share of the CAR (never the title).
+    """C2b: the SIGEF/INCRA parcel that best coincides with the CAR (never the title).
 
+    Only parcels covering at least half of the CAR qualify; among them the one with the highest
+    min(share of the CAR, share of the parcel) wins, so an enclosing settlement never hides the lot's own parcel.
     Returns (reference, state, others). state: found | none | incomplete | unavailable | not_queried.
-    A truncated answer without a qualifying parcel is 'incomplete', never 'none'.
+    An answer cut short (or partly unmeasurable) without a qualifying parcel is 'incomplete', never 'none'.
     """
     state = str(identity.get("sigef_state") or "")
     if state == "not_queried":
         return None, "not_queried", 0
-    if state != "answered":
+    if state != "answered":  # unavailable, cancelled or unknown: the query did not answer
         return None, "unavailable", 0
     pool = identity.get("sigef_reference_candidates")
     if pool is None:
@@ -58,9 +77,10 @@ def _sigef_reference(identity: dict[str, Any]) -> tuple[dict[str, Any] | None, s
         label = str(item.get("name") or "").strip()
         if label and overlap is not None and SIGEF_REFERENCE_MIN_OVERLAP <= overlap <= 1:
             strong.append((overlap, label, item))
+    incomplete = bool(identity.get("sigef_incomplete", identity.get("sigef_truncated")))
     if not strong:
-        return None, ("incomplete" if identity.get("sigef_truncated") else "none"), 0
-    strong.sort(key=lambda x: x[0], reverse=True)
+        return None, ("incomplete" if incomplete else "none"), 0
+    strong.sort(key=lambda x: sigef_reference_rank(x[2]), reverse=True)
     overlap, label, best = strong[0]
     total = max(len(strong), int(identity.get("sigef_reference_candidate_count") or 0))
     reference = {
@@ -85,6 +105,13 @@ def _panel_sync(car_code: str, *, cancel_event=None) -> dict[str, Any]:
         out = dict(cached[1])
         out["cached"] = True
         return out
+    # A reference query that did not answer is remembered briefly (never as an answer) so a burst of
+    # clicks does not repeat SICAR + SIGEF; the explicit retry (?sigef_retry=1) forgets it first.
+    missed = _CACHE.get(_unanswered_key(code))
+    if missed and now - missed[0] < NEGATIVE_TTL_SECONDS:
+        out = dict(missed[1])
+        out["cached"] = True
+        return out
 
     car = fetch_car_live_resilient(code, cancel_event=cancel_event)
     if not car.get("ok"):
@@ -96,7 +123,10 @@ def _panel_sync(car_code: str, *, cancel_event=None) -> dict[str, Any]:
         }
 
     props = car.get("properties") or {}
-    identity = resolve_property_identity_sync(code, cancel_event=cancel_event)
+    # The SICAR answer just fetched is handed over, so identity does not ask SICAR a second time.
+    identity = resolve_property_identity_sync(code, cancel_event=cancel_event, car=car)
+    if identity.get("cancelled") or (cancel_event is not None and cancel_event.is_set()):
+        return {"ok": False, "car_code": code, "cancelled": True, "detail": "request_cancelled"}
     identity_ok = bool(identity.get("ok"))
     validation_status = str(identity.get("validation_status") or "").strip().upper() or None
     # C2a: a name reaches the panel only when the identity is VALIDATED, eligible and non-empty.
@@ -162,6 +192,8 @@ def _panel_sync(car_code: str, *, cancel_event=None) -> dict[str, Any]:
         "sigef_reference": sigef_reference,
         "sigef_reference_state": sigef_reference_state,
         "sigef_reference_others": sigef_reference_others,
+        # 200 is not all: when the SIGEF answer was cut short, the count is a floor, not a total.
+        "sigef_reference_others_complete": not bool(identity.get("sigef_incomplete", identity.get("sigef_truncated"))),
         "sigef_reference_truncated": bool(identity.get("sigef_truncated")),
         "geometry": car.get("geometry"),
         "bbox": car.get("bbox"),
@@ -179,9 +211,12 @@ def _panel_sync(car_code: str, *, cancel_event=None) -> dict[str, Any]:
         "source": "SICAR/WFS público + resolvedor auditado de identidade",
         "cached": False,
     }
-    # A reference query that did not answer (or answered only partially) is never cached.
-    if sigef_reference_state in ("unavailable", "incomplete"):
+    # A reference query that did not answer is never cached as an answer, only remembered briefly.
+    # 'incomplete' is an answer that cannot change on retry: it is cached like any other.
+    if sigef_reference_state == "unavailable":
+        _CACHE[_unanswered_key(code)] = (time.monotonic(), out)
         return out
+    _CACHE.pop(_unanswered_key(code), None)
     _CACHE[code] = (now, out)
     if len(_CACHE) > 500:
         for key, _ in sorted(_CACHE.items(), key=lambda kv: kv[1][0])[:100]:
@@ -190,7 +225,9 @@ def _panel_sync(car_code: str, *, cancel_event=None) -> dict[str, Any]:
 
 
 @app.get("/v1/live/map-panel/{car_code}")
-async def map_panel_v45(car_code: str, request: Request):
+async def map_panel_v45(car_code: str, request: Request, sigef_retry: int = 0):
+    if sigef_retry:
+        forget_unanswered(car_code)
     try:
         out = await run_sync_with_request_lifecycle(request, _panel_sync, car_code, timeout_seconds=None)
     except RequestDisconnected:
@@ -284,10 +321,13 @@ body.rx43-dossier-open #panel{background:transparent!important;pointer-events:no
  function runFull(){try{if(typeof window.rxProgressiveAnalyze==='function')window.rxProgressiveAnalyze();else if(typeof analyze==='function')analyze()}catch(e){}}
  function bind(){q('#rx45Close')?.addEventListener('click',()=>window.rx43CloseDossier?.());q('#rx45Full')?.addEventListener('click',runFull);q('#rx45Audit')?.addEventListener('click',runFull);q('#rx45Kml')?.addEventListener('click',downloadKml);q('#rx45Png')?.addEventListener('click',downloadPng);q('#rx45Pdf')?.addEventListener('click',()=>{try{window.downloadPDF?.()}catch(e){}})}
  function render(p){const h=q('#rx43SnapshotHost');if(!h||!p)return;h.innerHTML=panelHtml(p);const card=h.querySelector('.rx45-panel-card');if(card)card.__rxSourceAudit=(p.source_audit&&Array.isArray(p.source_audit.registry))?JSON.parse(JSON.stringify(p.source_audit)):null;bind()}
- async function load(car){if(!car||busy)return;if(car===activeCar&&activeData){render(activeData);return}busy=true;try{const r=await fetch(`/v1/live/map-panel/${encodeURIComponent(car)}`),d=await r.json();if(r.ok&&d?.ok&&currentCar()===car){activeCar=car;activeData=d;render(d);sigefFollowUp(car,d)}}catch(e){}finally{busy=false}}
+ async function load(car){if(!car||busy)return;if(car===activeCar&&activeData){activeData=fresher(car,activeData);render(activeData);sigefFollowUp(car,activeData);return}busy=true;try{const r=await fetch(`/v1/live/map-panel/${encodeURIComponent(car)}`),d=await r.json();if(r.ok&&d?.ok&&currentCar()===car){activeCar=car;activeData=d;render(d);sigefFollowUp(car,d)}}catch(e){}finally{busy=false}}
  // C2b: ONE automatic retry of an unanswered reference while this panel is open. Only the reference
  // slot is repainted, so the sections other modules add to the panel are never wiped.
- function sigefFollowUp(car,d){const R=window.rxSigefRefC2;if(!R||!R.needsRetry(d))return;const open=()=>currentCar()===car&&!!q(`#rx43SnapshotHost .rx45-panel-card[data-car="${CSS.escape(car)}"]`);R.scheduleRetry(car,open,fresh=>{if(!open())return;let data=(activeCar===car&&activeData)?activeData:{...d};if(fresh)data={...data,sigef_reference:fresh.sigef_reference??null,sigef_reference_state:fresh.sigef_reference_state,sigef_reference_others:fresh.sigef_reference_others,sigef_reference_truncated:fresh.sigef_reference_truncated};if(activeCar===car)activeData=data;const slot=q(`#rx43SnapshotHost .rx45-panel-card[data-car="${CSS.escape(car)}"] [data-rx-sigef-slot]`);if(slot)slot.innerHTML=R.html(data,'panel')})}
+ const refFields=x=>({sigef_reference:x.sigef_reference??null,sigef_reference_state:x.sigef_reference_state,sigef_reference_others:x.sigef_reference_others,sigef_reference_others_complete:x.sigef_reference_others_complete,sigef_reference_truncated:x.sigef_reference_truncated});
+ // C2b: this panel's own copy never overrides a newer answer the card already holds for the same CAR.
+ function fresher(car,data){const R=window.rxSigefRefC2,cur=window.current||{};if(!R||String(cur.car_code||'').trim().toUpperCase()!==car||!cur.sigef_reference_state)return data;return R.state(data)==='unanswered'&&R.state(cur)!=='unanswered'?{...data,...refFields(cur)}:data}
+ function sigefFollowUp(car,d){const R=window.rxSigefRefC2;if(!R||!R.needsRetry(d))return;const open=()=>currentCar()===car&&document.body.classList.contains('rx43-dossier-open')&&!q('#panel')?.classList.contains('hidden')&&!!q(`#rx43SnapshotHost .rx45-panel-card[data-car="${CSS.escape(car)}"]`);R.scheduleRetry(car,open,fresh=>{if(!open())return;let data=(activeCar===car&&activeData)?activeData:{...d};if(fresh)data={...data,...refFields(fresh)};if(activeCar===car)activeData=data;const slot=q(`#rx43SnapshotHost .rx45-panel-card[data-car="${CSS.escape(car)}"] [data-rx-sigef-slot]`);if(slot)slot.innerHTML=R.html(data,'panel')})}
  function inspect(){const car=currentCar();const h=q('#rx43SnapshotHost');if(!car||!h)return;if(h.querySelector('.rx45-panel-card'))return;load(car)}
  function settle(car){[40,500,1800,9500].forEach(ms=>setTimeout(()=>{if(currentCar()===car)load(car)},ms))}
  function install(){

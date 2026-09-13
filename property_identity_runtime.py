@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+import threading
 import time
 from typing import Any
 from urllib.parse import urlencode
@@ -10,6 +11,10 @@ from urllib.request import Request as URLRequest, urlopen
 
 from fastapi import HTTPException, Request
 from shapely.geometry import Point, shape
+try:
+    from shapely import make_valid as _make_valid
+except ImportError:  # shapely < 2
+    from shapely.validation import make_valid as _make_valid
 
 import portal_v8
 import public_property_name_seed_v43 as seed
@@ -37,12 +42,47 @@ _OSM_SOURCE='OpenStreetMap contributors — denominação geográfica pública (
 _SIGEF_RECORD_CAP=80
 # C2b: minimum share of the CAR a SIGEF parcel must cover to be shown as its cadastral reference.
 SIGEF_REFERENCE_MIN_OVERLAP=0.50
+# C2b: an attempt that did not answer (SICAR or SIGEF) is remembered only briefly and never as an
+# answer, so a burst of clicks shares one attempt. The explicit client retry forgets it first.
+NEGATIVE_TTL_SECONDS=60
+_INFLIGHT:dict[str,threading.Event]={}
+_INFLIGHT_LOCK=threading.Lock()
+
+
+def _unanswered_key(code:str)->str:
+    return f'{code}|unanswered'
+
+
+def forget_unanswered(car_code:str)->None:
+    _CACHE.pop(_unanswered_key(str(car_code or '').strip().upper()),None)
 
 
 def _share(value:float)->float:
-    """A 0..1 share kept at 6 decimals and floored, so a sub-100% share never reads as 100%."""
-    v=min(max(float(value),0.0),1.0)
-    return math.floor(round(v,9)*1_000_000)/1_000_000
+    """A 0..1 share kept at 6 decimals and floored, so a sub-100% share never reads as 100%.
+
+    Integer arithmetic: a float product such as 0.5005*1e6 (=500499.99999999994) must not lose a millionth.
+    """
+    v=float(value)
+    if not math.isfinite(v):v=0.0
+    v=min(max(v,0.0),1.0)
+    return (int(round(v*1_000_000_000))//1000)/1_000_000
+
+
+def sigef_reference_rank(item:dict[str,Any])->tuple[float,float]:
+    """How well a SIGEF parcel and the CAR coincide: min(share of the CAR, share of the parcel), then share of the CAR.
+
+    A settlement enclosing a single lot covers 100% of the lot's CAR but a tiny share of itself; the lot's own
+    parcel, covering both almost entirely, is the more specific reference.
+    """
+    try:car=float(item.get('overlap_ratio') or 0)
+    except Exception:car=0.0
+    try:parcel=float(item.get('parcel_overlap_ratio')) if item.get('parcel_overlap_ratio') is not None else car
+    except Exception:parcel=car
+    return (min(car,parcel),car)
+
+
+def _valid(geom):
+    return geom if geom.is_valid else _make_valid(geom)
 
 
 def _clean_name(value:Any)->str|None:
@@ -66,29 +106,48 @@ def _sigef_candidates(car_geom:dict[str,Any],bbox:list[float],cancel_event=None)
         'f':'geojson','where':'1=1','geometry':env,'geometryType':'esriGeometryEnvelope',
         'inSR':'4326','spatialRel':'esriSpatialRelIntersects',
         'outFields':'parcela_co,codigo_imo,nome_area,registro_m,registro_d,municipio_,uf_id,status,situacao_i',
-        'returnGeometry':'true','outSR':'4326','resultRecordCount':str(_SIGEF_RECORD_CAP)
+        'returnGeometry':'true','outSR':'4326','resultRecordCount':str(_SIGEF_RECORD_CAP),
+        # Largest parcels first: a capped page can then be proven complete for the 50% question.
+        'orderByFields':'Shape__Area DESC'
     }
+    params['outFields']+=',Shape__Area'
     raw=_curl(SIGEF_MIRROR+'?'+urlencode(params),True,cancel_event=cancel_event,connect_timeout=12,max_time=40,hard_timeout=45)
     if not raw.get('ok'):
         return {'ok':False,'detail':raw.get('detail') or raw.get('preview'),'items':[]}
-    data=raw.get('json') or {};features=data.get('features') or []
+    data=raw.get('json')
+    # ArcGIS answers overload, a secured service or a rejected query as HTTP 200 + {"error":...}.
+    # Trying is not answering: only a FeatureCollection with a features list is an answer.
+    if not isinstance(data,dict) or 'error' in data or not isinstance(data.get('features'),list):
+        err=data.get('error') if isinstance(data,dict) else None
+        code=err.get('code') if isinstance(err,dict) else None
+        return {'ok':False,'detail':f'arcgis_error:{code}' if err is not None else 'arcgis_malformed_answer','items':[]}
+    features=data['features']
     # 200 is not all: ArcGIS flags a capped answer (top level and, in GeoJSON, under properties).
     truncated=bool(data.get('exceededTransferLimit') or (data.get('properties') or {}).get('exceededTransferLimit') or len(features)>=_SIGEF_RECORD_CAP)
-    try:car=shape(car_geom);car_area=max(float(car.area),1e-12);car_centroid=car.centroid
+    try:car=_valid(shape(car_geom));car_area=max(float(car.area),1e-12);car_centroid=car.centroid
     except Exception as exc:return {'ok':False,'detail':f'geometry:{type(exc).__name__}:{exc}','items':[]}
-    items=[]
+    items=[];failed=0;areas=[];ordered=True
     for f in features:
-        props=f.get('properties') or {};name=_clean_name(props.get('nome_area'))
+        props=(f.get('properties') if isinstance(f,dict) else None) or {}
+        try:shape_area=float(props.get('Shape__Area'))
+        except Exception:shape_area=None
+        if shape_area is None or not math.isfinite(shape_area):ordered=False
+        else:
+            if areas and shape_area>areas[-1]*(1+1e-9):ordered=False
+            areas.append(shape_area)
+        name=_clean_name(props.get('nome_area'))
         if not name:continue
         try:
-            g=shape(f.get('geometry'))
+            # An invalid ring (self-intersection) is repaired before any area math: never a wrong share.
+            g=_valid(shape(f.get('geometry')))
             if g.is_empty or not g.intersects(car):continue
             inter=car.intersection(g)
             overlap=float(inter.area/car_area) if not inter.is_empty else 0.0
             area_ratio=float(g.area/car_area) if car_area else math.inf
             parcel_overlap=float(inter.area/g.area) if g.area>0 and not inter.is_empty else 0.0
             centroid_inside=bool(g.contains(car_centroid) or g.touches(car_centroid))
-        except Exception:continue
+        except Exception:
+            failed+=1;continue
         score=overlap
         if centroid_inside:score+=0.08
         if 0.50<=area_ratio<=2.0:score+=0.06
@@ -104,17 +163,26 @@ def _sigef_candidates(car_geom:dict[str,Any],bbox:list[float],cancel_event=None)
             'origin_label':'SIGEF/INCRA — referência cadastral ainda não vinculada ao CAR'
         })
     items.sort(key=lambda x:x['score'],reverse=True)
-    return {'ok':True,'items':items,'count':len(items),'truncated':truncated}
+    relevant=truncated
+    if truncated and ordered and areas and len(areas)==len(features):
+        # Sorted by Shape__Area DESC, every parcel left out is no larger than the smallest one returned, and a
+        # parcel cannot cover more of the CAR than its own area. Below 0.9x the threshold (margin for the
+        # SIRGAS/WGS84 degree areas) no parcel left out can reach it, so the cut does not change the answer.
+        relevant=not (min(areas)<0.9*SIGEF_REFERENCE_MIN_OVERLAP*car_area)
+    # A parcel whose geometry could not be measured makes the answer partial, never a complete "none".
+    return {'ok':True,'items':items,'count':len(items),'truncated':truncated,'truncated_relevant':relevant,'partial':failed>0,'failed':failed}
 
 
 def _sigef_evidence(sig:dict[str,Any],items:list[dict[str,Any]])->dict[str,Any]:
     """C2b: whether SIGEF answered, and every parcel covering at least half of the CAR (by overlap)."""
     answered=sig.get('ok') is True
     strong=[x for x in items if float(x.get('overlap_ratio') or 0)>=SIGEF_REFERENCE_MIN_OVERLAP] if answered else []
-    strong.sort(key=lambda x:float(x.get('overlap_ratio') or 0),reverse=True)
+    strong.sort(key=sigef_reference_rank,reverse=True)
+    incomplete=bool(sig.get('truncated_relevant',sig.get('truncated')) or sig.get('partial')) if answered else False
     return {
         'sigef_state':'answered' if answered else 'unavailable',
         'sigef_truncated':bool(sig.get('truncated')) if answered else False,
+        'sigef_incomplete':incomplete,
         'sigef_reference_candidates':strong[:10],'sigef_reference_candidate_count':len(strong),
     }
 
@@ -195,22 +263,70 @@ def _seed_identity(code:str,items:list[dict[str,Any]])->dict[str,Any]|None:
     }
 
 
-def resolve_property_identity_sync(car_code:str, *, cancel_event=None)->dict[str,Any]:
+def _cancelled(code:str,source:str|None=None)->dict[str,Any]:
+    out={'ok':False,'car_code':code,'cancelled':True,'detail':'request_cancelled','sigef_state':'cancelled'}
+    if source:out['source']=source
+    return out
+
+
+def _cached_identity(code:str,has_car:bool=False)->dict[str,Any]|None:
+    now=time.monotonic();hit=_CACHE.get(code)
+    if hit and now-hit[0]<TTL_SECONDS:return dict(hit[1])
+    miss=_CACHE.get(_unanswered_key(code))
+    # A remembered SICAR failure never outlives a caller that holds a fresh SICAR answer.
+    if miss and now-miss[0]<NEGATIVE_TTL_SECONDS and not (has_car and miss[1].get('sicar_failed')):return dict(miss[1])
+    return None
+
+
+def _store(key:str,stamp:float,out:dict[str,Any])->None:
+    _CACHE[key]=(stamp,out)
+    if len(_CACHE)>500:
+        for k,_ in sorted(_CACHE.items(),key=lambda kv:kv[1][0])[:100]:_CACHE.pop(k,None)
+
+
+def resolve_property_identity_sync(car_code:str, *, cancel_event=None, car:dict[str,Any]|None=None)->dict[str,Any]:
+    """car: the SICAR answer the caller already holds (map panel), so SICAR is not asked twice."""
     code=str(car_code or '').strip().upper()
-    if cancel_event and cancel_event.is_set():return {'ok':False,'car_code':code,'cancelled':True,'detail':'request_cancelled'}
+    if cancel_event and cancel_event.is_set():return _cancelled(code)
     if not CAR_RE.match(code):return {'ok':False,'car_code':code,'detail':'invalid_car_format'}
-    now=time.monotonic();cached=_CACHE.get(code)
-    if cached and now-cached[0]<TTL_SECONDS:return dict(cached[1])
-    car=fetch_car_live_resilient(code,cancel_event=cancel_event)
+    has_car=isinstance(car,dict) and bool(car.get('ok'))
+    while True:
+        hit=_cached_identity(code,has_car)
+        if hit is not None:return hit
+        with _INFLIGHT_LOCK:
+            hit=_cached_identity(code,has_car)
+            if hit is not None:return hit
+            gate=_INFLIGHT.get(code)
+            if gate is None:
+                gate=_INFLIGHT[code]=threading.Event()
+                break
+        # Single flight: a concurrent caller for the same CAR waits for that attempt instead of repeating it.
+        while not gate.wait(0.2):
+            if cancel_event and cancel_event.is_set():return _cancelled(code)
+    try:
+        return _resolve_identity_uncached(code,cancel_event,car)
+    finally:
+        with _INFLIGHT_LOCK:
+            if _INFLIGHT.get(code) is gate:_INFLIGHT.pop(code,None)
+        gate.set()
+
+
+def _resolve_identity_uncached(code:str,cancel_event,car:dict[str,Any]|None)->dict[str,Any]:
+    now=time.monotonic()
+    if not (isinstance(car,dict) and car.get('ok')):
+        car=fetch_car_live_resilient(code,cancel_event=cancel_event)
     if not car.get('ok'):
-        if car.get('cancelled'):return {'ok':False,'car_code':code,'cancelled':True,'detail':'request_cancelled','source':'SICAR'}
-        out={'ok':False,'car_code':code,'detail':car.get('detail') or 'CAR não localizado','source':'SICAR'};_CACHE[code]=(now,out);return out
+        if car.get('cancelled'):return _cancelled(code,'SICAR')
+        # Trying is not answering: a SICAR failure is remembered briefly, never for the hour of an answer.
+        out={'ok':False,'car_code':code,'detail':car.get('detail') or 'CAR não localizado','source':'SICAR','sigef_state':'unavailable','sigef_truncated':False,'sicar_failed':True}
+        _store(_unanswered_key(code),time.monotonic(),out);return out
     props=car.get('properties') or {};direct=_first_name(props)
     if direct:
-        out={'ok':True,'car_code':code,'name':direct,'source':'SICAR','confidence':'high','method':'explicit_sicar_field','display_kind':'VALIDATED_PROPERTY_NAME','validation_status':'VALIDATED','panel_name_eligible':True,'map_anchor':'CAR_POLYGON','validation_scope':'DIRECT_CAR_FIELD','origin_label':'SICAR — denominação explícita do próprio cadastro CAR','candidates':[],'candidate_count':0,'sigef_state':'not_queried','sigef_truncated':False};_CACHE[code]=(now,out);return out
+        out={'ok':True,'car_code':code,'name':direct,'source':'SICAR','confidence':'high','method':'explicit_sicar_field','display_kind':'VALIDATED_PROPERTY_NAME','validation_status':'VALIDATED','panel_name_eligible':True,'map_anchor':'CAR_POLYGON','validation_scope':'DIRECT_CAR_FIELD','origin_label':'SICAR — denominação explícita do próprio cadastro CAR','candidates':[],'candidate_count':0,'sigef_state':'not_queried','sigef_truncated':False}
+        _CACHE.pop(_unanswered_key(code),None);_store(code,now,out);return out
 
     sig=_sigef_candidates(car.get('geometry'),car.get('bbox') or [],cancel_event);items=sig.get('items') or []
-    if cancel_event and cancel_event.is_set():return {'ok':False,'car_code':code,'cancelled':True,'detail':'request_cancelled'}
+    if cancel_event and cancel_event.is_set():return _cancelled(code)
 
     # A named SIGEF parcel intersecting a CAR is useful cadastral context, but
     # overlap alone does not prove that the SIGEF denomination belongs to that CAR.
@@ -227,11 +343,12 @@ def resolve_property_identity_sync(car_code:str, *, cancel_event=None)->dict[str
             'note':'Nenhuma denominação foi validada para este CAR. SIGEF não vinculado e OSM ao vivo permanecem referências cartográficas e não podem preencher o painel do imóvel.'
         }
     out.update(_sigef_evidence(sig,items))
-    # A SIGEF query that did not answer is not an answer: never cache it, so a retry can succeed.
-    if out['sigef_state']!='answered':return out
-    _CACHE[code]=(now,out)
-    if len(_CACHE)>500:
-        for k,_ in sorted(_CACHE.items(),key=lambda kv:kv[1][0])[:100]:_CACHE.pop(k,None)
+    # A SIGEF query that did not answer is not an answer: never cached as one (only briefly remembered),
+    # so the retry can succeed.
+    if out['sigef_state']!='answered':
+        _store(_unanswered_key(code),time.monotonic(),out);return out
+    _CACHE.pop(_unanswered_key(code),None)
+    _store(code,now,out)
     return out
 
 

@@ -9,10 +9,12 @@ window.rxCopyCarC2 one-tap copy of the CAR code. It reports success only after t
                   announced through one persistent role=status region.
 window.rxSigefRefC2 C2b: the SIGEF/INCRA cadastral reference block shared by the anchored card
                   and the V45 panel. Shown only for sigef_reference_state 'found' with a share
-                  of the CAR >= 50% (floored to 2 decimals, never rounded up to 100,00%).
-                  'unavailable'/'incomplete' stay hidden until ONE automatic retry per CAR
-                  (setTimeout, only while that selection is still open) has come back; then a
-                  discreet "consulta pendente" line. It never writes a title.
+                  of the CAR >= 50% (floored to 2 decimals, never rounded up to 100,00%); when
+                  the parcel is much larger than the property it also says how little of the
+                  parcel the property occupies. 'unavailable' stays hidden until ONE automatic
+                  retry per CAR (setTimeout, only while that selection is still open) has come
+                  back; then a discreet "consulta pendente" line. 'incomplete' (an answer that a
+                  retry cannot change) stays hidden. It never writes a title.
 """
 
 from __future__ import annotations
@@ -168,10 +170,11 @@ HEAD = r'''<style id="rxCardFormatC2">
  function share(v){if(v===null||v===undefined||v===''||typeof v==='boolean')return null;const n=Number(v);return Number.isFinite(n)&&n>=0&&n<=1?n:null}
  // Floor to 2 decimals of a percent: 0,99996 -> 99,99% (never 100,00%).
  function pct(v){const n=share(v);if(n===null)return '';const basis=Math.floor(Math.round(n*1e6)/100),val=basis/100;return (window.rxNum?window.rxNum.num(val,2):val.toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2}))+'%'}
+ // Only a query that did not answer is retried; 'incomplete' is an answer a retry cannot change: hidden.
  function state(p){
    const st=String(p?.sigef_reference_state||''),r=p?.sigef_reference;
    if(st==='found'){const o=share(r?.car_overlap_ratio);return r&&String(r.label||'').trim()&&o!==null&&o>=MIN?'found':'hidden'}
-   return st==='unavailable'||st==='incomplete'?'unanswered':'hidden';
+   return st==='unavailable'?'unanswered':'hidden';
  }
  const retries=new Map();
  function retried(car){const e=retries.get(car);return !!e&&e.done&&Date.now()-e.at<WINDOW_MS}
@@ -188,7 +191,7 @@ HEAD = r'''<style id="rxCardFormatC2">
    setTimeout(async()=>{
      if(!e.subs.some(open)){if(retries.get(car)===e)retries.delete(car);return}
      let d=null;
-     try{const r=await fetch(`/v1/live/map-panel/${encodeURIComponent(car)}`),j=await r.json();if(r.ok&&j?.ok)d=j}catch(x){d=null}
+     try{const r=await fetch(`/v1/live/map-panel/${encodeURIComponent(car)}?sigef_retry=1`),j=await r.json();if(r.ok&&j?.ok)d=j}catch(x){d=null}
      e.done=true;e.at=Date.now();
      e.subs.forEach(s=>{if(open(s)){try{s.onData(d)}catch(x){}}});
    },RETRY_MS);
@@ -197,9 +200,13 @@ HEAD = r'''<style id="rxCardFormatC2">
    const st=state(p),panel=variant==='panel';
    if(st==='found'){
      const r=p.sigef_reference,n=Number(p.sigef_reference_others),others=Number.isInteger(n)&&n>0?n:0;
-     const more=panel&&others?`<span class="rx-sigef-ref-more">+${others} ${others===1?'outra parcela SIGEF cobre':'outras parcelas SIGEF cobrem'} mais da metade</span>`:'';
+     // 200 is not all: a count taken from an answer cut short is a floor ("pelo menos").
+     const floor=p.sigef_reference_others_complete===false?'pelo menos ':'';
+     const more=panel&&others?`<span class="rx-sigef-ref-more">+${floor}${others} ${others===1?'outra parcela SIGEF cobre':'outras parcelas SIGEF cobrem'} metade ou mais do imóvel</span>`:'';
      const note=panel?'<span class="rx-sigef-ref-note">Referência de outro cadastro, não é o nome do CAR.</span>':'';
-     return `<div class="rx-sigef-ref${panel?' rx-sigef-ref-panel':''}" data-rx-sigef-ref="found"><small class="rx-sigef-ref-k">Referência INCRA (SIGEF)</small><b class="rx-sigef-ref-name">${esc(String(r.label).trim())}</b><span class="rx-sigef-ref-pct">cobre ${pct(r.car_overlap_ratio)} do imóvel</span>${note}${more}<span class="rx-sigef-ref-origin">${esc(String(r.origin||'').trim()||ORIGIN)}</span></div>`;
+     // A parcel much larger than the property: say how little of it the property occupies, never imply identity.
+     const po=share(r.parcel_overlap_ratio),within=po!==null&&po<MIN?`<span class="rx-sigef-ref-note" data-rx-sigef-within>o imóvel ocupa ${po<0.0001?'menos de 0,01%':pct(po)} desta parcela</span>`:'';
+     return `<div class="rx-sigef-ref${panel?' rx-sigef-ref-panel':''}" data-rx-sigef-ref="found"><small class="rx-sigef-ref-k">Referência INCRA (SIGEF)</small><b class="rx-sigef-ref-name">${esc(String(r.label).trim())}</b><span class="rx-sigef-ref-pct">cobre ${pct(r.car_overlap_ratio)} do imóvel</span>${within}${note}${more}<span class="rx-sigef-ref-origin">${esc(String(r.origin||'').trim()||ORIGIN)}</span></div>`;
    }
    if(st==='unanswered'&&retried(carOf(p)))return '<div class="rx-sigef-ref-pending" data-rx-sigef-ref="pending">Referência INCRA: consulta pendente</div>';
    return '';

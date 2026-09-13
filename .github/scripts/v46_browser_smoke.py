@@ -720,14 +720,20 @@ async def sigef_reference_flow(browser, width, height, scenarios):
     page.on("console", lambda msg: errors.append(f"console:{msg.type}:{msg.text}") if msg.type == "error" else None)
     fixtures = {}
     hits = {}
+    retry_hits = {}
 
     async def map_panel(route):
-        car = route.request.url.split("?", 1)[0].rstrip("/").rsplit("/", 1)[-1]
+        url = route.request.url
+        car = url.split("?", 1)[0].rstrip("/").rsplit("/", 1)[-1]
         hits[car] = hits.get(car, 0) + 1
+        retry = "sigef_retry=1" in url
+        if retry:
+            retry_hits[car] = retry_hits.get(car, 0) + 1
         fx = fixtures.get(car) or {}
         if fx.get("delay"):
             await asyncio.sleep(fx["delay"])
-        await route.fulfill(json=fx.get("body") or {"ok": False})
+        body = fx.get("retry_body") if retry and fx.get("retry_body") else fx.get("body")
+        await route.fulfill(json=body or {"ok": False})
 
     async def quiet(route):
         await route.fulfill(json={"ok": False, "detail": "c2b_fixture"})
@@ -750,10 +756,14 @@ async def sigef_reference_flow(browser, width, height, scenarios):
         await js(page, "()=>document.querySelector('.rx46-card [data-rx46-action=\"full\"]')?.click()")
         await page.wait_for_selector(f'.rx45-panel-card[data-car="{car}"]', state="visible", timeout=8000)
 
-    helper = await js(page, """()=>{const R=window.rxSigefRefC2;if(!R)return null;const f=(o,st)=>R.html({car_code:'X',sigef_reference_state:st||'found',sigef_reference:{label:'L',car_overlap_ratio:o}},'card');
-      return {p9995:R.pct(0.9995),p99996:R.pct(0.99996),p1:R.pct(1),p05:R.pct(0.5),below:f(0.49),none:f(0.99,'none'),nq:f(0.99,'not_queried'),found:f(0.6).includes('60,00%')}}""")
-    assert helper == {"p9995": "99,95%", "p99996": "99,99%", "p1": "100,00%", "p05": "50,00%", "below": "",
-                      "none": "", "nq": "", "found": True}, helper
+    helper = await js(page, """()=>{const R=window.rxSigefRefC2;if(!R)return null;const f=(o,st,po)=>R.html({car_code:'X',sigef_reference_state:st||'found',sigef_reference:{label:'L',car_overlap_ratio:o,parcel_overlap_ratio:po}},'card');
+      return {p9995:R.pct(0.9995),p99996:R.pct(0.99996),p1:R.pct(1),p05:R.pct(0.5),p5005:R.pct(0.5005),below:f(0.49),none:f(0.99,'none'),nq:f(0.99,'not_queried'),found:f(0.6).includes('60,00%'),
+        incomplete:f(0.99,'incomplete')+R.state({car_code:'X',sigef_reference_state:'incomplete'}),
+        within:f(1,'found',0.013232).includes('o imóvel ocupa 1,32% desta parcela'),tiny:f(1,'found',0.00004).includes('menos de 0,01%'),
+        same:f(0.9995,'found',0.9996).includes('desta parcela')}}""")
+    assert helper == {"p9995": "99,95%", "p99996": "99,99%", "p1": "100,00%", "p05": "50,00%", "p5005": "50,05%", "below": "",
+                      "none": "", "nq": "", "found": True, "incomplete": "hidden", "within": True, "tiny": True,
+                      "same": False}, helper
 
     if "found" in scenarios:
         car = SIGEF_CAR
@@ -779,7 +789,7 @@ async def sigef_reference_flow(browser, width, height, scenarios):
         await page.wait_for_timeout(700)
         pinfo = await page.evaluate(REF_JS, ".rx45-panel-card")
         assert_ref_readable(pinfo, "panel-found")
-        for required in ("Referência INCRA", SIGEF_LABEL, "99,95%", SIGEF_ORIGIN, "não é o nome do CAR", "+1 outra parcela SIGEF"):
+        for required in ("Referência INCRA", SIGEF_LABEL, "99,95%", SIGEF_ORIGIN, "não é o nome do CAR", "+1 outra parcela SIGEF cobre metade ou mais"):
             assert required in pinfo["text"], (required, pinfo)
         assert SIGEF_LABEL.replace(" ", "") not in pinfo["title"], pinfo
         assert "OpenStreetMap" in pinfo["all"] and "Fazenda Teste OSM" in pinfo["all"], pinfo
@@ -811,6 +821,19 @@ async def sigef_reference_flow(browser, width, height, scenarios):
         pinfo = await page.evaluate(REF_JS, ".rx45-panel-card")
         assert_ref_readable(pinfo, "panel-pending")
         assert pinfo["state"] == "pending" and "consulta pendente" in pinfo["text"], pinfo
+        assert retry_hits.get(car) == 1, ("the automatic retry skips the brief server memory", retry_hits)
+
+        # The source recovers: a re-click shows the answer, and the panel's own older copy never hides it.
+        await js(page, "()=>window.rx43CloseDossier?.()")
+        found_ref = {"label": SIGEF_LABEL, "kind": "SIGEF_CADASTRAL", "origin": SIGEF_ORIGIN, "car_overlap_ratio": 0.999512,
+                     "parcel_overlap_ratio": 0.99962, "incra_property_code": "4170920078203", "parcel_code": "0d94a58a"}
+        fixtures[car] = {"body": sigef_body(car, "found", found_ref)}
+        await select(car)
+        await page.wait_for_function("document.querySelector('.rx46-card [data-rx-sigef-ref=\"found\"]')", timeout=10000)
+        await open_panel(car)
+        await page.wait_for_timeout(2500)
+        again = await page.evaluate(REF_JS, ".rx45-panel-card")
+        assert again.get("state") == "found" and "99,95%" in again["text"] and "consulta pendente" not in again["all"], ("stale panel copy", again)
 
         # The panel opened before the card retry fired still gets exactly one retry.
         car = SIGEF_CAR[:-1] + "2"
@@ -828,6 +851,43 @@ async def sigef_reference_flow(browser, width, height, scenarios):
         assert late["state"] == "pending", late
         assert hits.get(car, 0) == loads + 1, ("exactly one automatic retry for the open panel", loads, hits)
 
+    if "recovered" in scenarios:
+        found_ref = {"label": SIGEF_LABEL, "kind": "SIGEF_CADASTRAL", "origin": SIGEF_ORIGIN, "car_overlap_ratio": 0.999512,
+                     "parcel_overlap_ratio": 0.99962, "incra_property_code": "4170920078203", "parcel_code": "0d94a58a"}
+        # The card: unanswered first, the single automatic retry answers -> the reference replaces nothing but hidden.
+        car = SIGEF_CAR[:-1] + "6"
+        fixtures[car] = {"body": sigef_body(car, "unavailable"), "retry_body": sigef_body(car, "found", found_ref)}
+        await select(car)
+        await page.wait_for_function("document.querySelector('.rx46-card')?.dataset.rx46Enriched==='1'", timeout=10000)
+        await page.wait_for_timeout(300)
+        first = await page.evaluate(REF_JS, ".rx46-card")
+        assert not first["present"], ("hidden before the retry", first)
+        await page.wait_for_function("document.querySelector('.rx46-card [data-rx-sigef-ref]')", timeout=15000)
+        await page.wait_for_timeout(200)
+        info = await page.evaluate(REF_JS, ".rx46-card")
+        assert_ref_readable(info, "card-recovered")
+        assert info["state"] == "found" and "99,95%" in info["text"] and "consulta pendente" not in info["all"], info
+        assert abs(info["cardTop"] - first["cardTop"]) < 2 and info["title"] == car, (first, info)
+        await page.wait_for_timeout(9500)
+        assert hits.get(car) == 2 and retry_hits.get(car) == 1, ("exactly one automatic retry", hits, retry_hits)
+
+        # The panel opened before the retry fires is repainted with the answer too.
+        car = SIGEF_CAR[:-1] + "7"
+        fixtures[car] = {"body": sigef_body(car, "unavailable"), "retry_body": sigef_body(car, "found", found_ref)}
+        await select(car)
+        await page.wait_for_function("document.querySelector('.rx46-card')?.dataset.rx46Enriched==='1'", timeout=10000)
+        await open_panel(car)
+        await page.wait_for_timeout(1500)
+        early = await page.evaluate(REF_JS, ".rx45-panel-card")
+        assert not early["present"], early
+        loads = hits.get(car, 0)
+        await page.wait_for_function("document.querySelector('.rx45-panel-card [data-rx-sigef-ref=\"found\"]')", timeout=15000)
+        await page.wait_for_timeout(9500)
+        late = await page.evaluate(REF_JS, ".rx45-panel-card")
+        assert late["state"] == "found" and "99,95%" in late["text"] and "consulta pendente" not in late["all"], late
+        assert retry_hits.get(car) == 1 and hits.get(car, 0) == loads + 1, ("exactly one automatic retry for the open panel", loads, hits, retry_hits)
+        await page.screenshot(path=str(OUT / f"c2b-{width}-panel-recovered.png"), full_page=True)
+
     if "none" in scenarios:
         car = SIGEF_CAR[:-1] + "3"
         fixtures[car] = {"body": sigef_body(car, "none")}
@@ -838,7 +898,7 @@ async def sigef_reference_flow(browser, width, height, scenarios):
         assert not info["present"] and "Referência INCRA" not in info["all"] and "sem referência" not in info["all"].casefold(), info
         assert hits.get(car) == 1, hits
 
-    results.setdefault("c2b_sigef_reference", {})[str(width)] = {"scenarios": list(scenarios), "hits": hits, "errors": errors}
+    results.setdefault("c2b_sigef_reference", {})[str(width)] = {"scenarios": list(scenarios), "hits": hits, "retry_hits": retry_hits, "errors": errors}
     assert not errors, errors
     await context.close()
 
@@ -855,7 +915,7 @@ async def main():
         await viewport_flow(browser, 768, 900, "768")
         await viewport_flow(browser, 1440, 900, "1440")
         await movement_gate(browser)
-        await sigef_reference_flow(browser, 1440, 900, ("found", "unavailable", "none"))
+        await sigef_reference_flow(browser, 1440, 900, ("found", "unavailable", "recovered", "none"))
         await sigef_reference_flow(browser, 375, 812, ("found",))
         await browser.close()
     (OUT / "results.json").write_text(
