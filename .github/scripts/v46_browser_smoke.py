@@ -256,6 +256,15 @@ async def movement_gate(browser):
     context = await browser.new_context(viewport={"width": 1440, "height": 900})
     page = await context.new_page()
     errors = []
+    # C1: a property name only appears after a click, so moving the map must
+    # never request names nor draw a name label.
+    name_requests = []
+    page.on(
+        "request",
+        lambda req: name_requests.append(req.url)
+        if "/v1/live/property-names/" in req.url
+        else None,
+    )
     page.on("pageerror", lambda exc: errors.append("pageerror:" + str(exc)))
     page.on(
         "console",
@@ -298,7 +307,12 @@ async def movement_gate(browser):
         print("RX_V46_MOVEMENT", json.dumps(rec, ensure_ascii=False))
         assert min(samples) > 0, rec
         await assert_parcel_fill(page)
+        labels = await page.locator(".rx-farm-name-label, .rx-farm-name-icon").count()
+        assert labels == 0, {"step": idx, "map_name_labels": labels}
     results["console"] = errors
+    results["map_name_requests"] = name_requests
+    print("RX_C1_MAP_NAME_REQUESTS", len(name_requests))
+    assert not name_requests, name_requests
     assert not errors, errors
     await context.close()
 

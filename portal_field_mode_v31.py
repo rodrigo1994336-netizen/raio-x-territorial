@@ -90,7 +90,6 @@ self.addEventListener('fetch',event=>{
 
   if(u.origin===location.origin&&(
       u.pathname==='/v1/live/sicar/viewport' ||
-      u.pathname==='/v1/live/property-names/viewport' ||
       u.pathname==='/v1/live/cities' ||
       u.pathname==='/v1/live/resolve' ||
       u.pathname.startsWith('/v1/live/snapshot/') ||

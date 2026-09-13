@@ -50,9 +50,9 @@ def source_contract() -> None:
     assert "delete safe.name" in guard
     assert "delete safe.reference_" not in guard
     assert "portal_identity_title_guard_v49" in site
-    assert "d.property.name_validation_status='VALIDATED'" in names
-    assert "d.property.validation_status='VALIDATED'" in names
-    assert "d.property.panel_name_eligible=true" in names
+    # C1: the map no longer draws names, so it has no path that writes a name into the card.
+    assert "RX_NAMES_ON_CLICK_ONLY_C1" in names
+    assert "d.property." not in names and "showProperty" not in names
 
 
 def known_case_contract() -> None:

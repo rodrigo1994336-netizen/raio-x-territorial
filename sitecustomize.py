@@ -169,7 +169,7 @@ def _load_portal_deferred():
                 if heavy:
                     raise RuntimeError('heavy_modules_loaded_on_portal:' + ','.join(heavy))
                 guard.mark_ready()
-                print(f'RX_PORTAL_V46_EXTENSION=loaded_deferred routes:{len(ready)} two_level:on anchor_card:on anchor_race_guard:on cached_grid:on compact_panel:on selection_bridge:on audited_identity:on kml:on png:on advanced_search:on cafir_inverse:on search_resilient:on names:on coverage:on map_stability:on map_polish:on hybrid_basemap:on named_pdf:on pdf_viewer:on browser_worker_wake:on mte_conformity:on version:{portal_v8.APP_PORTAL_VERSION}', flush=True)
+                print(f'RX_PORTAL_V46_EXTENSION=loaded_deferred routes:{len(ready)} two_level:on anchor_card:on anchor_race_guard:on cached_grid:on compact_panel:on selection_bridge:on audited_identity:on kml:on png:on advanced_search:on cafir_inverse:on search_resilient:on names:click_only map_stability:on map_polish:on hybrid_basemap:on named_pdf:on pdf_viewer:on browser_worker_wake:on mte_conformity:on version:{portal_v8.APP_PORTAL_VERSION}', flush=True)
             except Exception as exc:
                 if guard is not None:
                     try:
