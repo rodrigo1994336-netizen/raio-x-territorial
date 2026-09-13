@@ -92,6 +92,7 @@ def _load_portal_deferred():
                 import portal_map_panel_selection_v45  # noqa: F401
                 import portal_map_v46  # noqa: F401
                 import portal_map_v46_anchor_state  # noqa: F401
+                import portal_identity_title_guard_v49  # noqa: F401
                 import portal_pmtiles_consumer_v48  # noqa: F401
 
                 import portal_resource_guard_v27  # noqa: F401

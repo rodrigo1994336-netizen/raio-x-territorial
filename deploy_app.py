@@ -1,6 +1,7 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import os, httpx, asyncio, json, subprocess
+from external_process_lifecycle import ManagedProcessCancelled, install_shutdown_cleanup, run_managed_process
 import xml.etree.ElementTree as ET
 from urllib.parse import urlencode
 
@@ -16,6 +17,7 @@ except Exception:
 
 app = FastAPI(title='Raio-X Territorial API', version='0.14.6-exact-live-analysis')
 app.add_middleware(CORSMiddleware, allow_origins=['*'], allow_credentials=False, allow_methods=['*'], allow_headers=['*'])
+install_shutdown_cleanup(app)
 
 TEST_CAR='MG-3120904-DFB380BECD7A4323AD8AA68FA14D011F'
 SICAR='https://geoserver.car.gov.br/geoserver/sicar/ows'
@@ -31,8 +33,14 @@ TARGETS={
  'incra_root':'https://acervofundiario.incra.gov.br/'
 }
 
-def _curl(url:str, expect_json=True):
-    p=subprocess.run(['curl','-k','-sS','--connect-timeout','12','--max-time','40','-A','Raio-X-Territorial/0.14.6',url],capture_output=True,timeout=45)
+def _curl(url:str, expect_json=True, *, cancel_event=None, connect_timeout=12, max_time=40, hard_timeout=45):
+    args=['curl','-k','-sS','--connect-timeout',str(connect_timeout),'--max-time',str(max_time),'-A','Raio-X-Territorial/0.14.6',url]
+    try:
+        p=run_managed_process(args,timeout_seconds=hard_timeout,cancel_event=cancel_event)
+    except ManagedProcessCancelled:
+        return {'ok':False,'cancelled':True,'detail':'request_cancelled','bytes':0}
+    except subprocess.TimeoutExpired:
+        return {'ok':False,'timed_out':True,'detail':f'process_timeout_after_{hard_timeout}s','bytes':0}
     if p.returncode:return {'ok':False,'detail':p.stderr.decode('utf-8','ignore')[:300],'bytes':len(p.stdout)}
     if not expect_json:return {'ok':bool(p.stdout),'bytes':len(p.stdout),'text':p.stdout.decode('utf-8','ignore')}
     try:return {'ok':True,'bytes':len(p.stdout),'json':json.loads(p.stdout.decode('utf-8'))}

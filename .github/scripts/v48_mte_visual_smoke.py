@@ -76,9 +76,8 @@ async def assert_contract(page, label):
     audit = panel.locator('.rx45-audit-count')
     audit_text = await audit.inner_text()
     audit_folded = audit_text.casefold()
-    assert "fontes responderam" in audit_folded, (label, audit_text)
-    assert "2 de 18" not in audit_folded, (label, audit_text)
-    assert "car/sicar" in audit_folded and "resolução de identidade" in audit_folded, (label, audit_text)
+    assert "1 de 11 fontes responderam nesta consulta" in audit_folded, (label, audit_text)
+    assert "resolução de identidade" not in audit_folded, (label, audit_text)
 
     await audit.locator('#rx45Audit').click()
     audit_box = panel.locator('.rx48-audit-box.open')

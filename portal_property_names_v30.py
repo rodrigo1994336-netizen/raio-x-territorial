@@ -50,6 +50,8 @@ UI = r'''
         d.property.name=identityName;
         d.property.name_origin=id?.origin_label||x?.origin_label||id?.source||x?.source||'';
         d.property.name_validation_status='VALIDATED';
+        d.property.validation_status='VALIDATED';
+        d.property.panel_name_eligible=true;
         d.property.name_validation_method=id?.method||x?.validation_method||'';
         d.property.name_confidence=id?.confidence||'';
         showProperty(d.property,d.geometry);

@@ -3,13 +3,15 @@ from __future__ import annotations
 import asyncio
 from urllib.parse import urlencode
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 from shapely.geometry import Point, mapping, shape
 
 import portal_v8
 from deploy_app import SICAR, _curl
+from external_process_lifecycle import ManagedOperationTimeout, RequestDisconnected, install_shutdown_cleanup, run_sync_with_request_lifecycle
 
 app = portal_v8.app
+install_shutdown_cleanup(app)
 
 
 def _type_name(uf: str) -> str:
@@ -19,7 +21,7 @@ def _type_name(uf: str) -> str:
     return f"sicar:sicar_imoveis_{'DF' if code == 'DF' else code.lower()}"
 
 
-async def _fetch_sicar_bbox(west: float, south: float, east: float, north: float, uf: str, limit: int) -> dict:
+async def _fetch_sicar_bbox(request: Request, west: float, south: float, east: float, north: float, uf: str, limit: int) -> dict:
     cap=max(1,min(int(limit or 40),50))
     params={
         'service':'WFS',
@@ -32,7 +34,12 @@ async def _fetch_sicar_bbox(west: float, south: float, east: float, north: float
         'maxFeatures':str(cap),
     }
     url=SICAR+'?'+urlencode(params)
-    raw=await asyncio.to_thread(_curl,url,True)
+    try:
+        raw=await run_sync_with_request_lifecycle(request,_curl,url,True,timeout_seconds=None,connect_timeout=12,max_time=40,hard_timeout=45)
+    except RequestDisconnected:
+        raise HTTPException(status_code=499,detail='client_disconnected')
+    except ManagedOperationTimeout:
+        raise HTTPException(status_code=504,detail='sicar_viewport_timeout')
     if not raw.get('ok'):
         raise HTTPException(status_code=502,detail='SICAR indisponível no momento: '+str(raw.get('detail') or raw.get('preview') or 'falha de rede')[:220])
     data=raw.get('json') or {}
@@ -42,6 +49,7 @@ async def _fetch_sicar_bbox(west: float, south: float, east: float, north: float
 
 
 async def live_sicar_viewport_resilient(
+    request: Request,
     west: float,
     south: float,
     east: float,
@@ -59,7 +67,7 @@ async def live_sicar_viewport_resilient(
         center_lon=(west+east)/2
         uf=await portal_v8.base._reverse_uf(center_lat,center_lon)
     uf=uf.upper()
-    fetched=await _fetch_sicar_bbox(west,south,east,north,uf,limit)
+    fetched=await _fetch_sicar_bbox(request,west,south,east,north,uf,limit)
     features=(fetched['data'].get('features') or [])
     # Map display only: simplify geometry while preserving topology. Full geometry is
     # fetched again by CAR when the user opens the property analysis/export.
@@ -91,13 +99,13 @@ async def live_sicar_viewport_resilient(
     }
 
 
-async def resolve_point_resilient(lat: float, lon: float):
+async def resolve_point_resilient(request: Request, lat: float, lon: float):
     if not (-90<=lat<=90 and -180<=lon<=180):
         raise HTTPException(status_code=422,detail='Coordenadas inválidas.')
     uf=await portal_v8.base._reverse_uf(lat,lon)
     # Small envelope to obtain candidates, then exact point-in-polygon locally.
     eps=0.0015
-    fetched=await _fetch_sicar_bbox(lon-eps,lat-eps,lon+eps,lat+eps,uf,30)
+    fetched=await _fetch_sicar_bbox(request,lon-eps,lat-eps,lon+eps,lat+eps,uf,30)
     features=fetched['data'].get('features') or []
     point=Point(float(lon),float(lat))
     exact=[]
