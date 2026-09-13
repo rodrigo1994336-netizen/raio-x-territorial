@@ -103,19 +103,20 @@ jobs:
               'RX_EXPERIENCE_V43','SNAPSHOT DO IMÓVEL','VER ANÁLISE COMPLETA',
               'body.rx43-dossier-open #map','rx43-dossier-open','rx43-full-requested',
               'RX_ACTION_RUNTIME_V25','RX_FIELD_MODE_V43','RX_MAP_VISUAL_V32',
-              'RX_PROPERTY_NAMES_V44_TRUTH_UI','RX_ADVANCED_SEARCH_V39','rxAdvTrigger','RX_IDENTITY_TITLE_GUARD_V49',
+              'RX_NAMES_ON_CLICK_ONLY_C1','RX_ADVANCED_SEARCH_V39','rxAdvTrigger','RX_IDENTITY_TITLE_GUARD_V49',
               'RX_CAFIR_INVERSE_V44','serviceWorker.register','rxParcelStyle','window.rxVisibleCarCountV43',
-              'window.rxNameCoverageV43','window.rxGetNameCoverageV43',
               'Busque um município, mova o mapa ou use “Minha localização”.',
               'Mapa ajustando…','RX_MAP_STABILITY_V43_5','RX_MAP_POLISH_V43_6',
               'RX_CONTEXT_DEFAULT_DISABLED_V43_6',"color:'#73b99a'",'RX_SEARCH_AUTO_V43_7',
               'RX_REPORT_IDENTITY_V43_8','/v1/mobile/report/open/',
-              'referência(s) do OpenStreetMap','denominação(ões) validada(s)',
               'RX_MAP_V46_TWO_LEVEL','rx46-anchor-popup','window.rxV46SelectProperty',
               '/v1/live/sicar/viewport-v46','autoPan:false','window.rx46ViewportRequest',
           )
           absent=[x for x in required if x not in html]
           assert not absent, f'missing V46 UI/action markers: {absent}'
+          # C1: no property name is written on the map; a name only appears after a click.
+          drawn=[x for x in ('rx-farm-name','rxFarmNameSource','/v1/live/property-names/viewport','rxRefreshVisiblePropertyNames','rxNameCoverageV43') if x in html]
+          assert not drawn, f'map name labels leaked into final portal HTML: {drawn}'
           retired=(
               'RX_PORTAL_IDENTITY_V18','RX_MOBILE_DOSSIER_V20','RX_HUMAN_READING_V23',
               'RX_PREMIUM_UX_V35','RX_PREMIUM_INTERACTIONS_V36','RX_LAYOUT_GUARD_V37',
@@ -148,12 +149,8 @@ jobs:
           assert "/v1/live/snapshot/" in field and "/v1/live/property-identity/" in field and "'/v1/live/resolve'" in field
           assert "function schedule(){clearTimeout(timer);timer=setTimeout(refresh,420)}" not in field
           assert "u.searchParams.set('limit',z>=15?'60':'35');" not in field
-          assert 'window.rxFieldMode' in names and 'limitFor(z)' in names and 'Referências já carregadas · atualização pendente' in names
-          assert 'window.rxNameCoverageV43' in names and "u.searchParams.set('car_visible'" in names and "u.searchParams.set('diagnostic','true')" in names and 'names_rendered' in names
-          assert 'rx-name-validated' in names and 'rx-name-reference' in names and 'openReference(x)' in names
-          reference_body=names.split('function openReference(x){',1)[1].split('function render(items,z){',1)[0]
-          assert 'showProperty' not in reference_body and '/v1/live/resolve' not in reference_body and 'property.name' not in reference_body
-          assert 'dossierOpen()' in names and 'east>west&&north>south' in names
+          assert 'RX_NAMES_ON_CLICK_ONLY_C1' in names and 'L.marker' not in names and 'divIcon' not in names
+          assert '/v1/live/property-names/viewport' not in names and 'd.property.' not in names and 'showProperty' not in names
           assert "'sigef_candidates'" in names_backend and "'sigef_with_valid_name'" in names_backend and "'sigef_named_with_valid_geometry'" in names_backend
           assert "'osm_candidates'" in names_backend and "'osm_names_returned'" in names_backend and '_osm_named_farms_bbox' in names_backend
           assert "'car_visible'" in names_backend and 'RX_PROPERTY_NAMES_COVERAGE=' in names_backend and 'diagnostic:bool=False' in names_backend
@@ -166,9 +163,9 @@ jobs:
           assert "0.43.4-v43-snapshot-first" in release and 'window.rxVisibleCarCountV43' in release
           assert 'RX_GEOLOCATION_V43=explicit_user_action_only' in release and '_auto_locate' in release
           assert 'RX_VIEWPORT_GUARD_V43=dossier_and_positive_area' in release and '_viewport_loader' in release and '_viewport_bounds' in release
-          assert "0.43.5-v43-snapshot-first" in stability and 'rxParcelIndex=new Map()' in stability and 'nameIndex=new Map()' in stability
+          assert "0.43.5-v43-snapshot-first" in stability and 'rxParcelIndex=new Map()' in stability and 'nameIndex' not in stability
           assert "0.43.6-v43-snapshot-first" in polish and 'RX_CONTEXT_DEFAULT_DISABLED_V43_6' in polish and "color:'#73b99a'" in polish
-          assert '#rxMapLegend,#rxFarmNameSource,#rxContextLegend,.hint' in polish
+          assert '#rxMapLegend,#rxContextLegend,.hint' in polish
           assert 'advanced_property_search_v43' in search and 'sicar._fetch_sicar_bbox' in search
           assert 'RX_SEARCH_AUTO_V43_7' in search and 'timer=setTimeout(run,550)' in search
           assert "portal_v8.APP_PORTAL_VERSION = '0.43.8-v43-snapshot-first'" in search
