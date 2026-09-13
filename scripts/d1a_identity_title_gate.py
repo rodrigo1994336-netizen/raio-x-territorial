@@ -87,7 +87,12 @@ def card_title_source_contract() -> None:
 
 
 def title_for(payload: dict) -> str:
-    """Python twin of window.rxCardIdentityC2(p).title."""
+    """Python twin of window.rxCardIdentityC2(p).title.
+
+    It documents the rule for reviewers; it is NOT proof of the JS rule. The shipped
+    window.rxCardIdentityC2 is exercised at runtime by .github/scripts/v46_browser_smoke.py
+    (assert_card_rules_runtime: validated name title, code exactly once, V45 wrap flag).
+    """
     car = str(payload.get("car_code") or "").strip().upper()
     probe = {
         "name": payload.get("validated_name"),
@@ -137,7 +142,7 @@ def main() -> None:
     card_title_source_contract()
     card_title_case_contract()
     print(f"D1A_IDENTITY_TITLE_GATE=PASS car={CAR}")
-    print("C2A_CARD_TITLE_CONTRACT=PASS")
+    print("C2A_CARD_TITLE_CONTRACT=PASS source+python_twin runtime_proof=v46_browser_smoke")
     print("D1A_REFERENCE_FIELDS_SURVIVE=PASS")
     print(f"D1A_REFERENCE_REJECTED_AS_CAR_TITLE={REFERENCE}")
 

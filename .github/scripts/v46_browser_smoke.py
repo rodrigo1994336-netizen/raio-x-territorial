@@ -137,6 +137,9 @@ async def assert_card_contract(page, center_before, width):
     assert abs(center_before[0] - center_after[0]) < 1e-9 and abs(
         center_before[1] - center_after[1]
     ) < 1e-9, (center_before, center_after)
+    # Everything below reads the card after the /map-panel enrichment settled
+    # (success or failure), so a re-render cannot detach nodes mid-measurement.
+    await settle_map_panel(page)
     card = page.locator(".rx46-card")
     text = await card.inner_text()
     folded = text.casefold()
@@ -155,7 +158,7 @@ async def assert_card_contract(page, center_before, width):
     ) + PLACEHOLDERS:
         assert forbidden.casefold() not in folded, (forbidden, text)
     assert await page.locator(".rx46-anchor-popup .leaflet-popup-tip").count() == 1
-    box = await card.bounding_box()
+    box = await page.evaluate("()=>{const r=document.querySelector('.rx46-card')?.getBoundingClientRect();return r?{x:r.x,y:r.y,width:r.width,height:r.height}:null}")
     assert box and 195 <= box["width"] <= 235, box
     assert await page.locator(".rx45-panel-card").count() == 0, "V45 opened before CTA"
     car = (await card.get_attribute("data-car") or "").strip()
@@ -197,50 +200,102 @@ async def reveal_in_map(page, selector):
         await page.wait_for_timeout(150)
 
 
+MAP_PANEL_TRAFFIC = {}
+
+
+def track_map_panel(page):
+    """Counts /v1/live/map-panel requests so checks can wait for the card enrichment."""
+    state = {"started": 0, "done": 0}
+
+    def bump(key, req):
+        if "/v1/live/map-panel/" in req.url:
+            state[key] += 1
+
+    page.on("request", lambda req: bump("started", req))
+    page.on("requestfinished", lambda req: bump("done", req))
+    page.on("requestfailed", lambda req: bump("done", req))
+    MAP_PANEL_TRAFFIC[id(page)] = state
+
+
+async def settle_map_panel(page, timeout_ms=15000):
+    # The enrichment may legitimately fail in CI (GitHub cannot always reach SICAR):
+    # wait for it to finish either way, bounded, then let the re-render run.
+    state = MAP_PANEL_TRAFFIC.get(id(page))
+    if not state:
+        return
+    waited = 0
+    while state["done"] < state["started"] and waited < timeout_ms:
+        await page.wait_for_timeout(100)
+        waited += 100
+    await page.wait_for_timeout(250)
+
+
+# Click, feedback and position are read inside ONE evaluate with fresh queries: the V45
+# settle timers and the V46 enrichment replace these nodes, and only microtasks (the
+# mocked clipboard promise chain) run between the reads, never a timer or a fetch task.
+COPY_JS = """async ({root, mode})=>{
+  const flush=async()=>{for(let i=0;i<40;i++)await Promise.resolve()};
+  const scope=()=>document.querySelector(root);
+  const ctl=()=>document.querySelector(root+' [data-rx-copy-car]');
+  const s=scope(),b=ctl();if(!s||!b)return {missing:true};
+  const car=String(s.dataset.car||'').trim();
+  const r0=b.getBoundingClientRect(),hit=document.elementFromPoint(r0.left+r0.width/2,r0.top+r0.height/2);
+  const reachable=!!hit&&hit.closest('[data-rx-copy-car]')===b;
+  window.__rxExecCommand=window.__rxExecCommand||document.execCommand.bind(document);
+  window.__rxCopied=[];
+  const ok={configurable:true,value:{writeText:(v)=>{window.__rxCopied.push(String(v));return Promise.resolve()}}};
+  if(mode==='ok'){
+    document.execCommand=window.__rxExecCommand;
+    Object.defineProperty(navigator,'clipboard',ok);
+    b.click();await flush();
+    const c=ctl();
+    return {car,reachable,copied:[...window.__rxCopied],text:scope()?.innerText||'',y0:r0.top,y1:c?c.getBoundingClientRect().top:null};
+  }
+  document.execCommand=()=>false;
+  Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:()=>Promise.reject(new Error('denied'))}});
+  b.click();await flush();
+  const f=scope()?.querySelector('[data-rx-copy-fallback]'),fr=f?.getBoundingClientRect(),c=ctl(),cr=c?.getBoundingClientRect();
+  const out={car,reachable,body:document.body.innerText,copied:[...window.__rxCopied],
+    fallback:f?String(f.innerText||'').replace(/\\s+/g,''):'',
+    visible:!!f&&f.getClientRects().length>0&&fr.height>0,
+    notCut:!!f&&f.scrollWidth<=f.clientWidth+1&&f.scrollHeight<=f.clientHeight+1,
+    covers:!!fr&&!!cr&&Math.abs(fr.top-cr.top)<2&&fr.height>=cr.height-1,
+    userSelect:f?(getComputedStyle(f).userSelect||getComputedStyle(f).webkitUserSelect):'',
+    isInput:!!f&&f.tagName==='INPUT',y0:r0.top,y1:cr?cr.top:null};
+  // A tap on the fallback retries the copy.
+  if(f){Object.defineProperty(navigator,'clipboard',ok);document.execCommand=window.__rxExecCommand;f.click();await flush();out.retryCopied=[...window.__rxCopied]}
+  document.execCommand=window.__rxExecCommand;
+  return out;
+}"""
+
+
 async def assert_car_copy(page, root):
     """One tap on the code copies it; the UI claims 'copiado' only after a real success."""
-    car = (await page.locator(root).get_attribute("data-car") or "").strip()
-    assert car, (root, "no CAR code")
+    await settle_map_panel(page)
     await reveal_in_map(page, f"{root} [data-rx-copy-car]")
-    box_before = await page.locator(f"{root} [data-rx-copy-car]").bounding_box()
-    await page.evaluate(
-        """()=>{
-          window.__rxCopied=[];
-          window.__rxExecCommand=window.__rxExecCommand||document.execCommand.bind(document);
-          Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:(v)=>{window.__rxCopied.push(String(v));return Promise.resolve()}}});
-        }"""
-    )
-    await page.locator(f"{root} [data-rx-copy-car]").click()
-    await page.wait_for_timeout(250)
-    ok = await page.evaluate(
-        "root=>({copied:window.__rxCopied||[],text:document.querySelector(root)?.innerText||''})", root
-    )
+    ok = await page.evaluate(COPY_JS, {"root": root, "mode": "ok"})
+    assert not ok.get("missing"), (root, ok)
+    car = ok["car"]
+    assert car and ok["reachable"], (root, ok)
     assert car in ok["copied"], (car, ok)
     assert "copiado" in ok["text"].casefold(), ok
     # Feedback must not move the control away from the finger.
-    box_after = await page.locator(f"{root} [data-rx-copy-car]").bounding_box()
-    assert box_before and box_after and abs(box_before["y"] - box_after["y"]) < 2, (box_before, box_after)
-    await page.evaluate(
-        """()=>{
-          document.execCommand=()=>false;
-          Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:()=>Promise.reject(new Error('denied'))}});
-        }"""
-    )
-    await page.locator(f"{root} [data-rx-copy-car]").click()
-    await page.wait_for_timeout(250)
-    failed = await page.evaluate(
-        """root=>{const s=document.querySelector(root),i=s?.querySelector('input[data-rx-copy-fallback]');
-          return {body:document.body.innerText,value:i?.value||'',visible:!!i&&i.getClientRects().length>0,readOnly:!!i?.readOnly}}""",
-        root,
-    )
+    assert ok["y1"] is not None and abs(ok["y0"] - ok["y1"]) < 2, ok
+    failed = await page.evaluate(COPY_JS, {"root": root, "mode": "fail"})
+    assert not failed.get("missing") and failed["reachable"], (root, failed)
+    assert not failed["copied"], failed
     assert "copiado" not in failed["body"].casefold(), ("copy failed but the UI claims success", failed["body"][:600])
-    assert failed["visible"] and failed["readOnly"] and failed["value"] == car, failed
-    await page.evaluate("()=>{if(window.__rxExecCommand)document.execCommand=window.__rxExecCommand}")
+    assert failed["visible"] and failed["fallback"] == car, failed
+    assert failed["notCut"] and failed["covers"] and not failed["isInput"], failed
+    assert failed["userSelect"] == "all", failed
+    assert failed["y1"] is not None and abs(failed["y0"] - failed["y1"]) < 2, failed
+    assert car in failed.get("retryCopied", []), failed
 
 
 async def assert_official_sicar_action(page):
     car = (await page.locator(".rx46-card").get_attribute("data-car") or "").strip()
     assert car, "selected card has no CAR code"
+    await settle_map_panel(page)
     await reveal_in_map(page, '[data-rx46-action="demo"]')
     # A failed copy may still open the official site, but it must never claim 'copiado'.
     await page.evaluate(
@@ -316,11 +371,43 @@ async def open_full(page, width):
     return text
 
 
+SNAPSHOT_DELAY_S = 2.6  # between the V45 settle repaints at 1800 and 9500 ms
+
+
+async def delay_snapshot(page):
+    """Answers V43's /v1/live/snapshot late, after the V45 panel is already on screen."""
+    late = {"answered": False}
+
+    async def handler(route):
+        await asyncio.sleep(SNAPSHOT_DELAY_S)
+        car = route.request.url.split("/v1/live/snapshot/", 1)[-1].split("?", 1)[0]
+        try:
+            await route.fulfill(json={"car_code": car, "public_name_state": "confirmed", "main_signals": []})
+        finally:
+            late["answered"] = True
+
+    await page.route("**/v1/live/snapshot/**", handler)
+    return late
+
+
+async def assert_late_snapshot_keeps_panel(page, late):
+    waited = 0
+    while not late["answered"] and waited < 12000:
+        await page.wait_for_timeout(100)
+        waited += 100
+    assert late["answered"], "the delayed V43 snapshot was never requested"
+    await page.wait_for_timeout(200)
+    state = await js(page, """()=>{const h=document.querySelector('#rx43SnapshotHost');return {panel:!!h?.querySelector('.rx45-panel-card'),snapshot:!!h?.querySelector('#rx43Full')}}""")
+    assert state["panel"] and not state["snapshot"], ("a late V43 snapshot replaced the V45 panel", state)
+    await page.unroute("**/v1/live/snapshot/**")
+
+
 async def viewport_flow(browser, width, height, label):
     context = await browser.new_context(
         viewport={"width": width, "height": height}, accept_downloads=True
     )
     page = await context.new_page()
+    track_map_panel(page)
     errors = []
     page.on("pageerror", lambda exc: errors.append("pageerror:" + str(exc)))
     page.on(
@@ -357,7 +444,9 @@ async def viewport_flow(browser, width, height, label):
     before = await map_center(page)
     await click_first_parcel(page)
     await assert_card_contract(page, before, width)
+    late = await delay_snapshot(page)
     await open_full(page, width)
+    await assert_late_snapshot_keeps_panel(page, late)
     await assert_car_copy(page, ".rx45-panel-card")
     await page.screenshot(path=str(OUT / f"{label}-panel.png"), full_page=True)
 
@@ -490,6 +579,62 @@ async def assert_search_dropdown_escaped(page, car, geometry):
     await js(page, "()=>document.querySelector('#rxSmartResults')?.remove()")
 
 
+CARD_FIELDS_JS = """()=>{const c=document.querySelector('.rx46-card');const f={};c?.querySelectorAll('.rx46-field').forEach(x=>{f[(x.querySelector('small')?.textContent||'').trim().toLowerCase()]=(x.querySelector('b')?.innerText||'').trim()});
+  const k=document.querySelector('.rx46-card [data-rx-copy-car]'),cr=c?.getBoundingClientRect(),kr=k?.getBoundingClientRect();
+  return {fields:f,count:Object.keys(f).length,text:c?.innerText||'',named:c?.dataset.rxNamed||'',enriched:c?.dataset.rx46Enriched||'',
+    cardTop:cr?cr.top:null,codeTop:kr?kr.top:null,codes:c?c.querySelectorAll('[data-rx-copy-car]').length:0}}"""
+
+
+async def assert_card_rules_runtime(page, car, geometry):
+    """Runs the shipped JS rules (not a Python twin) on deterministic payloads."""
+    fmt = await js(page, """()=>({ha0:rxNum.ha(0),haNull:rxNum.ha(null),haEmpty:rxNum.ha(''),haNaN:rxNum.ha(NaN),haStr0:rxNum.ha('0'),
+      tiny:rxNum.num(0.003,2),edge:rxNum.num(0.005,2),big:rxNum.ha(1981.2),date:rxDateBR('2016-04-11T02:05:53.354Z'),dateNull:rxDateBR(null),
+      renderWrapped:window.rxV46RenderV45Immediate?.__rxIdentitySanitizedV49===true})""")
+    assert fmt == {"ha0": "0,00 ha", "haNull": "", "haEmpty": "", "haNaN": "", "haStr0": "0,00 ha", "tiny": "< 0,01",
+                   "edge": "0,01", "big": "1.981,20 ha", "date": "10/04/2016", "dateNull": "",
+                   "renderWrapped": True}, fmt
+
+    panel = {}
+
+    async def map_panel(route):
+        if panel.get("delay"):
+            await asyncio.sleep(panel["delay"])
+        await route.fulfill(json=panel.get("body") or {"ok": False})
+
+    await page.route("**/v1/live/map-panel/**", map_panel)
+    try:
+        # Zero is data, a missing value is hidden (owner rule 3).
+        await js(page, """a=>window.rxV46SelectProperty({car_code:a.car,municipality:'Curvelo',uf:'MG',area_ha:0,fiscal_modules:0.003,condition:'',created_at:null,updated_at:null},a.g,null)""", {"car": car, "g": geometry})
+        await page.wait_for_timeout(400)
+        zero = await js(page, CARD_FIELDS_JS)
+        assert zero["fields"].get("área") == "0,00 ha" and zero["fields"].get("módulos fiscais") == "< 0,01", zero
+        assert not {"condição", "criação", "atualização"} & set(zero["fields"]), zero
+
+        # A validated name is the title and the code appears exactly once, below it.
+        name = "FAZENDA TESTE VALIDADA"
+        await js(page, """a=>window.rxV46SelectProperty({car_code:a.car,municipality:'Curvelo',uf:'MG',name:a.name,validated_name:a.name,validation_status:'VALIDATED',name_validation_status:'VALIDATED',panel_name_eligible:true},a.g,null)""", {"car": car, "g": geometry, "name": name})
+        await page.wait_for_timeout(400)
+        named = await js(page, CARD_FIELDS_JS)
+        title = await page.evaluate(TITLE_JS, ".rx46-card .rx46-title")
+        assert named["named"] == "1" and title == name, (named, title)
+        assert named["text"].count(car) == 1 and named["codes"] == 1, named
+
+        # The enrichment adds rows but must not move the card or the code under the finger.
+        panel.update({"delay": 1.2, "body": {"ok": True, "car_code": car, "created_at": "2016-04-11T02:05:53.354Z",
+                                             "updated_at": "2025-09-10T23:38:30.026Z"}})
+        await js(page, """a=>window.rxV46SelectProperty({car_code:a.car,municipality:'Curvelo',uf:'MG',area_ha:12.5},a.g,null)""", {"car": car, "g": geometry})
+        await page.wait_for_timeout(150)
+        first = await js(page, CARD_FIELDS_JS)
+        await page.wait_for_function("document.querySelector('.rx46-card')?.dataset.rx46Enriched==='1'", timeout=10000)
+        await page.wait_for_timeout(150)
+        enriched = await js(page, CARD_FIELDS_JS)
+        assert first["enriched"] == "" and enriched["count"] == first["count"] + 2, (first, enriched)
+        assert DATE_RE.fullmatch(enriched["fields"].get("criação", "")), enriched
+        assert abs(first["cardTop"] - enriched["cardTop"]) < 2 and abs(first["codeTop"] - enriched["codeTop"]) < 2, (first, enriched)
+    finally:
+        await page.unroute("**/v1/live/map-panel/**")
+
+
 async def search_regression(page, label):
     car = 'MG-3120904-F3ED1E9DAC0042B8ADA898DC3EAF5A28'
     await js(page, "()=>map.setView([-14,-52],4,{animate:false})")
@@ -509,6 +654,7 @@ async def search_regression(page, label):
     probe = await js(page, """()=>{const c=window.current;window.rxV46SelectProperty({...c,name:'NOME DE OUTRO CADASTRO',validated_name:'NOME DE OUTRO CADASTRO',validation_status:'UNVALIDATED',name_validation_status:'UNVALIDATED',panel_name_eligible:false},c.geometry,null);
       return {wrapped:window.rxV46SelectProperty.__rxIdentitySanitizedV49===true,name:window.current.name??null,title:document.querySelector('.rx46-title')?.innerText?.trim()||''}}""")
     assert probe['wrapped'] and probe['name'] is None and probe['title'] == car, probe
+    await assert_card_rules_runtime(page, car, state['geometry'])
     await js(page, "()=>{window.rxV46CloseAnchor();map.setView([-14,-52],4,{animate:false})}")
     # Exercise the name-result UI using an explicit CAR result fixture carrying
     # the real geometry just resolved above. This does not assert name coverage.

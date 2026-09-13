@@ -120,12 +120,15 @@ jobs:
           # C2a: clean card. One pt-BR formatter defined in <head> before every body script,
           # V49 sanitize wraps the final V46 entry, no m², no municipality title, no placeholder claims.
           c2_required=('RX_NUMBER_FORMAT_C2','window.rxNum=','window.rxDateBR=','window.rxCopyCarC2=','data-rx-copy-car',
-                       'RX_IDENTITY_TITLE_GUARD_V49_WRAP','window.rxCardIdentityC2=cardIdentity','window.rxV46SelectProperty=selectWrapped')
+                       'RX_IDENTITY_TITLE_GUARD_V49_WRAP','window.rxCardIdentityC2=cardIdentity','window.rxV46SelectProperty=selectWrapped',
+                       'window.rxV46RenderV45Immediate=renderWrapped','rxCopyLiveC2','data-rx-copy-retry','rx46AnchorSeq')
           c2_missing=[x for x in c2_required if x not in html]
           assert not c2_missing, f'C2a clean-card markers missing from final HTML: {c2_missing}'
           assert html.index('RX_NUMBER_FORMAT_C2') < html.index('</head>') < html.index('<script id="rxMapV46Script">'), 'C2a formatter must be defined in <head>'
           v46_entry=html.index("window.rxV46SelectProperty=function(p,g,latlng){const m=mapRef();")
           assert v46_entry < html.index('window.rxV46SelectProperty=selectWrapped'), 'C2a V49 sanitize must wrap the final V46 entry'
+          # The failed-copy fallback is a selectable element with the full code, not a one-line input.
+          assert 'input class="rx-copy-fallback"' not in html, 'C2a copy fallback must not be a single-line input'
           c2_absent=('m²','Área (m²)',"' - '+p.uf",'Datas não informadas nesta fonte','NOME NÃO CONFIRMADO',"'Situação informada'","'Tipo informado'","'IMÓVEL RURAL'",'rx46-code-mini">')
           c2_leaked=[x for x in c2_absent if x in html]
           assert not c2_leaked, f'C2a old card strings leaked into final HTML: {c2_leaked}'

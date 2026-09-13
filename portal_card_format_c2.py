@@ -4,8 +4,9 @@ window.rxNum      pt-BR numbers. Missing/''/NaN -> '' (the caller hides the row)
                   real 0 -> '0,00'; 0 < |x| < 0,005 -> '< 0,01'.
 window.rxDateBR   dd/mm/aaaa in America/Sao_Paulo; unparseable -> ''.
 window.rxCopyCarC2 one-tap copy of the CAR code. It reports success only after the
-                  clipboard write really succeeded; on failure it shows a selectable
-                  field and never the word "copiado".
+                  clipboard write really succeeded; on failure it shows the full code as a
+                  selectable fallback and never the word "copiado"; results are
+                  announced through one persistent role=status region.
 """
 
 from __future__ import annotations
@@ -20,9 +21,12 @@ HEAD = r'''<style id="rxCardFormatC2">
 .rx-car-copy::after{content:'';position:absolute;right:9px;top:50%;width:14px;height:14px;transform:translateY(-50%);background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%2363e6a5' stroke-width='1.6'%3E%3Crect x='5.5' y='5.5' width='8.5' height='8.5' rx='1.5'/%3E%3Cpath d='M10.5 3.5V3a1 1 0 0 0-1-1H3a1 1 0 0 0-1 1v6.5a1 1 0 0 0 1 1h.5'/%3E%3C/svg%3E") center/contain no-repeat}
 .rx-car-copy-wrap{display:block;position:relative;min-width:0}
 .rx-copy-feedback:empty{display:none}.rx-copy-feedback{position:absolute;inset:0;z-index:2;display:flex;flex-direction:column;justify-content:center;gap:3px;padding:3px 6px;border-radius:9px;background:#0a1c14;border:1px solid #63e6a5;font:800 10px/1.25 system-ui,-apple-system,Segoe UI,sans-serif;letter-spacing:0;text-transform:none;color:#9fe9c2;pointer-events:none}
-.rx-copy-feedback[data-state="fail"]{border-color:#f5c96a;pointer-events:auto}.rx-copy-feedback .rx-copy-ok{text-align:center}.rx-copy-feedback .rx-copy-fail{color:#ffd77d}
-.rx-copy-fallback{display:block;width:100%;min-width:0;height:28px;padding:3px 6px;border:1px solid #f5c96a;border-radius:6px;background:#07150f;color:#f4fff8;font:700 11px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;-webkit-user-select:all;user-select:all}
-@media(max-width:720px),(pointer:coarse){.rx-car-copy{min-height:44px}.rx-copy-fallback{font-size:16px}}
+.rx-copy-feedback[data-state="fail"]{padding:0;border:0;background:transparent;pointer-events:auto}.rx-copy-feedback .rx-copy-ok{text-align:center}
+.rx-copy-feedback .rx-copy-fail{position:absolute;left:0;right:0;top:100%;margin-top:3px;padding:3px 6px;border-radius:6px;background:#2d2410;color:#ffd77d;font:800 10px/1.25 system-ui,-apple-system,Segoe UI,sans-serif;text-align:center;pointer-events:none;z-index:3}
+.rx-copy-fallback{display:block;box-sizing:border-box;width:100%;height:100%;margin:0;padding:6px 30px 6px 8px;border:1px solid #f5c96a;border-radius:9px;background:#07150f;color:#f4fff8;font:700 12px/1.3 ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;letter-spacing:0;text-align:left;white-space:normal;overflow-wrap:normal;word-break:normal;cursor:text;-webkit-user-select:all;user-select:all;-webkit-touch-callout:default}
+.rx-copy-fallback:focus{outline:2px solid #f5c96a;outline-offset:2px}
+.rx-sr-only{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0 0 0 0)!important;white-space:nowrap!important;border:0!important}
+@media(max-width:720px),(pointer:coarse){.rx-car-copy{min-height:44px}}
 </style>
 <script id="rxNumberFormatC2">
 (function(){
@@ -70,23 +74,48 @@ HEAD = r'''<style id="rxCardFormatC2">
  }
  function feedbackInner(car){
    const st=states.get(car);if(!st)return '';
-   if(st.state==='ok')return '<span class="rx-copy-ok">✓ Código do CAR copiado</span>';
-   return `<span class="rx-copy-fail">Toque e segure para copiar</span><input class="rx-copy-fallback" data-rx-copy-fallback readonly value="${esc(car)}" aria-label="Código do CAR para copiar">`;
+   if(st.state==='ok')return '<span class="rx-copy-ok" aria-hidden="true">✓ Código do CAR copiado</span>';
+   // Failure: the full code, laid out exactly like the button, selectable in one gesture
+   // (user-select:all on a non-input keeps the long-press from picking one hyphen group).
+   return `<span class="rx-copy-fallback" data-rx-copy-fallback data-rx-copy-retry="${esc(car)}" tabindex="-1" role="textbox" aria-readonly="true" aria-label="Código do CAR para copiar: ${esc(car)}">${codeHtml(car)}</span><span class="rx-copy-fail" aria-hidden="true">Toque e segure para copiar</span>`;
  }
  function feedback(car){
    const c=String(car||'').trim();if(!c)return '';
    const st=states.get(c);
-   return `<span class="rx-copy-feedback" data-rx-copy-feedback data-rx-copy-for="${esc(c)}"${st?` data-state="${st.state}"`:''} aria-live="polite">${feedbackInner(c)}</span>`;
+   return `<span class="rx-copy-feedback" data-rx-copy-feedback data-rx-copy-for="${esc(c)}"${st?` data-state="${st.state}"`:''}>${feedbackInner(c)}</span>`;
  }
- function paint(car){const st=states.get(car);document.querySelectorAll('[data-rx-copy-feedback]').forEach(box=>{if(box.dataset.rxCopyFor!==car)return;if(st)box.dataset.state=st.state;else delete box.dataset.state;box.innerHTML=feedbackInner(car)})}
+ // One persistent status region outside every re-rendered popup/panel, so screen readers
+ // announce the result reliably (a live region created together with its text is often skipped).
+ let liveTimer=0;
+ function live(){
+   let el=document.getElementById('rxCopyLiveC2');
+   if(!el&&document.body){el=document.createElement('div');el.id='rxCopyLiveC2';el.className='rx-sr-only';el.setAttribute('role','status');el.setAttribute('aria-live','polite');document.body.appendChild(el)}
+   return el;
+ }
+ function announce(msg){const el=live();if(!el)return;clearTimeout(liveTimer);el.textContent='';if(msg)liveTimer=setTimeout(()=>{el.textContent=msg},60)}
+ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',live);else live();
+ function paint(car){
+   const st=states.get(car);
+   document.querySelectorAll('[data-rx-copy-feedback]').forEach(box=>{
+     if(box.dataset.rxCopyFor!==car)return;
+     const hadFocus=box.contains(document.activeElement);
+     if(st)box.dataset.state=st.state;else delete box.dataset.state;
+     box.innerHTML=feedbackInner(car);
+     // Never drop keyboard focus to <body> when the fallback goes away.
+     if(hadFocus&&(!st||st.state!=='fail')){try{box.parentElement?.querySelector('[data-rx-copy-car]')?.focus({preventScroll:true})}catch(e){}}
+   });
+ }
  async function write(text){
    try{const c=navigator.clipboard;if(c&&typeof c.writeText==='function'){await c.writeText(text);return true}}catch(e){}
+   const prev=document.activeElement;
    try{
      const t=document.createElement('textarea');t.value=text;t.setAttribute('readonly','');
      t.style.cssText='position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;pointer-events:none';
      document.body.appendChild(t);t.select();t.setSelectionRange(0,text.length);
      let ok=false;try{ok=document.execCommand('copy')===true}catch(e){ok=false}
-     t.remove();return ok;
+     t.remove();
+     try{if(prev&&prev!==document.body&&prev.isConnected)prev.focus({preventScroll:true})}catch(e){}
+     return ok;
    }catch(e){return false}
  }
  async function copy(car){
@@ -95,14 +124,22 @@ HEAD = r'''<style id="rxCardFormatC2">
    const ttl=ok?3200:15000;
    states.set(c,{state:ok?'ok':'fail',until:Date.now()+ttl});
    paint(c);
-   setTimeout(()=>{const st=states.get(c);if(st&&st.until<=Date.now()){states.delete(c);paint(c)}},ttl+60);
+   announce(ok?'Código do CAR copiado':'Não foi possível copiar automaticamente. Toque e segure o código para copiar.');
+   setTimeout(()=>{const st=states.get(c);if(st&&st.until<=Date.now()){states.delete(c);paint(c);announce('')}},ttl+60);
    return ok;
  }
+ function selectFallback(scope,car){
+   const el=[...(scope||document).querySelectorAll('[data-rx-copy-fallback]')].find(x=>x.dataset.rxCopyRetry===car);if(!el)return;
+   try{el.focus({preventScroll:true});const sel=window.getSelection(),r=document.createRange();r.selectNodeContents(el);sel.removeAllRanges();sel.addRange(r)}catch(x){}
+ }
  document.addEventListener('click',e=>{
-   const btn=e.target&&e.target.closest?e.target.closest('[data-rx-copy-car]'):null;if(!btn)return;
+   const t=e.target;if(!t||!t.closest)return;
+   // A failed-copy state belongs to the card where it happened, not to a panel opened later.
+   if(t.closest('[data-rx46-action="full"],[data-rx46-action="close"]')){for(const [k,v] of [...states])if(v.state==='fail')states.delete(k);return}
+   const btn=t.closest('[data-rx-copy-car]'),retry=btn?null:t.closest('[data-rx-copy-retry]');if(!btn&&!retry)return;
    e.preventDefault();
-   const car=btn.dataset.rxCopyCar,scope=btn.closest('[data-rx-copy-scope]');
-   copy(car).then(ok=>{if(ok)return;const i=(scope||document).querySelector(`input[data-rx-copy-fallback][value="${CSS.escape(car)}"]`);try{i?.focus({preventScroll:true});i?.select()}catch(x){}});
+   const car=btn?btn.dataset.rxCopyCar:retry.dataset.rxCopyRetry,scope=(btn||retry).closest('[data-rx-copy-scope]');
+   copy(car).then(ok=>{if(!ok)selectFallback(scope,car)});
  },true);
  window.rxCopyCarC2={copy,button,code:codeHtml};
 })();
