@@ -438,6 +438,43 @@ async def assert_text_fits(page, label):
     print("RX_C2C_TEXT_FIT", label, json.dumps({"placeholder": p["placeholder"], "state": (p["state"] or {}).get("text")}, ensure_ascii=False))
 
 
+async def assert_quiet_pending_panel(browser):
+    # C3: separate context (the 502 fixture logs console errors on purpose).
+    context = await browser.new_context(viewport={"width": 1440, "height": 900})
+    page = await context.new_page()
+    hits = []
+
+    async def fail_panel(route):
+        hits.append(route.request.url)
+        await route.fulfill(status=502, json={"detail": "fixture_unavailable"})
+
+    await page.goto(BASE, wait_until="domcontentloaded", timeout=30000)
+    await wait_runtime(page)
+    await page.route("**/v1/live/map-panel/*", fail_panel)
+    await set_dense(page)
+    await click_first_parcel(page)
+    await page.locator('[data-rx46-action="full"]').click()
+    await page.wait_for_selector(".rx45-panel-card", state="visible", timeout=10000)
+    first = await page.locator(".rx45-panel-card").inner_text()
+    assert "NÃO FOI POSSÍVEL" not in first, first
+    assert "consultando fontes oficiais" in first.casefold(), first
+    # V45 settle retries at 40/500/1800/9500 ms before declaring the consultation pending.
+    await page.wait_for_function(
+        "()=>!!document.querySelector('.rx45-panel-card [data-rx45-retry]')", timeout=20000
+    )
+    pending = await page.locator(".rx45-panel-card").inner_text()
+    folded = pending.casefold()
+    assert "consulta às fontes oficiais pendente" in folded and "consultar de novo" in folded, pending
+    for loud in ("NÃO FOI POSSÍVEL", "FONTE INDISPONÍVEL", "sem pendências"):
+        assert loud.casefold() not in folded, (loud, pending)
+    before = len(hits)
+    await page.locator(".rx45-panel-card [data-rx45-retry]").click()
+    await page.wait_for_timeout(1200)
+    assert len(hits) > before, ("retry did not ask the server again", before, len(hits))
+    print("RX_C3_QUIET_PENDING=PASS", json.dumps({"map_panel_requests": len(hits)}))
+    await context.close()
+
+
 async def viewport_flow(browser, width, height, label):
     context = await browser.new_context(
         viewport={"width": width, "height": height}, accept_downloads=True
@@ -955,6 +992,7 @@ async def main():
         await viewport_flow(browser, 768, 900, "768")
         await viewport_flow(browser, 1440, 900, "1440")
         await movement_gate(browser)
+        await assert_quiet_pending_panel(browser)
         await sigef_reference_flow(browser, 1440, 900, ("found", "unavailable", "recovered", "none"))
         await sigef_reference_flow(browser, 375, 812, ("found",))
         await browser.close()
