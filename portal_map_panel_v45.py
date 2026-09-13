@@ -4,14 +4,16 @@ import asyncio
 import time
 from typing import Any
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 import portal_v8
 from car_resilient import CAR_RE, fetch_car_live_resilient
 from property_identity_runtime import resolve_property_identity_sync
 from source_audit_registry_v49 import build_source_audit, compliance_sources as audit_compliance_sources
+from external_process_lifecycle import ManagedOperationTimeout, RequestDisconnected, install_shutdown_cleanup, run_sync_with_request_lifecycle
 
 app = portal_v8.app
+install_shutdown_cleanup(app)
 _CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 _TTL_SECONDS = 600
 
@@ -33,7 +35,7 @@ def _num(value: Any) -> float | None:
         return None
 
 
-def _panel_sync(car_code: str) -> dict[str, Any]:
+def _panel_sync(car_code: str, *, cancel_event=None) -> dict[str, Any]:
     code = str(car_code or "").strip().upper()
     if not CAR_RE.match(code):
         return {"ok": False, "car_code": code, "detail": "invalid_car_format"}
@@ -44,7 +46,7 @@ def _panel_sync(car_code: str) -> dict[str, Any]:
         out["cached"] = True
         return out
 
-    car = fetch_car_live_resilient(code)
+    car = fetch_car_live_resilient(code, cancel_event=cancel_event)
     if not car.get("ok"):
         return {
             "ok": False,
@@ -54,7 +56,7 @@ def _panel_sync(car_code: str) -> dict[str, Any]:
         }
 
     props = car.get("properties") or {}
-    identity = resolve_property_identity_sync(code)
+    identity = resolve_property_identity_sync(code, cancel_event=cancel_event)
     identity_ok = bool(identity.get("ok"))
     name_eligible = (
         identity_ok
@@ -137,8 +139,13 @@ def _panel_sync(car_code: str) -> dict[str, Any]:
 
 
 @app.get("/v1/live/map-panel/{car_code}")
-async def map_panel_v45(car_code: str):
-    out = await asyncio.to_thread(_panel_sync, car_code)
+async def map_panel_v45(car_code: str, request: Request):
+    try:
+        out = await run_sync_with_request_lifecycle(request, _panel_sync, car_code, timeout_seconds=None)
+    except RequestDisconnected:
+        raise HTTPException(status_code=499, detail='client_disconnected')
+    except ManagedOperationTimeout:
+        raise HTTPException(status_code=504, detail='map_panel_timeout')
     if not out.get("ok"):
         raise HTTPException(
             status_code=422 if out.get("detail") == "invalid_car_format" else 502,

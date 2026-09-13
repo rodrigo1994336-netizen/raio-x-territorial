@@ -6,17 +6,19 @@ import math
 import time
 from typing import Any
 from urllib.parse import urlencode
-from urllib.request import Request, urlopen
+from urllib.request import Request as URLRequest, urlopen
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 from shapely.geometry import Point, shape
 
 import portal_v8
 import public_property_name_seed_v43 as seed
 from car_resilient import fetch_car_live_resilient, CAR_RE
 from deploy_app import SIGEF_MIRROR, _curl
+from external_process_lifecycle import ManagedOperationTimeout, RequestDisconnected, install_shutdown_cleanup, run_sync_with_request_lifecycle
 
 app=portal_v8.app
+install_shutdown_cleanup(app)
 _CACHE:dict[str,tuple[float,dict[str,Any]]]={}
 TTL_SECONDS=3600
 
@@ -49,7 +51,7 @@ def _first_name(props:dict[str,Any])->str|None:
     return None
 
 
-def _sigef_candidates(car_geom:dict[str,Any],bbox:list[float]):
+def _sigef_candidates(car_geom:dict[str,Any],bbox:list[float],cancel_event=None):
     env=','.join(str(float(x)) for x in bbox)
     params={
         'f':'geojson','where':'1=1','geometry':env,'geometryType':'esriGeometryEnvelope',
@@ -57,7 +59,7 @@ def _sigef_candidates(car_geom:dict[str,Any],bbox:list[float]):
         'outFields':'parcela_co,codigo_imo,nome_area,registro_m,registro_d,municipio_,uf_id,status,situacao_i',
         'returnGeometry':'true','outSR':'4326','resultRecordCount':'80'
     }
-    raw=_curl(SIGEF_MIRROR+'?'+urlencode(params),True)
+    raw=_curl(SIGEF_MIRROR+'?'+urlencode(params),True,cancel_event=cancel_event,connect_timeout=12,max_time=40,hard_timeout=45)
     if not raw.get('ok'):
         return {'ok':False,'detail':raw.get('detail') or raw.get('preview'),'items':[]}
     data=raw.get('json') or {};features=data.get('features') or []
@@ -104,7 +106,7 @@ def _osm_named_farms_bbox(west:float,south:float,east:float,north:float,limit:in
     errors=[]
     for endpoint in _OSM_ENDPOINTS:
         try:
-            req=Request(endpoint,data=body,headers={'User-Agent':'Raio-X-Territorial/V44 (+public-name-resolution)','Content-Type':'application/x-www-form-urlencoded','Accept':'application/json'})
+            req=URLRequest(endpoint,data=body,headers={'User-Agent':'Raio-X-Territorial/V44 (+public-name-resolution)','Content-Type':'application/x-www-form-urlencoded','Accept':'application/json'})
             with urlopen(req,timeout=7) as response:data=json.load(response)
             items=[];seen=set()
             for element in data.get('elements') or []:
@@ -169,19 +171,22 @@ def _seed_identity(code:str,items:list[dict[str,Any]])->dict[str,Any]|None:
     }
 
 
-def resolve_property_identity_sync(car_code:str)->dict[str,Any]:
+def resolve_property_identity_sync(car_code:str, *, cancel_event=None)->dict[str,Any]:
     code=str(car_code or '').strip().upper()
+    if cancel_event and cancel_event.is_set():return {'ok':False,'car_code':code,'cancelled':True,'detail':'request_cancelled'}
     if not CAR_RE.match(code):return {'ok':False,'car_code':code,'detail':'invalid_car_format'}
     now=time.monotonic();cached=_CACHE.get(code)
     if cached and now-cached[0]<TTL_SECONDS:return dict(cached[1])
-    car=fetch_car_live_resilient(code)
+    car=fetch_car_live_resilient(code,cancel_event=cancel_event)
     if not car.get('ok'):
+        if car.get('cancelled'):return {'ok':False,'car_code':code,'cancelled':True,'detail':'request_cancelled','source':'SICAR'}
         out={'ok':False,'car_code':code,'detail':car.get('detail') or 'CAR não localizado','source':'SICAR'};_CACHE[code]=(now,out);return out
     props=car.get('properties') or {};direct=_first_name(props)
     if direct:
         out={'ok':True,'car_code':code,'name':direct,'source':'SICAR','confidence':'high','method':'explicit_sicar_field','display_kind':'VALIDATED_PROPERTY_NAME','validation_status':'VALIDATED','panel_name_eligible':True,'map_anchor':'CAR_POLYGON','validation_scope':'DIRECT_CAR_FIELD','origin_label':'SICAR — denominação explícita do próprio cadastro CAR','candidates':[],'candidate_count':0};_CACHE[code]=(now,out);return out
 
-    sig=_sigef_candidates(car.get('geometry'),car.get('bbox') or []);items=sig.get('items') or []
+    sig=_sigef_candidates(car.get('geometry'),car.get('bbox') or [],cancel_event);items=sig.get('items') or []
+    if cancel_event and cancel_event.is_set():return {'ok':False,'car_code':code,'cancelled':True,'detail':'request_cancelled'}
 
     # A named SIGEF parcel intersecting a CAR is useful cadastral context, but
     # overlap alone does not prove that the SIGEF denomination belongs to that CAR.
@@ -204,8 +209,13 @@ def resolve_property_identity_sync(car_code:str)->dict[str,Any]:
 
 
 @app.get('/v1/live/property-identity/{car_code}')
-async def property_identity(car_code:str):
-    out=await asyncio.to_thread(resolve_property_identity_sync,car_code)
+async def property_identity(car_code:str, request:Request):
+    try:
+        out=await run_sync_with_request_lifecycle(request,resolve_property_identity_sync,car_code,timeout_seconds=None)
+    except RequestDisconnected:
+        raise HTTPException(status_code=499,detail='client_disconnected')
+    except ManagedOperationTimeout:
+        raise HTTPException(status_code=504,detail='property_identity_timeout')
     if not out.get('ok') and not out.get('validation_status'):
         raise HTTPException(status_code=404 if out.get('detail')!='invalid_car_format' else 422, detail=out)
     return out
