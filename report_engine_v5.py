@@ -116,7 +116,7 @@ def _source_stats(sources):
         st=_s(x.get('status'),'').upper()
         if 'CONSULTAD' in st and 'NÃO' not in st and 'NAO' not in st:out['ok']+=1
         elif 'PARCIAL' in st:out['partial']+=1
-        elif 'INDISP' in st:out['unavailable']+=1
+        elif 'INDISP' in st or 'PENDENTE' in st:out['unavailable']+=1
         else:out['other']+=1
     return out
 
