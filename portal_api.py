@@ -148,9 +148,10 @@ async def export_kml(car_code: str):
         raise HTTPException(status_code=404 if car.get('not_found') else 502, detail='CAR não localizado ou SICAR indisponível.')
     props = car.get('properties') or {}
     geom = _kml_geometry(car.get('geometry') or {})
-    name = html.escape(f"Imóvel rural - {props.get('municipio') or ''}/{props.get('uf') or ''}")
     code = html.escape(str(props.get('cod_imovel') or car_code.upper()))
-    xml = f'''<?xml version="1.0" encoding="UTF-8"?>\n<kml xmlns="http://www.opengis.net/kml/2.2"><Document><name>Raio-X Territorial</name><Style id="rx"><LineStyle><color>ff3bcf79</color><width>3</width></LineStyle><PolyStyle><color>403bcf79</color></PolyStyle></Style><Placemark><name>{name}</name><description>CAR: {code}</description><styleUrl>#rx</styleUrl>{geom}</Placemark></Document></kml>'''
+    name = code
+    place = '/'.join(str(x) for x in (props.get('municipio'), props.get('uf')) if x)
+    xml = f'''<?xml version="1.0" encoding="UTF-8"?>\n<kml xmlns="http://www.opengis.net/kml/2.2"><Document><name>Raio-X Territorial</name><Style id="rx"><LineStyle><color>ff3bcf79</color><width>3</width></LineStyle><PolyStyle><color>403bcf79</color></PolyStyle></Style><Placemark><name>{name}</name><description>CAR: {code}{(' · ' + html.escape(place)) if place else ''}</description><styleUrl>#rx</styleUrl>{geom}</Placemark></Document></kml>'''
     return Response(content=xml, media_type='application/vnd.google-earth.kml+xml', headers={'Content-Disposition':f'attachment; filename="raio_x_{car_code.upper()}.kml"'})
 
 
