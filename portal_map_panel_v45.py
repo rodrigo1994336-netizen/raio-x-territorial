@@ -8,7 +8,7 @@ from fastapi import HTTPException, Request
 
 import portal_v8
 from car_resilient import CAR_RE, fetch_car_live_resilient
-from property_identity_runtime import resolve_property_identity_sync
+from property_identity_runtime import SIGEF_REFERENCE_MIN_OVERLAP, resolve_property_identity_sync
 from source_audit_registry_v49 import build_source_audit, compliance_sources as audit_compliance_sources
 from external_process_lifecycle import ManagedOperationTimeout, RequestDisconnected, install_shutdown_cleanup, run_sync_with_request_lifecycle
 
@@ -16,6 +16,7 @@ app = portal_v8.app
 install_shutdown_cleanup(app)
 _CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 _TTL_SECONDS = 600
+SIGEF_REFERENCE_ORIGIN = "SIGEF/INCRA · espelho público IBAMA/PAMGIA"
 
 
 def _first(props: dict[str, Any], *keys: str):
@@ -33,6 +34,45 @@ def _num(value: Any) -> float | None:
         return float(str(value).replace(",", "."))
     except Exception:
         return None
+
+
+def _sigef_reference(identity: dict[str, Any]) -> tuple[dict[str, Any] | None, str, int]:
+    """C2b: the SIGEF/INCRA parcel covering the largest share of the CAR (never the title).
+
+    Returns (reference, state, others). state: found | none | incomplete | unavailable | not_queried.
+    A truncated answer without a qualifying parcel is 'incomplete', never 'none'.
+    """
+    state = str(identity.get("sigef_state") or "")
+    if state == "not_queried":
+        return None, "not_queried", 0
+    if state != "answered":
+        return None, "unavailable", 0
+    pool = identity.get("sigef_reference_candidates")
+    if pool is None:
+        pool = identity.get("candidates") or []
+    strong = []
+    for item in pool:
+        if str(item.get("reference_kind") or "SIGEF_CADASTRAL") != "SIGEF_CADASTRAL":
+            continue
+        overlap = _num(item.get("overlap_ratio"))
+        label = str(item.get("name") or "").strip()
+        if label and overlap is not None and SIGEF_REFERENCE_MIN_OVERLAP <= overlap <= 1:
+            strong.append((overlap, label, item))
+    if not strong:
+        return None, ("incomplete" if identity.get("sigef_truncated") else "none"), 0
+    strong.sort(key=lambda x: x[0], reverse=True)
+    overlap, label, best = strong[0]
+    total = max(len(strong), int(identity.get("sigef_reference_candidate_count") or 0))
+    reference = {
+        "label": label,
+        "kind": "SIGEF_CADASTRAL",
+        "origin": SIGEF_REFERENCE_ORIGIN,
+        "car_overlap_ratio": overlap,
+        "parcel_overlap_ratio": _num(best.get("parcel_overlap_ratio")),
+        "incra_property_code": best.get("property_code"),
+        "parcel_code": best.get("parcel_code"),
+    }
+    return reference, "found", total - 1
 
 
 def _panel_sync(car_code: str, *, cancel_event=None) -> dict[str, Any]:
@@ -77,14 +117,13 @@ def _panel_sync(car_code: str, *, cancel_event=None) -> dict[str, Any]:
     created = _first(props, "dat_criacao", "dat_criaca", "data_criacao", "dt_criacao")
     updated = _first(props, "dat_atuali", "data_atualizacao", "dt_atualizacao")
 
+    # C2b: geographic_references carries OpenStreetMap names only. SIGEF names travel in
+    # sigef_reference with their overlap and origin, never as bare names.
+    sigef_reference, sigef_reference_state, sigef_reference_others = _sigef_reference(identity)
     refs = identity.get("geographic_reference_names") or []
-    if not refs:
-        refs = [
-            x.get("name")
-            for x in (identity.get("candidates") or [])
-            if x.get("name")
-        ]
     refs = list(dict.fromkeys(str(x).strip() for x in refs if str(x).strip()))[:3]
+    if sigef_reference:
+        refs = [x for x in refs if x.casefold() != sigef_reference["label"].casefold()]
 
     # The counter has exactly one canonical implemented-source registry.
     # Identity resolution is a process, not a source, and never enters it.
@@ -120,6 +159,10 @@ def _panel_sync(car_code: str, *, cancel_event=None) -> dict[str, Any]:
         "created_at": created,
         "updated_at": updated,
         "geographic_references": refs,
+        "sigef_reference": sigef_reference,
+        "sigef_reference_state": sigef_reference_state,
+        "sigef_reference_others": sigef_reference_others,
+        "sigef_reference_truncated": bool(identity.get("sigef_truncated")),
         "geometry": car.get("geometry"),
         "bbox": car.get("bbox"),
         "sources": sources,
@@ -136,6 +179,9 @@ def _panel_sync(car_code: str, *, cancel_event=None) -> dict[str, Any]:
         "source": "SICAR/WFS público + resolvedor auditado de identidade",
         "cached": False,
     }
+    # A reference query that did not answer (or answered only partially) is never cached.
+    if sigef_reference_state in ("unavailable", "incomplete"):
+        return out
     _CACHE[code] = (now, out)
     if len(_CACHE) > 500:
         for key, _ in sorted(_CACHE.items(), key=lambda kv: kv[1][0])[:100]:
@@ -208,7 +254,9 @@ body.rx43-dossier-open #panel{background:transparent!important;pointer-events:no
  function panelHtml(p){
    const id=ident(p),named=id.named,car=id.code,C=window.rxCopyCarC2,codeButton=C?C.button(car):esc(car);
    const refs=(p.geographic_references||[]).filter(Boolean);
-   const ref=refs.length?`<div class="rx45-reference"><strong>REFERÊNCIA GEOGRÁFICA / CADASTRAL</strong><br>${refs.map(esc).join(' · ')}<br><span>Contexto cartográfico. Não é denominação do CAR.</span></div>`:'';
+   // C2b: the SIGEF/INCRA reference (with its share and origin) and the OSM names are separate blocks.
+   const sigef=window.rxSigefRefC2?window.rxSigefRefC2.html(p,'panel'):'';
+   const ref=`<div class="rx45-sigef-slot" data-rx-sigef-slot>${sigef}</div>${refs.length?`<div class="rx45-reference" data-rx45-osm-reference><strong>Referência geográfica (OpenStreetMap)</strong><br>${refs.map(esc).join(' · ')}<br><span>Contexto cartográfico. Não é denominação do CAR.</span></div>`:''}`;
    const dates=[p.created_at?`Cadastro: ${esc(text(p.created_at))}`:'',p.updated_at?`Atualização: ${esc(text(p.updated_at))}`:''].filter(Boolean).join(' · ')||'Datas não informadas nesta fonte';
    const risk=p.risk||{state:'not_classified',label:'RISCO NÃO CLASSIFICADO',detail:'Fontes aprofundadas ainda não consultadas.'};
    const audit=p.source_audit;
@@ -236,7 +284,10 @@ body.rx43-dossier-open #panel{background:transparent!important;pointer-events:no
  function runFull(){try{if(typeof window.rxProgressiveAnalyze==='function')window.rxProgressiveAnalyze();else if(typeof analyze==='function')analyze()}catch(e){}}
  function bind(){q('#rx45Close')?.addEventListener('click',()=>window.rx43CloseDossier?.());q('#rx45Full')?.addEventListener('click',runFull);q('#rx45Audit')?.addEventListener('click',runFull);q('#rx45Kml')?.addEventListener('click',downloadKml);q('#rx45Png')?.addEventListener('click',downloadPng);q('#rx45Pdf')?.addEventListener('click',()=>{try{window.downloadPDF?.()}catch(e){}})}
  function render(p){const h=q('#rx43SnapshotHost');if(!h||!p)return;h.innerHTML=panelHtml(p);const card=h.querySelector('.rx45-panel-card');if(card)card.__rxSourceAudit=(p.source_audit&&Array.isArray(p.source_audit.registry))?JSON.parse(JSON.stringify(p.source_audit)):null;bind()}
- async function load(car){if(!car||busy)return;if(car===activeCar&&activeData){render(activeData);return}busy=true;try{const r=await fetch(`/v1/live/map-panel/${encodeURIComponent(car)}`),d=await r.json();if(r.ok&&d?.ok&&currentCar()===car){activeCar=car;activeData=d;render(d)}}catch(e){}finally{busy=false}}
+ async function load(car){if(!car||busy)return;if(car===activeCar&&activeData){render(activeData);return}busy=true;try{const r=await fetch(`/v1/live/map-panel/${encodeURIComponent(car)}`),d=await r.json();if(r.ok&&d?.ok&&currentCar()===car){activeCar=car;activeData=d;render(d);sigefFollowUp(car,d)}}catch(e){}finally{busy=false}}
+ // C2b: ONE automatic retry of an unanswered reference while this panel is open. Only the reference
+ // slot is repainted, so the sections other modules add to the panel are never wiped.
+ function sigefFollowUp(car,d){const R=window.rxSigefRefC2;if(!R||!R.needsRetry(d))return;const open=()=>currentCar()===car&&!!q(`#rx43SnapshotHost .rx45-panel-card[data-car="${CSS.escape(car)}"]`);R.scheduleRetry(car,open,fresh=>{if(!open())return;let data=(activeCar===car&&activeData)?activeData:{...d};if(fresh)data={...data,sigef_reference:fresh.sigef_reference??null,sigef_reference_state:fresh.sigef_reference_state,sigef_reference_others:fresh.sigef_reference_others,sigef_reference_truncated:fresh.sigef_reference_truncated};if(activeCar===car)activeData=data;const slot=q(`#rx43SnapshotHost .rx45-panel-card[data-car="${CSS.escape(car)}"] [data-rx-sigef-slot]`);if(slot)slot.innerHTML=R.html(data,'panel')})}
  function inspect(){const car=currentCar();const h=q('#rx43SnapshotHost');if(!car||!h)return;if(h.querySelector('.rx45-panel-card'))return;load(car)}
  function settle(car){[40,500,1800,9500].forEach(ms=>setTimeout(()=>{if(currentCar()===car)load(car)},ms))}
  function install(){

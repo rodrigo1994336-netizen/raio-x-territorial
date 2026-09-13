@@ -5,9 +5,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 CAR = "MG-3152006-BB48D05173F540CD9703B23088C3ABF4"
 # Measured 13/09/2026 on /v1/live/property-identity/<CAR> (SIGEF/INCRA, espelho publico
-# IBAMA/PAMGIA): the SIGEF parcel covering 99,95% of this CAR (overlap_ratio 0.9995 = share of
-# the CAR area; area_ratio 0.9999) is the settlement project itself, not "LOTE 01". Its name is a
-# cadastral reference and must never become the CAR name or title.
+# IBAMA/PAMGIA): the SIGEF parcel covering almost all of this CAR (overlap_ratio 0.9995 at 4
+# decimals = share of the CAR area, 0.999498 at 6 decimals, shown floored as 99,94%; area_ratio
+# 0.9999) is the settlement project itself, not "LOTE 01". Its name is a cadastral reference and
+# must never become the CAR name or title.
 REFERENCE = "PROJETO DE ASSENTAMENTO PAULISTA"
 REFERENCE_OVERLAP = 0.9995
 IDENTITY_FIELDS = (
@@ -107,7 +108,7 @@ def sigef_reference_source_contract() -> None:
     for token in ("sigef", "reference", "geographic_references", "label"):
         assert token not in body, token
     # The reference helper never writes a title element.
-    ref_start = fmt.index("<script id=\"rxSigefRefC2\">")
+    ref_start = fmt.index("<script id=\"rxSigefRefScriptC2\">")
     ref_js = fmt[ref_start:fmt.index("</script>", ref_start)]
     for token in ("rx46-title", "rx45-title", "<h2", "<h3", "validated_name"):
         assert token not in ref_js, token
@@ -141,7 +142,7 @@ def card_title_case_contract() -> None:
     assert title_for({**reference, "validated_name": None, "name_validation_status": "VALIDATED",
                       "panel_name_eligible": True}) == CAR
     assert title_for({**reference, "name_validation_status": "VALIDATED", "panel_name_eligible": True}) == REFERENCE
-    # C2b: a found SIGEF reference with 99,95% overlap still leaves the unnamed CAR titled by its code.
+    # C2b: a found SIGEF reference covering ~99,9% still leaves the unnamed CAR titled by its code.
     found = {"car_code": CAR, "validated_name": None, "name_validation_status": "UNRESOLVED",
              "panel_name_eligible": False, "sigef_reference_state": "found",
              "sigef_reference": {"label": REFERENCE, "car_overlap_ratio": REFERENCE_OVERLAP}}

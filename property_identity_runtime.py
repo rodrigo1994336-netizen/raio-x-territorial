@@ -34,6 +34,15 @@ _OSM_ENDPOINTS=(
     'https://overpass.kumi.systems/api/interpreter',
 )
 _OSM_SOURCE='OpenStreetMap contributors — denominação geográfica pública (ODbL)'
+_SIGEF_RECORD_CAP=80
+# C2b: minimum share of the CAR a SIGEF parcel must cover to be shown as its cadastral reference.
+SIGEF_REFERENCE_MIN_OVERLAP=0.50
+
+
+def _share(value:float)->float:
+    """A 0..1 share kept at 6 decimals and floored, so a sub-100% share never reads as 100%."""
+    v=min(max(float(value),0.0),1.0)
+    return math.floor(round(v,9)*1_000_000)/1_000_000
 
 
 def _clean_name(value:Any)->str|None:
@@ -57,12 +66,14 @@ def _sigef_candidates(car_geom:dict[str,Any],bbox:list[float],cancel_event=None)
         'f':'geojson','where':'1=1','geometry':env,'geometryType':'esriGeometryEnvelope',
         'inSR':'4326','spatialRel':'esriSpatialRelIntersects',
         'outFields':'parcela_co,codigo_imo,nome_area,registro_m,registro_d,municipio_,uf_id,status,situacao_i',
-        'returnGeometry':'true','outSR':'4326','resultRecordCount':'80'
+        'returnGeometry':'true','outSR':'4326','resultRecordCount':str(_SIGEF_RECORD_CAP)
     }
     raw=_curl(SIGEF_MIRROR+'?'+urlencode(params),True,cancel_event=cancel_event,connect_timeout=12,max_time=40,hard_timeout=45)
     if not raw.get('ok'):
         return {'ok':False,'detail':raw.get('detail') or raw.get('preview'),'items':[]}
     data=raw.get('json') or {};features=data.get('features') or []
+    # 200 is not all: ArcGIS flags a capped answer (top level and, in GeoJSON, under properties).
+    truncated=bool(data.get('exceededTransferLimit') or (data.get('properties') or {}).get('exceededTransferLimit') or len(features)>=_SIGEF_RECORD_CAP)
     try:car=shape(car_geom);car_area=max(float(car.area),1e-12);car_centroid=car.centroid
     except Exception as exc:return {'ok':False,'detail':f'geometry:{type(exc).__name__}:{exc}','items':[]}
     items=[]
@@ -75,13 +86,14 @@ def _sigef_candidates(car_geom:dict[str,Any],bbox:list[float],cancel_event=None)
             inter=car.intersection(g)
             overlap=float(inter.area/car_area) if not inter.is_empty else 0.0
             area_ratio=float(g.area/car_area) if car_area else math.inf
+            parcel_overlap=float(inter.area/g.area) if g.area>0 and not inter.is_empty else 0.0
             centroid_inside=bool(g.contains(car_centroid) or g.touches(car_centroid))
         except Exception:continue
         score=overlap
         if centroid_inside:score+=0.08
         if 0.50<=area_ratio<=2.0:score+=0.06
         items.append({
-            'name':name,'overlap_ratio':round(overlap,4),'area_ratio':round(area_ratio,4),
+            'name':name,'overlap_ratio':_share(overlap),'parcel_overlap_ratio':_share(parcel_overlap),'area_ratio':round(area_ratio,4),
             'centroid_inside':centroid_inside,'score':round(score,4),
             'parcel_code':props.get('parcela_co'),'property_code':props.get('codigo_imo'),
             'registry':props.get('registro_m') or props.get('registro_d'),
@@ -92,7 +104,19 @@ def _sigef_candidates(car_geom:dict[str,Any],bbox:list[float],cancel_event=None)
             'origin_label':'SIGEF/INCRA — referência cadastral ainda não vinculada ao CAR'
         })
     items.sort(key=lambda x:x['score'],reverse=True)
-    return {'ok':True,'items':items,'count':len(items)}
+    return {'ok':True,'items':items,'count':len(items),'truncated':truncated}
+
+
+def _sigef_evidence(sig:dict[str,Any],items:list[dict[str,Any]])->dict[str,Any]:
+    """C2b: whether SIGEF answered, and every parcel covering at least half of the CAR (by overlap)."""
+    answered=sig.get('ok') is True
+    strong=[x for x in items if float(x.get('overlap_ratio') or 0)>=SIGEF_REFERENCE_MIN_OVERLAP] if answered else []
+    strong.sort(key=lambda x:float(x.get('overlap_ratio') or 0),reverse=True)
+    return {
+        'sigef_state':'answered' if answered else 'unavailable',
+        'sigef_truncated':bool(sig.get('truncated')) if answered else False,
+        'sigef_reference_candidates':strong[:10],'sigef_reference_candidate_count':len(strong),
+    }
 
 
 def _osm_named_farms_bbox(west:float,south:float,east:float,north:float,limit:int=60)->dict[str,Any]:
@@ -183,7 +207,7 @@ def resolve_property_identity_sync(car_code:str, *, cancel_event=None)->dict[str
         out={'ok':False,'car_code':code,'detail':car.get('detail') or 'CAR não localizado','source':'SICAR'};_CACHE[code]=(now,out);return out
     props=car.get('properties') or {};direct=_first_name(props)
     if direct:
-        out={'ok':True,'car_code':code,'name':direct,'source':'SICAR','confidence':'high','method':'explicit_sicar_field','display_kind':'VALIDATED_PROPERTY_NAME','validation_status':'VALIDATED','panel_name_eligible':True,'map_anchor':'CAR_POLYGON','validation_scope':'DIRECT_CAR_FIELD','origin_label':'SICAR — denominação explícita do próprio cadastro CAR','candidates':[],'candidate_count':0};_CACHE[code]=(now,out);return out
+        out={'ok':True,'car_code':code,'name':direct,'source':'SICAR','confidence':'high','method':'explicit_sicar_field','display_kind':'VALIDATED_PROPERTY_NAME','validation_status':'VALIDATED','panel_name_eligible':True,'map_anchor':'CAR_POLYGON','validation_scope':'DIRECT_CAR_FIELD','origin_label':'SICAR — denominação explícita do próprio cadastro CAR','candidates':[],'candidate_count':0,'sigef_state':'not_queried','sigef_truncated':False};_CACHE[code]=(now,out);return out
 
     sig=_sigef_candidates(car.get('geometry'),car.get('bbox') or [],cancel_event);items=sig.get('items') or []
     if cancel_event and cancel_event.is_set():return {'ok':False,'car_code':code,'cancelled':True,'detail':'request_cancelled'}
@@ -202,6 +226,9 @@ def resolve_property_identity_sync(car_code:str, *, cancel_event=None)->dict[str
             'geographic_reference_names':osm.get('names') or [],
             'note':'Nenhuma denominação foi validada para este CAR. SIGEF não vinculado e OSM ao vivo permanecem referências cartográficas e não podem preencher o painel do imóvel.'
         }
+    out.update(_sigef_evidence(sig,items))
+    # A SIGEF query that did not answer is not an answer: never cache it, so a retry can succeed.
+    if out['sigef_state']!='answered':return out
     _CACHE[code]=(now,out)
     if len(_CACHE)>500:
         for k,_ in sorted(_CACHE.items(),key=lambda kv:kv[1][0])[:100]:_CACHE.pop(k,None)
