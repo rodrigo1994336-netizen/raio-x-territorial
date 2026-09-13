@@ -33,7 +33,7 @@ HIDDEN_FUTURE = (
 )
 
 
-COUNTER_JS = """(panelSel)=>{const p=document.querySelector(panelSel);if(!p)return null;
+COUNTER_JS = r"""(panelSel)=>{const p=document.querySelector(panelSel);if(!p)return null;
   const t=(p.querySelector('.rx45-audit-count')?.innerText||'');
   const m=t.match(/(\d+)\s+de\s+(\d+)\s+fontes responderam nesta consulta/i);
   return {text:t,responded:m?Number(m[1]):null,total:m?Number(m[2]):null,
