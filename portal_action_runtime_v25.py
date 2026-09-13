@@ -74,7 +74,7 @@ UI=r'''
  window.addEventListener('unhandledrejection',e=>{const m=e.reason?.message||e.reason||'falha assíncrona';status('A ação falhou: '+String(m),'bad',6000);report('promise-rejection',null,m)});
  const nativeFetch=window.fetch.bind(window);
  window.fetch=async function(input,init){
-   try{const r=await nativeFetch(input,init);if(!r.ok&&String(input).includes('/v1/')){report('http-'+r.status,null,String(input));status('A consulta respondeu com erro '+r.status+'.','bad',4500)}return r}
+   try{const r=await nativeFetch(input,init);if(!r.ok&&String(input).includes('/v1/')){report('http-'+r.status,null,String(input))}return r}
    catch(e){report('network-error',null,e?.message||e);status('Falha de conexão ao executar a ação.','bad',5000);throw e}
  };
  async function readiness(){try{const r=await nativeFetch('/v1/ui/readiness',{cache:'no-store'}),d=await r.json();if(!d.ok){status('Portal carregou parcialmente. Atualize a página em alguns segundos.','bad',6500);report('readiness',null,(d.missing_routes||[]).join(','))}}catch(e){}}
