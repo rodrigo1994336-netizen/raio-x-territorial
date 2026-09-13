@@ -89,7 +89,48 @@ async def click_first_parcel(page):
     raise AssertionError("could not click a visible CAR polygon")
 
 
-async def assert_card_contract(page, center_before):
+AREA_RE = re.compile(r"(\d{1,3}(\.\d{3})*,\d{2}|< 0,01) ha")
+NUMBER_RE = re.compile(r"\d{1,3}(\.\d{3})*,\d{2}|< 0,01")
+DATE_RE = re.compile(r"\d{2}/\d{2}/\d{4}")
+PLACEHOLDERS = ("—", "não informad", "situação informada", "tipo informado", "m²")
+
+# Reads the copy control, its legibility and the 2-column grids without assuming
+# which optional fields SICAR returned (the /map-panel enrichment may fail in CI).
+CONTROL_JS = """(root)=>{
+  const scope=document.querySelector(root);if(!scope)return {missing:true};
+  const lum=c=>{const m=String(c).match(/[\\d.]+/g)||[0,0,0];const f=v=>{v=Number(v)/255;return v<=.03928?v/12.92:Math.pow((v+.055)/1.055,2.4)};return .2126*f(m[0])+.7152*f(m[1])+.0722*f(m[2])};
+  const bg=el=>{for(let x=el;x;x=x.parentElement){const c=getComputedStyle(x).backgroundColor,m=String(c).match(/[\\d.]+/g)||[];if(m.length>=3&&(m.length<4||Number(m[3])>.5))return c}return 'rgb(7,21,15)'};
+  const ctl=[...scope.querySelectorAll('[data-rx-copy-car]')];
+  const c=ctl[0],cs=c&&getComputedStyle(c),r=c&&c.getBoundingClientRect();
+  const l1=c?lum(cs.color):0,l2=c?lum(bg(c)):0,contrast=c?(Math.max(l1,l2)+.05)/(Math.min(l1,l2)+.05):0;
+  const grids=[...scope.querySelectorAll('.rx46-grid,.rx45-grid')].map(g=>{const items=[...g.children];const last=items[items.length-1];return {count:items.length,lastSpans:!last||items.length%2===0||Math.abs(last.getBoundingClientRect().width-g.getBoundingClientRect().width)<2}});
+  return {missing:false,count:ctl.length,car:c?.dataset.rxCopyCar||'',fontSize:c?parseFloat(cs.fontSize):0,height:r?r.height:0,contrast,grids};
+}"""
+
+# Visible title text without the transient copy feedback overlay that sits on the code control.
+TITLE_JS = """sel=>{const h=document.querySelector(sel);if(!h)return '';const c=h.cloneNode(true);c.querySelectorAll('[data-rx-copy-feedback]').forEach(x=>x.remove());return String(c.textContent||'').replace(/\\s+/g,' ').trim()}"""
+
+
+async def assert_copy_control(page, root, car, width):
+    info = await page.evaluate(CONTROL_JS, root)
+    assert not info.get("missing"), (root, info)
+    assert info["count"] == 1 and info["car"] == car, (root, car, info)
+    assert info["fontSize"] >= 10, (root, info)
+    assert info["contrast"] >= 4.5, (root, info)
+    if width <= 720:
+        assert info["height"] >= 44, (root, info)
+    assert all(g["lastSpans"] for g in info["grids"]), (root, info)
+    return info
+
+
+def assert_title(title, car, named):
+    assert title and title.casefold() != "imóvel rural", title
+    assert not re.fullmatch(r".+ - [A-Z]{2}", title), title
+    if not named:
+        assert title == car, (title, car)
+
+
+async def assert_card_contract(page, center_before, width):
     await page.wait_for_selector(".rx46-card", state="visible", timeout=6000)
     await page.wait_for_timeout(700)
     center_after = await map_center(page)
@@ -103,14 +144,6 @@ async def assert_card_contract(page, center_before):
         "CAR",
         "Mapa KML",
         "Consultar no SICAR (site oficial)",
-        "Área",
-        "Área (m²)",
-        "Status",
-        "Tipo",
-        "Condição",
-        "Módulos fiscais",
-        "Criação",
-        "Atualização",
         "VER ANÁLISE COMPLETA",
     ):
         assert required.casefold() in folded, (required, text)
@@ -119,39 +152,115 @@ async def assert_card_contract(page, center_before):
         "RISCO NÃO CLASSIFICADO",
         "FONTES RESPONDERAM",
         "gerar PDF",
-    ):
+    ) + PLACEHOLDERS:
         assert forbidden.casefold() not in folded, (forbidden, text)
     assert await page.locator(".rx46-anchor-popup .leaflet-popup-tip").count() == 1
     box = await card.bounding_box()
     assert box and 195 <= box["width"] <= 235, box
     assert await page.locator(".rx45-panel-card").count() == 0, "V45 opened before CTA"
-    title = (await page.locator(".rx46-title").inner_text()).strip()
-    assert title and title.casefold() != "imóvel rural", title
-    dates = await page.locator(".rx46-field").all_inner_texts()
-    date_fields = [
-        x
-        for x in dates
-        if x.casefold().startswith("criação") or x.casefold().startswith("atualização")
-    ]
-    assert len(date_fields) == 2, date_fields
-    for x in date_fields:
-        val = x.split("\n")[-1].strip()
-        assert val == "—" or re.fullmatch(r"\d{2}/\d{2}/\d{4}", val), x
-    status = (await page.locator(".rx46-status").inner_text()).strip()
-    assert status not in {"AT", "PE", "CA", "SU", "IN"}, status
+    car = (await card.get_attribute("data-car") or "").strip()
+    named = (await card.get_attribute("data-rx-named") or "") == "1"
+    title = await page.evaluate(TITLE_JS, ".rx46-card .rx46-title")
+    assert_title(title, car, named)
+    assert text.count(car) == 1, ("the CAR code must appear exactly once", text)
+    fields = {}
+    for raw in await page.locator(".rx46-field").all_inner_texts():
+        parts = [x.strip() for x in raw.split("\n") if x.strip()]
+        assert len(parts) >= 2, ("empty field rendered", raw)
+        fields[parts[0].casefold()] = parts[-1]
+    if "área" in fields:
+        assert AREA_RE.fullmatch(fields["área"]), fields
+    if "módulos fiscais" in fields:
+        assert NUMBER_RE.fullmatch(fields["módulos fiscais"]), fields
+    date_fields = [v for k, v in fields.items() if k in ("criação", "atualização")]
+    assert len(date_fields) <= 2, fields
+    for val in date_fields:
+        assert DATE_RE.fullmatch(val), fields
+    if await page.locator(".rx46-status").count():
+        status = (await page.locator(".rx46-status").inner_text()).strip()
+        assert status not in {"AT", "PE", "CA", "SU", "IN"}, status
     type_text = " ".join(await page.locator(".rx46-field").all_inner_texts())
     assert "\nIRU" not in type_text, type_text
+    await assert_copy_control(page, ".rx46-card", car, width)
     return {"title": title, "text": text, "box": box}
+
+
+async def reveal_in_map(page, selector):
+    # The anchored card grows upward from the clicked point and may sit under the
+    # top bar (placement is C2c). Pan the map, never the page, so the control is
+    # reachable; the map-centre contract was already checked right after the click.
+    delta = await js(page, """sel=>{const el=document.querySelector(sel),m=document.querySelector('#map');if(!el||!m||!el.closest('.leaflet-popup'))return 0;
+      const r=el.getBoundingClientRect(),mr=m.getBoundingClientRect(),top=Math.max(mr.top,document.querySelector('header.top')?.getBoundingClientRect().bottom||0);
+      return r.top<top+8?Math.ceil(top+8-r.top):0}""", selector)
+    if delta:
+        await js(page, "d=>map.panBy([0,-d],{animate:false})", delta)
+        await page.wait_for_timeout(150)
+
+
+async def assert_car_copy(page, root):
+    """One tap on the code copies it; the UI claims 'copiado' only after a real success."""
+    car = (await page.locator(root).get_attribute("data-car") or "").strip()
+    assert car, (root, "no CAR code")
+    await reveal_in_map(page, f"{root} [data-rx-copy-car]")
+    box_before = await page.locator(f"{root} [data-rx-copy-car]").bounding_box()
+    await page.evaluate(
+        """()=>{
+          window.__rxCopied=[];
+          window.__rxExecCommand=window.__rxExecCommand||document.execCommand.bind(document);
+          Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:(v)=>{window.__rxCopied.push(String(v));return Promise.resolve()}}});
+        }"""
+    )
+    await page.locator(f"{root} [data-rx-copy-car]").click()
+    await page.wait_for_timeout(250)
+    ok = await page.evaluate(
+        "root=>({copied:window.__rxCopied||[],text:document.querySelector(root)?.innerText||''})", root
+    )
+    assert car in ok["copied"], (car, ok)
+    assert "copiado" in ok["text"].casefold(), ok
+    # Feedback must not move the control away from the finger.
+    box_after = await page.locator(f"{root} [data-rx-copy-car]").bounding_box()
+    assert box_before and box_after and abs(box_before["y"] - box_after["y"]) < 2, (box_before, box_after)
+    await page.evaluate(
+        """()=>{
+          document.execCommand=()=>false;
+          Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:()=>Promise.reject(new Error('denied'))}});
+        }"""
+    )
+    await page.locator(f"{root} [data-rx-copy-car]").click()
+    await page.wait_for_timeout(250)
+    failed = await page.evaluate(
+        """root=>{const s=document.querySelector(root),i=s?.querySelector('input[data-rx-copy-fallback]');
+          return {body:document.body.innerText,value:i?.value||'',visible:!!i&&i.getClientRects().length>0,readOnly:!!i?.readOnly}}""",
+        root,
+    )
+    assert "copiado" not in failed["body"].casefold(), ("copy failed but the UI claims success", failed["body"][:600])
+    assert failed["visible"] and failed["readOnly"] and failed["value"] == car, failed
+    await page.evaluate("()=>{if(window.__rxExecCommand)document.execCommand=window.__rxExecCommand}")
 
 
 async def assert_official_sicar_action(page):
     car = (await page.locator(".rx46-card").get_attribute("data-car") or "").strip()
     assert car, "selected card has no CAR code"
+    await reveal_in_map(page, '[data-rx46-action="demo"]')
+    # A failed copy may still open the official site, but it must never claim 'copiado'.
     await page.evaluate(
         """()=>{
           window.__rx46Opened=[];
           window.__rx46Copied=[];
           window.open=(url,target,features)=>{window.__rx46Opened.push({url:String(url),target:String(target||''),features:String(features||'')});return null};
+          window.__rxExecCommand=window.__rxExecCommand||document.execCommand.bind(document);
+          document.execCommand=()=>false;
+          Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:()=>Promise.reject(new Error('denied'))}});
+        }"""
+    )
+    await page.locator('[data-rx46-action="demo"]').click()
+    await page.wait_for_timeout(250)
+    probe = await page.evaluate("()=>({opened:window.__rx46Opened||[],body:document.body.innerText})")
+    assert probe["opened"] and probe["opened"][-1]["url"] == "https://consulta.car.gov.br/", probe["opened"]
+    assert "copiado" not in probe["body"].casefold(), probe["body"][:600]
+    await page.evaluate(
+        """()=>{
+          document.execCommand=window.__rxExecCommand;
           Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:(value)=>{window.__rx46Copied.push(String(value));return Promise.resolve()}}});
         }"""
     )
@@ -165,7 +274,7 @@ async def assert_official_sicar_action(page):
     assert car in probe["copied"], (car, probe)
 
 
-async def open_full(page):
+async def open_full(page, width):
     await page.locator('[data-rx46-action="full"]').click()
     await page.wait_for_selector(".rx45-panel-card", state="visible", timeout=10000)
     # V46 intentionally schedules normalization at 70/220/650/1300 ms so the
@@ -173,12 +282,37 @@ async def open_full(page):
     # final product pass rather than against an earlier intermediate frame.
     await page.wait_for_timeout(1450)
     assert await page.locator(".rx46-card").count() == 0
-    text = await page.locator(".rx45-panel-card").inner_text()
+    panel = page.locator(".rx45-panel-card")
+    text = await panel.inner_text()
     assert "RISCO NÃO CLASSIFICADO" in text, text
     assert "Fonte não consultada não significa ausência de ocorrência" in text, text
     assert "fontes responderam" in text.lower(), text
     assert "VER ANÁLISE COMPLETA" in text
     assert not re.search(r"20\d{2}-\d{2}-\d{2}T\d{2}:", text), text
+    # C2a: clean panel head and KPIs. Compliance rows carry their own labels (C3),
+    # so the placeholder scan is limited to the identity head, KPIs and Cadastro rows.
+    assert "m²" not in text and "datas não informadas" not in text.casefold(), text
+    car = (await panel.get_attribute("data-car") or "").strip()
+    named = (await panel.get_attribute("data-rx-named") or "") == "1"
+    title = await page.evaluate(TITLE_JS, ".rx45-panel-card .rx45-title h2")
+    assert_title(title, car, named)
+    top = await page.locator(".rx45-top").inner_text()
+    assert top.count(car) == 1, ("the CAR code must appear exactly once in the panel head", top)
+    values = await page.locator(".rx45-top, .rx45-kpi b, .rx45-row span").all_inner_texts()
+    for value in values:
+        for placeholder in PLACEHOLDERS:
+            assert placeholder not in value.casefold(), (placeholder, value)
+    kpis = {}
+    for raw in await page.locator(".rx45-kpi").all_inner_texts():
+        parts = [x.strip() for x in raw.split("\n") if x.strip()]
+        assert len(parts) >= 2, ("empty KPI rendered", raw)
+        kpis[parts[0].casefold()] = parts[-1]
+    if "área car" in kpis:
+        assert AREA_RE.fullmatch(kpis["área car"]), kpis
+    if "módulos fiscais" in kpis:
+        assert NUMBER_RE.fullmatch(kpis["módulos fiscais"]), kpis
+    assert await page.locator(".rx45-panel-card .rx46-code-mini").count() == 0
+    await assert_copy_control(page, ".rx45-panel-card", car, width)
     return text
 
 
@@ -203,9 +337,11 @@ async def viewport_flow(browser, width, height, label):
     await page.goto(BASE, wait_until="domcontentloaded", timeout=30000)
     await wait_runtime(page)
     await set_dense(page)
+    await assert_parcel_tooltips(page)
     before = await map_center(page)
     await click_first_parcel(page)
-    card = await assert_card_contract(page, before)
+    card = await assert_card_contract(page, before, width)
+    await assert_car_copy(page, ".rx46-card")
     await assert_official_sicar_action(page)
     await page.screenshot(path=str(OUT / f"{label}-card.png"), full_page=True)
 
@@ -220,8 +356,9 @@ async def viewport_flow(browser, width, height, label):
 
     before = await map_center(page)
     await click_first_parcel(page)
-    await assert_card_contract(page, before)
-    await open_full(page)
+    await assert_card_contract(page, before, width)
+    await open_full(page, width)
+    await assert_car_copy(page, ".rx45-panel-card")
     await page.screenshot(path=str(OUT / f"{label}-panel.png"), full_page=True)
 
     tools = page.locator(".rx45-tools .rx45-tool")
@@ -322,6 +459,37 @@ async def assert_parcel_fill(page):
     assert fills and all(x['fill'] != 'none' and .15 <= x['opacity'] <= .25 for x in fills), fills
 
 
+async def assert_parcel_tooltips(page):
+    # C2a: the hover tooltip is a plain location/area line: no municipality heading,
+    # no '—' placeholder, pt-BR area.
+    tips = await js(page, """()=>{const rows=[];map.eachLayer(l=>{if(l._path&&l.feature?.properties?.cod_imovel){const t=l.getTooltip?.();const c=t?t.getContent():null;if(typeof c==='string')rows.push(c)}});return rows}""")
+    assert tips, "no parcel tooltip content"
+    for tip in tips:
+        assert "—" not in tip and "<b>" not in tip and "Imóvel rural" not in tip, tip
+        if tip.endswith(" ha"):
+            assert AREA_RE.search(tip) and not re.search(r"\d\.\d{3,4} ha$", tip), tip
+
+
+async def assert_search_dropdown_escaped(page, car, geometry):
+    await page.route('**/v1/live/search/properties?*', lambda route: route.fulfill(json={
+        'items': [
+            {'type': 'car', 'name': None, 'car_code': car, 'municipality': 'Curvelo', 'uf': 'MG', 'area_ha': 593.5167},
+            {'type': 'sigef', 'name': '<b id="rxXssProbe">Area SIGEF</b>', 'municipality': '<i id="rxXssProbe2">Curvelo</i>',
+             'uf': 'MG', 'registry': '<u id="rxXssProbe3">1</u>', 'area_ha': 12.5},
+        ]
+    }))
+    await page.locator('#q').fill('Busca de escape')
+    await page.locator('#go').click()
+    await page.locator('.rx-smart-item').first.wait_for(state='visible', timeout=15000)
+    probe = await js(page, """()=>({probes:['#rxXssProbe','#rxXssProbe2','#rxXssProbe3'].filter(s=>document.querySelector(s)).length,
+      first:document.querySelector('.rx-smart-item b')?.innerText||'',text:document.querySelector('#rxSmartResults')?.innerText||''})""")
+    assert probe['probes'] == 0, ("search dropdown interpolated external HTML", probe)
+    assert probe['first'] == car, probe
+    assert 'imóvel rural' not in probe['text'].casefold() and '<b id="rxXssProbe">' in probe['text'], probe
+    await page.unroute('**/v1/live/search/properties?*')
+    await js(page, "()=>document.querySelector('#rxSmartResults')?.remove()")
+
+
 async def search_regression(page, label):
     car = 'MG-3120904-F3ED1E9DAC0042B8ADA898DC3EAF5A28'
     await js(page, "()=>map.setView([-14,-52],4,{animate:false})")
@@ -336,6 +504,11 @@ async def search_regression(page, label):
         return state
     state = await assert_framed()
     await page.screenshot(path=str(OUT / f'{label}-car-search.png'), full_page=True)
+    # C2a / D1a runtime: the V49 sanitize runs on the final V46 entry, and a name
+    # from another registry never becomes the card title.
+    probe = await js(page, """()=>{const c=window.current;window.rxV46SelectProperty({...c,name:'NOME DE OUTRO CADASTRO',validated_name:'NOME DE OUTRO CADASTRO',validation_status:'UNVALIDATED',name_validation_status:'UNVALIDATED',panel_name_eligible:false},c.geometry,null);
+      return {wrapped:window.rxV46SelectProperty.__rxIdentitySanitizedV49===true,name:window.current.name??null,title:document.querySelector('.rx46-title')?.innerText?.trim()||''}}""")
+    assert probe['wrapped'] and probe['name'] is None and probe['title'] == car, probe
     await js(page, "()=>{window.rxV46CloseAnchor();map.setView([-14,-52],4,{animate:false})}")
     # Exercise the name-result UI using an explicit CAR result fixture carrying
     # the real geometry just resolved above. This does not assert name coverage.
@@ -351,6 +524,7 @@ async def search_regression(page, label):
     await page.screenshot(path=str(OUT / f'{label}-name-search.png'), full_page=True)
     await page.unroute('**/v1/live/search/properties?*')
     await js(page, "()=>window.rxV46CloseAnchor()")
+    await assert_search_dropdown_escaped(page, car, state['geometry'])
 
 
 async def main():

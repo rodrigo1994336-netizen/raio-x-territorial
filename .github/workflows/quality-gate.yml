@@ -117,6 +117,18 @@ jobs:
           # C1: no property name is written on the map; a name only appears after a click.
           drawn=[x for x in ('rx-farm-name','rxFarmNameSource','/v1/live/property-names/viewport','rxRefreshVisiblePropertyNames','rxNameCoverageV43','rx-name-label','permanent:true') if x in html]
           assert not drawn, f'map name labels leaked into final portal HTML: {drawn}'
+          # C2a: clean card. One pt-BR formatter defined in <head> before every body script,
+          # V49 sanitize wraps the final V46 entry, no m², no municipality title, no placeholder claims.
+          c2_required=('RX_NUMBER_FORMAT_C2','window.rxNum=','window.rxDateBR=','window.rxCopyCarC2=','data-rx-copy-car',
+                       'RX_IDENTITY_TITLE_GUARD_V49_WRAP','window.rxCardIdentityC2=cardIdentity','window.rxV46SelectProperty=selectWrapped')
+          c2_missing=[x for x in c2_required if x not in html]
+          assert not c2_missing, f'C2a clean-card markers missing from final HTML: {c2_missing}'
+          assert html.index('RX_NUMBER_FORMAT_C2') < html.index('</head>') < html.index('<script id="rxMapV46Script">'), 'C2a formatter must be defined in <head>'
+          v46_entry=html.index("window.rxV46SelectProperty=function(p,g,latlng){const m=mapRef();")
+          assert v46_entry < html.index('window.rxV46SelectProperty=selectWrapped'), 'C2a V49 sanitize must wrap the final V46 entry'
+          c2_absent=('m²','Área (m²)',"' - '+p.uf",'Datas não informadas nesta fonte','NOME NÃO CONFIRMADO',"'Situação informada'","'Tipo informado'","'IMÓVEL RURAL'",'rx46-code-mini">')
+          c2_leaked=[x for x in c2_absent if x in html]
+          assert not c2_leaked, f'C2a old card strings leaked into final HTML: {c2_leaked}'
           retired=(
               'RX_PORTAL_IDENTITY_V18','RX_MOBILE_DOSSIER_V20','RX_HUMAN_READING_V23',
               'RX_PREMIUM_UX_V35','RX_PREMIUM_INTERACTIONS_V36','RX_LAYOUT_GUARD_V37',
