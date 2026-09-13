@@ -20,12 +20,17 @@ UI=r'''
 (function(){
   const esc=s=>encodeURIComponent(String(s||'').trim());
   function validName(v){const s=String(v||'').trim();return s&&s.toLowerCase()!=='imóvel rural'&&s.toLowerCase()!=='imovel rural'&&!/^im[oó]vel rural\s*[—-]/i.test(s)}
-  function applyName(nm,code){
-    if(!validName(nm))return false;
+  function identityContract(id,code){
+    const nm=String(id?.name||'').trim(),car=String(id?.car_code||'').trim().toUpperCase(),expected=String(code||'').trim().toUpperCase();
+    return validName(nm)&&id?.validation_status==='VALIDATED'&&id?.panel_name_eligible===true&&!!car&&car===expected;
+  }
+  function applyName(id,code){
+    if(!identityContract(id,code))return false;
+    const nm=String(id.name).trim();
     try{current.name=nm}catch(e){}
     try{window.current&& (window.current.name=nm)}catch(e){}
     const n=document.querySelector('#name');if(n)n.textContent=nm;
-    const t=document.querySelector('#ptitle');if(t)t.textContent=nm+(code?' · '+code:'');
+    const t=document.querySelector('#ptitle');if(t)t.textContent=nm+(code?' \u00b7 '+code:'');
     return true;
   }
   async function resolveIdentity(p){
@@ -38,12 +43,14 @@ UI=r'''
   const oldShow=(typeof showProperty==='function')?showProperty:null;
   if(oldShow){
     window.showProperty=showProperty=function(p,g){
-      oldShow(p,g);
       const code=String(p?.car_code||'').trim();
-      const immediate=String(p?.name||p?.denominacao||p?.nome_imovel||p?.nome_area||'').trim();
+      const immediate={name:String(p?.name||p?.denominacao||p?.nome_imovel||p?.nome_area||'').trim(),car_code:code,validation_status:p?.name_validation_status||p?.validation_status||'',panel_name_eligible:p?.panel_name_eligible===true};
+      const safeP={...(p||{})};
+      if(!identityContract(immediate,code)){delete safeP.name;delete safeP.denominacao;delete safeP.nome_imovel;delete safeP.nome_area}
+      oldShow(safeP,g);
       if(!applyName(immediate,code)){
-        const n=document.querySelector('#name');if(n)n.textContent='Identificando fazenda…';
-        resolveIdentity(p).then(d=>{if(d?.name){p.name=d.name;applyName(d.name,code)}else{const el=document.querySelector('#name');if(el)el.textContent=`Imóvel rural · ${p?.municipality||'—'}/${p?.uf||'—'}`}});
+        const n=document.querySelector('#name');if(n)n.textContent='Identificando fazenda\u2026';
+        resolveIdentity(p).then(d=>{if(applyName(d,code)){p.name=d.name;p.name_validation_status='VALIDATED';p.panel_name_eligible=true}else{const el=document.querySelector('#name');if(el)el.textContent=`Im\u00f3vel rural \u00b7 ${p?.municipality||'\u2014'}/${p?.uf||'\u2014'}`}});
       }
       // One click must open the complete on-screen dossier. The user no longer has
       // to select the parcel and then press a second "analyze" action.
