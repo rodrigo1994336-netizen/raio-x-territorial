@@ -29,7 +29,7 @@ if html.count(_old_count) == 1:
 POLISH = r'''
 <style id="rxMapPolishV43">
 /* Quiet default map: one visual grammar, no redundant legends. */
-#rxMapLegend,#rxFarmNameSource,#rxContextLegend,.hint{display:none!important}
+#rxMapLegend,#rxContextLegend,.hint{display:none!important}
 .rx-context-icon{display:none!important;visibility:hidden!important;pointer-events:none!important}
 @media(min-width:721px){
   .rx-map-state{max-width:min(430px,calc(100vw - 470px))!important;background:rgba(6,20,14,.91)!important;border-color:#2a493b!important;box-shadow:0 5px 18px #0005!important}

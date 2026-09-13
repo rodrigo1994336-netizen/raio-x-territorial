@@ -60,27 +60,11 @@ jobs:
           assert 'validated_property_names_returned' in viewport
           assert 'reference_names_returned' in viewport
 
-          # UI has two visual languages and explicit disclaimer.
-          assert 'rx-name-validated' in ui
-          assert 'rx-name-reference' in ui
-          assert 'referência(s) do OpenStreetMap — não confirmada(s) para o imóvel' in ui
-          assert 'referência(s) SIGEF/INCRA — não vinculada(s) ao CAR' in ui
-          assert "validated?openValidatedProperty(x):openReference(x)" in ui
-
-          # Reference click cannot mutate or open the property panel.
-          reference_body=ui.split('function openReference(x){',1)[1].split('function render(items,z){',1)[0]
-          assert 'showProperty' not in reference_body
-          assert 'd.property.name' not in reference_body
-          assert '/v1/live/resolve' not in reference_body
-
-          # Validated path requires exact CAR and identity cross-check before panel mutation.
-          assert 'resolved!==expected' in ui
-          assert "id?.validation_status==='VALIDATED'" in ui
-          assert 'id?.panel_name_eligible===true' in ui
-          assert 'identityCar===expected' in ui
-          assert 'd.property.name=identityName' in ui
-          assert 'd.property.name=x.name' not in ui
-          assert 'Denominação validada · Origem:' in ui
+          # C1: the map UI writes no names. A name only appears after the user clicks a property.
+          assert 'RX_NAMES_ON_CLICK_ONLY_C1' in ui
+          assert 'L.marker' not in ui and 'divIcon' not in ui
+          assert '/v1/live/property-names/viewport' not in ui
+          assert 'd.property.' not in ui and 'showProperty' not in ui
 
           # Inverse search is CAFIR-first and never names a CAR by inference.
           assert "'type':'cafir'" in inverse_runtime
