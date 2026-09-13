@@ -48,6 +48,7 @@ def _load_portal_deferred():
                 import car_resilient  # noqa: F401
                 import parity_public_layers  # noqa: F401
                 import portal_v8  # noqa: F401
+                import portal_card_format_c2  # noqa: F401
                 import portal_sicar_resilient  # noqa: F401
                 import portal_car_resilient  # noqa: F401
                 import property_search  # noqa: F401
@@ -139,6 +140,8 @@ def _load_portal_deferred():
                     raise RuntimeError('v46_two_level_map_not_loaded')
                 if 'RX_MAP_V46_ANCHOR_STATE' not in portal_v8.PORTAL_HTML:
                     raise RuntimeError('v46_anchor_state_guard_not_loaded')
+                if 'RX_NUMBER_FORMAT_C2' not in portal_v8.PORTAL_HTML:
+                    raise RuntimeError('c2_card_format_not_loaded')
                 if str(portal_v8.APP_PORTAL_VERSION) != '0.47.0-v47-search-name-truth-fill':
                     raise RuntimeError('v46_release_identity_not_loaded')
                 if 'RX_MAP_STABILITY_V43_5' not in portal_v8.PORTAL_HTML:

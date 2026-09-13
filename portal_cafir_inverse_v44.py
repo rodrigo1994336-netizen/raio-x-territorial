@@ -66,7 +66,7 @@ if not map_replaced:
     raise RuntimeError('v44_inverse_mapOpen_target_not_found')
 
 OLD_CAR_LINE="<small>CAR ${esc(x.car_code||'—')}</small>"
-NEW_CAR_LINE="${x.type==='cafir'?`<small>CAFIR · INCRA ${esc(x.incra_code||'não informado')} · NIRF ${esc(x.nirf||'—')}</small>`:`<small>CAR ${esc(x.car_code||'—')}</small>`}"
+NEW_CAR_LINE="${x.type==='cafir'?`<small>CAFIR${x.incra_code?' · INCRA '+esc(x.incra_code):''}${x.nirf?' · NIRF '+esc(x.nirf):''}</small>`:(x.car_code&&rxTitle!==x.car_code?`<small>CAR ${esc(x.car_code)}</small>`:'')}"
 if OLD_CAR_LINE not in portal_v8.PORTAL_HTML:
     raise RuntimeError('v44_inverse_result_card_target_not_found')
 portal_v8.PORTAL_HTML=portal_v8.PORTAL_HTML.replace(OLD_CAR_LINE,NEW_CAR_LINE,1)

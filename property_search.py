@@ -52,7 +52,7 @@ async def smart_property_search(q:str,limit:int=20):
         try:
             c=shape(geom).centroid;center={'lat':float(c.y),'lon':float(c.x)}
         except Exception:pass
-        return {'ok':True,'mode':'car','items':[{'type':'car','name':p.get('nome_imovel') or p.get('denominacao') or f"Imóvel rural — {p.get('municipio') or ''}",'car_code':p.get('cod_imovel') or upper,'municipality':p.get('municipio'),'uf':p.get('uf'),'area_ha':p.get('area'),'center':center,'geometry':geom,'source':'SICAR'}]}
+        return {'ok':True,'mode':'car','items':[{'type':'car','name':p.get('nome_imovel') or p.get('denominacao') or None,'car_code':p.get('cod_imovel') or upper,'municipality':p.get('municipio'),'uf':p.get('uf'),'area_ha':p.get('area'),'center':center,'geometry':geom,'source':'SICAR'}]}
     sig=await asyncio.to_thread(_sigef_search_sync,term,limit)
     return {'ok':sig.get('ok',False),'mode':'name_or_identifier','query':term,'items':sig.get('items') or [],'source':sig.get('source'),'detail':sig.get('detail'),'note':'Busca nominal usa campos públicos efetivamente expostos pelo SIGEF/espelho público. Titularidade por CPF/CNPJ só será habilitada por integração legalmente autorizada.'}
 

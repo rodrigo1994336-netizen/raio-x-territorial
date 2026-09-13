@@ -17,22 +17,22 @@ def once(old: str, new: str, error: str) -> None:
 # panel renderer itself, not only by a later DOM pass.
 once(
     " const text=v=>(v===null||v===undefined||v==='')?'Não informado':String(v);\n const currentCar=()=>String((window.current||{}).car_code||'').trim().toUpperCase();",
-    " const text=v=>(v===null||v===undefined||v==='')?'Não informado':String(v);\n const rx46PanelDate=v=>{const m=String(v||'').match(/(\\d{4})-(\\d{2})-(\\d{2})/);return m?`${m[3]}/${m[2]}/${m[1]}`:text(v)};\n const rx46PanelStatus=v=>{const raw=String(v||'').trim(),dict={AT:'Ativo',PE:'Pendente',CA:'Cancelado',SU:'Suspenso',IN:'Inativo'},label=dict[raw.toUpperCase()]||(raw.length>3?raw:'Situação informada'),low=label.toLowerCase();return {raw,label,cls:/ativ/.test(low)?'active':/pendent/.test(low)?'pending':/cancel|suspens|inativ/.test(low)?'bad':''}};\n const rx46PanelType=v=>{const raw=String(v||'').trim(),dict={IRU:'Imóvel Rural',AST:'Assentamento',PCT:'Povos e Comunidades Tradicionais'};return dict[raw.toUpperCase()]||(raw.length>3?raw:'Tipo informado')};\n const currentCar=()=>String((window.current||{}).car_code||'').trim().toUpperCase();",
+    " const text=v=>(v===null||v===undefined||v==='')?'Não informado':String(v);\n const rx46PanelDate=v=>window.rxDateBR?window.rxDateBR(v):'';\n const rx46PanelStatus=v=>{const raw=String(v||'').trim(),dict={AT:'Ativo',PE:'Pendente',CA:'Cancelado',SU:'Suspenso',IN:'Inativo'},label=raw?(dict[raw.toUpperCase()]||raw):'',low=label.toLowerCase();return {raw,label,cls:/ativ/.test(low)?'active':/pendent/.test(low)?'pending':/cancel|suspens|inativ/.test(low)?'bad':''}};\n const rx46PanelType=v=>{const raw=String(v||'').trim(),dict={IRU:'Imóvel Rural',AST:'Assentamento',PCT:'Povos e Comunidades Tradicionais'};return raw?(dict[raw.toUpperCase()]||raw):''};\n const currentCar=()=>String((window.current||{}).car_code||'').trim().toUpperCase();",
     "v46_panel_normalization_helpers_missing",
 )
 once(
     "   const dates=[p.created_at?`Cadastro: ${esc(text(p.created_at))}`:'',p.updated_at?`Atualização: ${esc(text(p.updated_at))}`:''].filter(Boolean).join(' · ')||'Datas não informadas nesta fonte';",
-    "   const dates=[p.created_at?`Cadastro: ${esc(rx46PanelDate(p.created_at))}`:'',p.updated_at?`Atualização: ${esc(rx46PanelDate(p.updated_at))}`:''].filter(Boolean).join(' · ')||'Datas não informadas nesta fonte';",
+    "   const dates=[rx46PanelDate(p.created_at)?`Criação: ${esc(rx46PanelDate(p.created_at))}`:'',rx46PanelDate(p.updated_at)?`Atualização: ${esc(rx46PanelDate(p.updated_at))}`:''].filter(Boolean).join(' · ');",
     "v46_panel_date_render_missing",
 )
 once(
     '<div class="rx45-kpi"><small>Situação CAR</small><b>${esc(text(p.car_status))}</b></div>',
-    '<div class="rx45-kpi"><small>Situação CAR</small><b data-rx46="1"><span class="rx46-status-seal ${rx46PanelStatus(p.car_status).cls}">${esc(rx46PanelStatus(p.car_status).label)}</span>${rx46PanelStatus(p.car_status).raw&&rx46PanelStatus(p.car_status).raw!==rx46PanelStatus(p.car_status).label?`<span class="rx46-code-mini">${esc(rx46PanelStatus(p.car_status).raw)}</span>`:\'\'}</b></div>',
+    '${rx46PanelStatus(p.car_status).label?`<div class="rx45-kpi"><small>Situação CAR</small><b data-rx46="1"><span class="rx46-status-seal ${rx46PanelStatus(p.car_status).cls}">${esc(rx46PanelStatus(p.car_status).label)}</span></b></div>`:\'\'}',
     "v46_panel_status_render_missing",
 )
 once(
     '<div class="rx45-row"><b>Tipo do imóvel</b><span>${esc(text(p.property_type))}</span></div>',
-    '<div class="rx45-row"><b>Tipo do imóvel</b><span data-rx46="1">${esc(rx46PanelType(p.property_type))}</span></div>',
+    '${rx46PanelType(p.property_type)?`<div class="rx45-row"><b>Tipo do imóvel</b><span data-rx46="1">${esc(rx46PanelType(p.property_type))}</span></div>`:\'\'}',
     "v46_panel_type_render_missing",
 )
 
@@ -41,7 +41,7 @@ once(
 # asynchronous enrichment path; a slow upstream CAR must not leave the CTA blank.
 once(
     " function render(p){const h=q('#rx43SnapshotHost');if(!h||!p)return;h.innerHTML=panelHtml(p);const card=h.querySelector('.rx45-panel-card');if(card)card.__rxSourceAudit=(p.source_audit&&Array.isArray(p.source_audit.registry))?JSON.parse(JSON.stringify(p.source_audit)):null;bind()}\n async function load(car){if(!car||busy)return;",
-    " function render(p){const h=q('#rx43SnapshotHost');if(!h||!p)return;h.innerHTML=panelHtml(p);const card=h.querySelector('.rx45-panel-card');if(card)card.__rxSourceAudit=(p.source_audit&&Array.isArray(p.source_audit.registry))?JSON.parse(JSON.stringify(p.source_audit)):null;bind()}\n window.rxV46RenderV45Immediate=function(p){if(!p)return;const ha=Number(p.area_ha),m2=Number(p.area_m2),defaults=[{id:'embargo',label:'Embargos',state:'not_consulted'},{id:'prodes',label:'PRODES',state:'not_consulted'},{id:'indigenous_land',label:'Terra Indígena',state:'not_consulted'},{id:'legal_reserve',label:'Reserva Legal',state:'not_consulted'},{id:'conservation_unit',label:'Un. Conservação',state:'not_consulted'},{id:'registry',label:'Matrícula',state:'not_consulted'},{id:'public_forest',label:'Floresta Pública',state:'not_consulted'},{id:'snci',label:'SNCI',state:'not_consulted'}],safe={...p,car_status:p.car_status||p.status,property_type:p.property_type||p.type,area_m2:Number.isFinite(m2)?m2:(Number.isFinite(ha)?ha*10000:null),risk:p.risk||{state:'not_classified',label:'RISCO NÃO CLASSIFICADO',detail:'As fontes de restrição ainda não foram consultadas neste painel rápido. Fonte não consultada não significa ausência de ocorrência.'},source_audit:p.source_audit||null,compliance_sources:(p.compliance_sources&&p.compliance_sources.length)?p.compliance_sources:defaults};render(safe)};\n async function load(car){if(!car||busy)return;",
+    " function render(p){const h=q('#rx43SnapshotHost');if(!h||!p)return;h.innerHTML=panelHtml(p);const card=h.querySelector('.rx45-panel-card');if(card)card.__rxSourceAudit=(p.source_audit&&Array.isArray(p.source_audit.registry))?JSON.parse(JSON.stringify(p.source_audit)):null;bind()}\n window.rxV46RenderV45Immediate=function(p){if(!p)return;const defaults=[{id:'embargo',label:'Embargos',state:'not_consulted'},{id:'prodes',label:'PRODES',state:'not_consulted'},{id:'indigenous_land',label:'Terra Indígena',state:'not_consulted'},{id:'legal_reserve',label:'Reserva Legal',state:'not_consulted'},{id:'conservation_unit',label:'Un. Conservação',state:'not_consulted'},{id:'registry',label:'Matrícula',state:'not_consulted'},{id:'public_forest',label:'Floresta Pública',state:'not_consulted'},{id:'snci',label:'SNCI',state:'not_consulted'}],safe={...p,car_status:p.car_status||p.status,property_type:p.property_type||p.type,risk:p.risk||{state:'not_classified',label:'RISCO NÃO CLASSIFICADO',detail:'As fontes de restrição ainda não foram consultadas neste painel rápido. Fonte não consultada não significa ausência de ocorrência.'},source_audit:p.source_audit||null,compliance_sources:(p.compliance_sources&&p.compliance_sources.length)?p.compliance_sources:defaults};render(safe)};\n async function load(car){if(!car||busy)return;",
     "v46_v45_immediate_renderer_missing",
 )
 once(

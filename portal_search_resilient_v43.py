@@ -82,7 +82,7 @@ async def advanced_property_search_v43(
         public_name = p.get('nome_imovel') or p.get('denominacao')
         items.append({
             'type': 'car',
-            'name': public_name or f"Imóvel rural · {city}/{uf}",
+            'name': public_name or code,
             'public_name': public_name,
             'car_code': code,
             'municipality': city,
