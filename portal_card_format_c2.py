@@ -7,6 +7,14 @@ window.rxCopyCarC2 one-tap copy of the CAR code. It reports success only after t
                   clipboard write really succeeded; on failure it shows the full code as a
                   selectable fallback and never the word "copiado"; results are
                   announced through one persistent role=status region.
+window.rxSigefRefC2 C2b: the SIGEF/INCRA cadastral reference block shared by the anchored card
+                  and the V45 panel. Shown only for sigef_reference_state 'found' with a share
+                  of the CAR >= 50% (floored to 2 decimals, never rounded up to 100,00%); when
+                  the parcel is much larger than the property it also says how little of the
+                  parcel the property occupies. 'unavailable' stays hidden until ONE automatic
+                  retry per CAR (setTimeout, only while that selection is still open) has come
+                  back; then a discreet "consulta pendente" line. 'incomplete' (an answer that a
+                  retry cannot change) stays hidden. It never writes a title.
 """
 
 from __future__ import annotations
@@ -27,6 +35,16 @@ HEAD = r'''<style id="rxCardFormatC2">
 .rx-copy-fallback:focus{outline:2px solid #f5c96a;outline-offset:2px}
 .rx-sr-only{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0 0 0 0)!important;white-space:nowrap!important;border:0!important}
 @media(max-width:720px),(pointer:coarse){.rx-car-copy{min-height:44px}}
+.rx-sigef-ref{display:grid;gap:2px;min-width:0;margin:0;padding:6px 8px;border:1px solid #24473a;border-radius:9px;background:#0c1d16;color:#d3e4da;font:600 10px/1.35 system-ui,-apple-system,"Segoe UI",sans-serif;letter-spacing:0;text-align:left;overflow-wrap:anywhere}
+.rx-sigef-ref>*{display:block;min-width:0}
+.rx-sigef-ref-k{font-size:9px;font-weight:800;color:#a9bfb4}
+.rx-sigef-ref-name{font-size:11px;font-weight:800;line-height:1.28;color:#eef8f2}
+.rx-sigef-ref-pct{font-size:10px;font-weight:700;color:#9fe9c2}
+.rx-sigef-ref-note,.rx-sigef-ref-more{font-size:9px;font-weight:600;color:#b9ccc2}
+.rx-sigef-ref-origin{font-size:9px;font-weight:600;color:#9fb5aa}
+.rx-sigef-ref-panel{padding:8px 10px;border-radius:10px}
+.rx-sigef-ref-pending{min-width:0;margin:0;font:600 9px/1.35 system-ui,-apple-system,"Segoe UI",sans-serif;color:#9fb5aa;overflow-wrap:anywhere}
+[data-rx-sigef-slot]:empty{display:none}
 </style>
 <script id="rxNumberFormatC2">
 (function(){
@@ -142,6 +160,58 @@ HEAD = r'''<style id="rxCardFormatC2">
    copy(car).then(ok=>{if(!ok)selectFallback(scope,car)});
  },true);
  window.rxCopyCarC2={copy,button,code:codeHtml};
+})();
+</script>
+<script id="rxSigefRefScriptC2">
+(function(){
+ const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+ const MIN=0.5,RETRY_MS=8000,WINDOW_MS=180000,ORIGIN='SIGEF/INCRA · espelho público IBAMA/PAMGIA';
+ const carOf=p=>String(p?.car_code||'').trim().toUpperCase();
+ function share(v){if(v===null||v===undefined||v===''||typeof v==='boolean')return null;const n=Number(v);return Number.isFinite(n)&&n>=0&&n<=1?n:null}
+ // Floor to 2 decimals of a percent: 0,99996 -> 99,99% (never 100,00%).
+ function pct(v){const n=share(v);if(n===null)return '';const basis=Math.floor(Math.round(n*1e6)/100),val=basis/100;return (window.rxNum?window.rxNum.num(val,2):val.toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2}))+'%'}
+ // Only a query that did not answer is retried; 'incomplete' is an answer a retry cannot change: hidden.
+ function state(p){
+   const st=String(p?.sigef_reference_state||''),r=p?.sigef_reference;
+   if(st==='found'){const o=share(r?.car_overlap_ratio);return r&&String(r.label||'').trim()&&o!==null&&o>=MIN?'found':'hidden'}
+   return st==='unavailable'?'unanswered':'hidden';
+ }
+ const retries=new Map();
+ function retried(car){const e=retries.get(car);return !!e&&e.done&&Date.now()-e.at<WINDOW_MS}
+ function needsRetry(p){const car=carOf(p);if(!car||state(p)!=='unanswered')return false;const e=retries.get(car);return !e||!e.done||Date.now()-e.at>=WINDOW_MS}
+ // One automatic retry per CAR, shared by the card and the panel. A subscriber is served only
+ // while its own selection is still open; nobody open at fire time means no request at all.
+ function scheduleRetry(car,isOpen,onData){
+   car=String(car||'').trim().toUpperCase();if(!car||typeof isOpen!=='function'||typeof onData!=='function')return;
+   const open=s=>{try{return s.isOpen()===true}catch(x){return false}};
+   let e=retries.get(car);
+   if(e&&!e.done){e.subs.push({isOpen,onData});return}
+   if(e&&Date.now()-e.at<WINDOW_MS)return;
+   e={done:false,at:0,subs:[{isOpen,onData}]};retries.set(car,e);
+   setTimeout(async()=>{
+     if(!e.subs.some(open)){if(retries.get(car)===e)retries.delete(car);return}
+     let d=null;
+     try{const r=await fetch(`/v1/live/map-panel/${encodeURIComponent(car)}?sigef_retry=1`),j=await r.json();if(r.ok&&j?.ok)d=j}catch(x){d=null}
+     e.done=true;e.at=Date.now();
+     e.subs.forEach(s=>{if(open(s)){try{s.onData(d)}catch(x){}}});
+   },RETRY_MS);
+ }
+ function html(p,variant){
+   const st=state(p),panel=variant==='panel';
+   if(st==='found'){
+     const r=p.sigef_reference,n=Number(p.sigef_reference_others),others=Number.isInteger(n)&&n>0?n:0;
+     // 200 is not all: a count taken from an answer cut short is a floor ("pelo menos").
+     const floor=p.sigef_reference_others_complete===false?'pelo menos ':'';
+     const more=panel&&others?`<span class="rx-sigef-ref-more">+${floor}${others} ${others===1?'outra parcela SIGEF cobre':'outras parcelas SIGEF cobrem'} metade ou mais do imóvel</span>`:'';
+     const note=panel?'<span class="rx-sigef-ref-note">Referência de outro cadastro, não é o nome do CAR.</span>':'';
+     // A parcel much larger than the property: say how little of it the property occupies, never imply identity.
+     const po=share(r.parcel_overlap_ratio),within=po!==null&&po<MIN?`<span class="rx-sigef-ref-note" data-rx-sigef-within>o imóvel ocupa ${po<0.0001?'menos de 0,01%':pct(po)} desta parcela</span>`:'';
+     return `<div class="rx-sigef-ref${panel?' rx-sigef-ref-panel':''}" data-rx-sigef-ref="found"><small class="rx-sigef-ref-k">Referência INCRA (SIGEF)</small><b class="rx-sigef-ref-name">${esc(String(r.label).trim())}</b><span class="rx-sigef-ref-pct">cobre ${pct(r.car_overlap_ratio)} do imóvel</span>${within}${note}${more}<span class="rx-sigef-ref-origin">${esc(String(r.origin||'').trim()||ORIGIN)}</span></div>`;
+   }
+   if(st==='unanswered'&&retried(carOf(p)))return '<div class="rx-sigef-ref-pending" data-rx-sigef-ref="pending">Referência INCRA: consulta pendente</div>';
+   return '';
+ }
+ window.rxSigefRefC2={pct,state,html,needsRetry,scheduleRetry,retried};
 })();
 </script>
 <!-- RX_NUMBER_FORMAT_C2 -->

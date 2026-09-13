@@ -4,7 +4,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CAR = "MG-3152006-BB48D05173F540CD9703B23088C3ABF4"
-REFERENCE = "LOTE 01 - PROJETO DE ASSENTAMENTO PAULISTA"
+# Measured 13/09/2026 on /v1/live/property-identity/<CAR> (SIGEF/INCRA, espelho publico
+# IBAMA/PAMGIA): the SIGEF parcel covering almost all of this CAR (overlap_ratio 0.9995 at 4
+# decimals = share of the CAR area, 0.999498 at 6 decimals, shown floored as 99,94%; area_ratio
+# 0.9999) is the settlement project itself, not "LOTE 01". Its name is a cadastral reference and
+# must never become the CAR name or title.
+REFERENCE = "PROJETO DE ASSENTAMENTO PAULISTA"
+REFERENCE_OVERLAP = 0.9995
 IDENTITY_FIELDS = (
     "name", "rx_name", "denominacao", "nome_imovel", "nome_area",
     "nome_fazenda", "nome_propriedade",
@@ -86,6 +92,30 @@ def card_title_source_contract() -> None:
     assert "${x.name||'Imóvel rural'}" not in smart
 
 
+def sigef_reference_source_contract() -> None:
+    """C2b: the SIGEF/INCRA reference is rendered as a labelled block, never as the title."""
+    guard = (ROOT / "portal_identity_title_guard_v49.py").read_text(encoding="utf-8")
+    v46 = (ROOT / "portal_map_v46.py").read_text(encoding="utf-8")
+    v45 = (ROOT / "portal_map_panel_v45.py").read_text(encoding="utf-8")
+    fmt = (ROOT / "portal_card_format_c2.py").read_text(encoding="utf-8")
+
+    # One owner renders the reference block for the card and the panel.
+    assert "window.rxSigefRefC2=" in fmt and "Referência INCRA (SIGEF)" in fmt
+    assert "rxSigefRefC2" in v46 and "rxSigefRefC2" in v45
+    # The title rule reads only the validated identity, never a reference field.
+    start = guard.index("function cardIdentity(p)")
+    body = guard[start:guard.index("window.rxIdentityTitleContractV49", start)]
+    for token in ("sigef", "reference", "geographic_references", "label"):
+        assert token not in body, token
+    # The reference helper never writes a title element.
+    ref_start = fmt.index("<script id=\"rxSigefRefScriptC2\">")
+    ref_js = fmt[ref_start:fmt.index("</script>", ref_start)]
+    for token in ("rx46-title", "rx45-title", "<h2", "<h3", "validated_name"):
+        assert token not in ref_js, token
+    # The server exposes the reference separately from the validated name.
+    assert '"sigef_reference"' in v45 and '"sigef_reference_state"' in v45
+
+
 def title_for(payload: dict) -> str:
     """Python twin of window.rxCardIdentityC2(p).title.
 
@@ -112,6 +142,11 @@ def card_title_case_contract() -> None:
     assert title_for({**reference, "validated_name": None, "name_validation_status": "VALIDATED",
                       "panel_name_eligible": True}) == CAR
     assert title_for({**reference, "name_validation_status": "VALIDATED", "panel_name_eligible": True}) == REFERENCE
+    # C2b: a found SIGEF reference covering ~99,9% still leaves the unnamed CAR titled by its code.
+    found = {"car_code": CAR, "validated_name": None, "name_validation_status": "UNRESOLVED",
+             "panel_name_eligible": False, "sigef_reference_state": "found",
+             "sigef_reference": {"label": REFERENCE, "car_overlap_ratio": REFERENCE_OVERLAP}}
+    assert title_for(found) == CAR
 
 
 def known_case_contract() -> None:
@@ -123,14 +158,14 @@ def known_case_contract() -> None:
         "reference_label": REFERENCE,
         "reference_source": "SIGEF/INCRA",
         "reference_kind": "SIGEF_CADASTRAL",
-        "reference_overlap": 0.9995,
+        "reference_overlap": REFERENCE_OVERLAP,
     }
     safe = sanitize_payload(reference_payload)
     assert "name" not in safe
     assert safe["reference_label"] == REFERENCE
     assert safe["reference_source"] == "SIGEF/INCRA"
     assert safe["reference_kind"] == "SIGEF_CADASTRAL"
-    assert safe["reference_overlap"] == 0.9995
+    assert safe["reference_overlap"] == REFERENCE_OVERLAP
     validated_payload = dict(reference_payload)
     validated_payload.update({"name": REFERENCE, "validation_status": "VALIDATED", "panel_name_eligible": True})
     assert sanitize_payload(validated_payload).get("name") == REFERENCE
@@ -141,10 +176,12 @@ def main() -> None:
     known_case_contract()
     card_title_source_contract()
     card_title_case_contract()
+    sigef_reference_source_contract()
     print(f"D1A_IDENTITY_TITLE_GATE=PASS car={CAR}")
     print("C2A_CARD_TITLE_CONTRACT=PASS source+python_twin runtime_proof=v46_browser_smoke")
     print("D1A_REFERENCE_FIELDS_SURVIVE=PASS")
     print(f"D1A_REFERENCE_REJECTED_AS_CAR_TITLE={REFERENCE}")
+    print("C2B_SIGEF_REFERENCE_NEVER_TITLE=PASS")
 
 
 if __name__ == "__main__":

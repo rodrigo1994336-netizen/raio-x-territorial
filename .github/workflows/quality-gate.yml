@@ -68,6 +68,8 @@ jobs:
           for fn in (portal_map_panel_v45._panel_sync, portal_experience_v43._snapshot_sync, car_resilient.fetch_car_live_resilient, identity.resolve_property_identity_sync, deploy_app._curl):
               assert 'cancel_event' in inspect.signature(fn).parameters, f'{fn.__module__}.{fn.__qualname__} drops cancel_event'
           runpy.run_path('.github/scripts/v47_name_truth.py')
+          # C2b: SIGEF/INCRA reference with overlap, origin and honest state (never the title).
+          runpy.run_path('.github/scripts/c2b_sigef_reference.py')
           import cafir_name_search_v44 as cafir_search
           from shapely.geometry import box, mapping
           paths={getattr(r,'path',None) for r in portal_v8.app.router.routes}
