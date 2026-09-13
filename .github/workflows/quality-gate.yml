@@ -119,6 +119,10 @@ jobs:
           # C1: no property name is written on the map; a name only appears after a click.
           drawn=[x for x in ('rx-farm-name','rxFarmNameSource','/v1/live/property-names/viewport','rxRefreshVisiblePropertyNames','rxNameCoverageV43','rx-name-label','permanent:true') if x in html]
           assert not drawn, f'map name labels leaked into final portal HTML: {drawn}'
+          # C3: pending is quiet and retryable; no permanent green 'live' badge that measures nothing.
+          loud=[x for x in ('SISTEMA LIVE','FONTE INDISPONÍVEL','NÃO FOI POSSÍVEL CONFERIR',"return 'não informada'") if x in html]
+          assert not loud, f'loud or fake source-status text leaked into final portal HTML: {loud}'
+          assert 'Consultando fontes oficiais' in html and 'data-rx45-retry' in html and 'data-rx48-retry' in html
           # C2a: clean card. One pt-BR formatter defined in <head> before every body script,
           # V49 sanitize wraps the final V46 entry, no m², no municipality title, no placeholder claims.
           c2_required=('RX_NUMBER_FORMAT_C2','window.rxNum=','window.rxDateBR=','window.rxCopyCarC2=','data-rx-copy-car',

@@ -83,9 +83,12 @@ def ui_contract() -> None:
     mte = (root / "portal_conformity_mte_v48.py").read_text(encoding="utf-8")
     sina = (root / "portal_conformity_sinaflor_v48.py").read_text(encoding="utf-8")
     anchor = (root / "portal_map_v46_anchor_state.py").read_text(encoding="utf-8")
-    exact = "NÃO FOI POSSÍVEL CONFERIR AS FONTES NESTA CONSULTA."
-    assert exact in panel
-    assert "Os dados cadastrais do CAR permanecem visíveis, mas a conformidade não foi avaliada. Tente novamente." in panel
+    # C3: a source that did not answer is shown as a quiet pending state with a retry, never as a loud failure.
+    assert "NÃO FOI POSSÍVEL CONFERIR" not in panel
+    assert "Consultando fontes oficiais" in panel and "Consulta às fontes oficiais pendente" in panel
+    assert "data-rx45-retry" in panel and "Consultar de novo" in panel
+    assert "FONTE INDISPONÍVEL" not in mte and "FONTE INDISPONÍVEL" not in sina
+    assert "CONSULTA PENDENTE" in mte and "CONSULTA PENDENTE" in sina
     assert "responded:1,total:10" not in anchor
     assert "rx48Total||11" not in mte and "m?Number(m[2]):11" not in mte
     assert 'audit["total"] =' not in mte and 'audit["total"] =' not in sina
