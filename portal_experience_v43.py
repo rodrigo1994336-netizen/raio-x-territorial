@@ -4,18 +4,20 @@ import asyncio
 import time
 from typing import Any
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 import portal_v8
 from car_resilient import CAR_RE, fetch_car_live_resilient
 from property_identity_runtime import _first_name
+from external_process_lifecycle import ManagedOperationTimeout, RequestDisconnected, install_shutdown_cleanup, run_sync_with_request_lifecycle
 
 app = portal_v8.app
+install_shutdown_cleanup(app)
 SNAPSHOT_TTL_SECONDS = 600
 _SNAPSHOT_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 
 
-def _snapshot_sync(car_code: str) -> dict[str, Any]:
+def _snapshot_sync(car_code: str, *, cancel_event=None) -> dict[str, Any]:
     code = str(car_code or '').strip().upper()
     if not CAR_RE.match(code):
         return {'ok': False, 'car_code': code, 'detail': 'invalid_car_format'}
@@ -24,7 +26,7 @@ def _snapshot_sync(car_code: str) -> dict[str, Any]:
     if cached and now - cached[0] < SNAPSHOT_TTL_SECONDS:
         out = dict(cached[1]); out['cached'] = True; return out
     started = time.monotonic()
-    car = fetch_car_live_resilient(code)
+    car = fetch_car_live_resilient(code, cancel_event=cancel_event)
     if not car.get('ok'):
         return {'ok': False, 'car_code': code, 'detail': car.get('detail') or 'CAR não localizado', 'source': 'SICAR'}
     props = car.get('properties') or {}
@@ -71,8 +73,13 @@ def _snapshot_sync(car_code: str) -> dict[str, Any]:
 
 
 @app.get('/v1/live/snapshot/{car_code}')
-async def property_snapshot_v43(car_code: str):
-    out = await asyncio.to_thread(_snapshot_sync, car_code)
+async def property_snapshot_v43(car_code: str, request: Request):
+    try:
+        out = await run_sync_with_request_lifecycle(request, _snapshot_sync, car_code, timeout_seconds=None)
+    except RequestDisconnected:
+        raise HTTPException(status_code=499, detail='client_disconnected')
+    except ManagedOperationTimeout:
+        raise HTTPException(status_code=504, detail='snapshot_timeout')
     if not out.get('ok'):
         raise HTTPException(status_code=422 if out.get('detail') == 'invalid_car_format' else 502, detail=out)
     return out

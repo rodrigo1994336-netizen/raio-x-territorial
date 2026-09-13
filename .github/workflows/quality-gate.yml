@@ -23,6 +23,12 @@ jobs:
       - name: Compile Python modules
         run: |
           python -m compileall -q .
+      - name: Repository UTF-8 and mojibake gate
+        run: PYTHONPATH=. python scripts/text_mojibake_gate.py
+      - name: D0 canonical source registry and identity truth gate
+        run: PYTHONPATH=. python scripts/d0_source_registry_gate.py
+      - name: D1a CAR title provenance gate
+        run: PYTHONPATH=. python scripts/d1a_identity_title_gate.py
       - name: Import standalone engines
         env:
           RX_RELEASE: OFF
@@ -57,6 +63,10 @@ jobs:
           import portal_v8, portal_action_runtime_v25, portal_resource_guard_v27
           import property_identity_runtime as identity
           import runpy
+          import inspect, portal_map_panel_v45, portal_experience_v43, car_resilient, deploy_app
+          # F1: routes hand these to run_sync_with_request_lifecycle, which always passes cancel_event.
+          for fn in (portal_map_panel_v45._panel_sync, portal_experience_v43._snapshot_sync, car_resilient.fetch_car_live_resilient, identity.resolve_property_identity_sync, deploy_app._curl):
+              assert 'cancel_event' in inspect.signature(fn).parameters, f'{fn.__module__}.{fn.__qualname__} drops cancel_event'
           runpy.run_path('.github/scripts/v47_name_truth.py')
           import cafir_name_search_v44 as cafir_search
           from shapely.geometry import box, mapping
@@ -85,11 +95,15 @@ jobs:
           assert getattr(advanced_routes[0].endpoint,'__name__','')=='advanced_search_v44'
           assert str(portal_v8.APP_PORTAL_VERSION)=='0.47.0-v47-search-name-truth-fill', portal_v8.APP_PORTAL_VERSION
           html=portal_v8.PORTAL_HTML
+          # D1a runtime obligation: Linux must complete the real portal boot and inspect final HTML.
+          assert portal_boot_guard_v26.STATE.get('ready') is True, portal_boot_guard_v26.STATE
+          assert 'RX_IDENTITY_TITLE_GUARD_V49' in html, 'd1a identity guard missing from final portal HTML'
+          assert 'd.property.name=x.name' not in html, 'd1a smart-search name injection leaked into final portal HTML'
           required=(
               'RX_EXPERIENCE_V43','SNAPSHOT DO IMÓVEL','VER ANÁLISE COMPLETA',
               'body.rx43-dossier-open #map','rx43-dossier-open','rx43-full-requested',
               'RX_ACTION_RUNTIME_V25','RX_FIELD_MODE_V43','RX_MAP_VISUAL_V32',
-              'RX_PROPERTY_NAMES_V44_TRUTH_UI','RX_ADVANCED_SEARCH_V39','rxAdvTrigger',
+              'RX_PROPERTY_NAMES_V44_TRUTH_UI','RX_ADVANCED_SEARCH_V39','rxAdvTrigger','RX_IDENTITY_TITLE_GUARD_V49',
               'RX_CAFIR_INVERSE_V44','serviceWorker.register','rxParcelStyle','window.rxVisibleCarCountV43',
               'window.rxNameCoverageV43','window.rxGetNameCoverageV43',
               'Busque um município, mova o mapa ou use “Minha localização”.',

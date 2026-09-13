@@ -33,6 +33,24 @@ HIDDEN_FUTURE = (
 )
 
 
+COUNTER_JS = r"""(panelSel)=>{const p=document.querySelector(panelSel);if(!p)return null;
+  const t=(p.querySelector('.rx45-audit-count')?.innerText||'');
+  const m=t.match(/(\d+)\s+de\s+(\d+)\s+fontes responderam nesta consulta/i);
+  return {text:t,responded:m?Number(m[1]):null,total:m?Number(m[2]):null,
+    answered_rows:p.querySelectorAll('.rx45-check[data-answered="1"]').length,
+    answered_ids:[...p.querySelectorAll('.rx45-check[data-answered="1"]')].map(x=>x.dataset.source)}}"""
+
+
+async def assert_audit_counter(page, panel_selector, label):
+    # The counter and the rows are read in one tick: SINAFLOR may answer at any
+    # moment, so the contract is consistency (CAR base + answered rows), never a
+    # fixed number that pins one side of that race.
+    probe = await page.evaluate(COUNTER_JS, panel_selector)
+    assert probe and probe["total"] == 11, (label, "audit_counter_contract_missing", probe)
+    assert probe["responded"] == 1 + probe["answered_rows"], (label, "audit_counter_inconsistent", probe)
+    return probe
+
+
 async def wait_runtime(page):
     await page.wait_for_function(
         "sessionStorage.getItem('rx-v26-ready-reload')==='1' && !document.querySelector('#rxBootGuard')",
@@ -140,7 +158,10 @@ async def assert_contract(page, label, sina_source):
     audit = panel.locator('.rx45-audit-count')
     audit_text = await audit.inner_text()
     audit_folded = audit_text.casefold()
-    assert re.search(r"\b\d+\s+de\s+\d+\s+fontes responderam\b", audit_folded), (label, "audit_counter_contract_missing", audit_text)
+    counter = await assert_audit_counter(page, '.rx45-panel-card', label)
+    assert ("sinaflor" in counter["answered_ids"]) == bool(expected_answered), (label, expected_answered, counter)
+    assert "mte_slave_labor" not in counter["answered_ids"], (label, counter)
+    assert "resolução de identidade" not in audit_folded, (label, audit_text)
 
     await audit.locator('#rx45Audit').click()
     box = panel.locator('.rx48-audit-box.open')
@@ -239,7 +260,7 @@ async def main():
         finally:
             await browser.close()
     (OUT / "results.json").write_text(json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8")
-    (OUT / "browser-executed.txt").write_text("V48_SINAFLOR_ORIGINAL8_MTE_SINAFLOR_DENOMINATOR12_FUTURE6_AUDIT_ONLY_375_768_1440_NO_VISIBLE_ERROR_STATUS\n", encoding="utf-8")
+    (OUT / "browser-executed.txt").write_text("V48_SINAFLOR_ORIGINAL8_MTE_SINAFLOR_DENOMINATOR11_CANONICAL_FUTURE6_AUDIT_ONLY_375_768_1440_NO_VISIBLE_ERROR_STATUS\n", encoding="utf-8")
     print("RX_V48_SINAFLOR_VISUAL_SMOKE=PASS")
 
 

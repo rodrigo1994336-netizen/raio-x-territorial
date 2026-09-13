@@ -38,12 +38,18 @@ def _build_result(raw, code, strategy):
     }
 
 
-def _req(params):
-    return deploy_app._curl(deploy_app.SICAR+'?'+urlencode(params),True)
+def _req(params, cancel_event=None):
+    return deploy_app._curl(deploy_app.SICAR+'?'+urlencode(params),True,cancel_event=cancel_event,connect_timeout=5,max_time=10,hard_timeout=11)
 
 
-def fetch_car_live_resilient(car_code:str):
+def _cancelled(cancel_event):
+    return bool(cancel_event and cancel_event.is_set())
+
+
+def fetch_car_live_resilient(car_code:str, *, cancel_event=None):
     code=_norm(car_code)
+    if _cancelled(cancel_event):
+        return {'ok':False,'source':'SICAR','cancelled':True,'detail':'request_cancelled','attempts':[]}
     if not CAR_RE.match(code):
         return {'ok':False,'source':'SICAR','not_found':True,'detail':'invalid_car_format'}
     uf=code[:2]
@@ -81,8 +87,12 @@ def fetch_car_live_resilient(car_code:str):
         'outputFormat':'application/json','srsName':'EPSG:4674','FILTER':ogc,'maxFeatures':'5'}))
 
     for name,params in strategies:
+        if _cancelled(cancel_event):
+            return {'ok':False,'source':'SICAR','cancelled':True,'detail':'request_cancelled','attempts':attempts}
         try:
-            raw=_req(params)
+            raw=_req(params,cancel_event)
+            if raw.get('cancelled'):
+                return {'ok':False,'source':'SICAR','cancelled':True,'detail':'request_cancelled','attempts':attempts}
             attempts.append({'strategy':name,'ok':raw.get('ok'),'bytes':raw.get('bytes',0),'detail':raw.get('detail')})
             result=_build_result(raw,code,name)
             if result:
@@ -97,12 +107,14 @@ def fetch_car_live_resilient(car_code:str):
     try:
         prefix=f'{uf}-{mun}-%'
         for start in (0,500,1000,1500,2000):
+            if _cancelled(cancel_event):
+                return {'ok':False,'source':'SICAR','cancelled':True,'detail':'request_cancelled','attempts':attempts}
             params={
                 'service':'WFS','version':'2.0.0','request':'GetFeature','typeNames':tn,
                 'outputFormat':'application/json','CQL_FILTER':f"cod_imovel LIKE '{prefix}'",
                 'propertyName':'cod_imovel','count':'500','startIndex':str(start),
             }
-            raw=_req(params)
+            raw=_req(params,cancel_event)
             attempts.append({'strategy':f'municipality_codes_{start}','ok':raw.get('ok'),'bytes':raw.get('bytes',0),'detail':raw.get('detail')})
             if not raw.get('ok'):
                 continue
@@ -115,14 +127,14 @@ def fetch_car_live_resilient(car_code:str):
             if match:
                 fid=match.get('id')
                 if fid:
-                    raw2=_req({'service':'WFS','version':'1.0.0','request':'GetFeature','typeName':tn,'outputFormat':'application/json','featureID':fid,'srsName':'EPSG:4674'})
+                    raw2=_req({'service':'WFS','version':'1.0.0','request':'GetFeature','typeName':tn,'outputFormat':'application/json','featureID':fid,'srsName':'EPSG:4674'},cancel_event)
                     attempts.append({'strategy':'feature_id','ok':raw2.get('ok'),'bytes':raw2.get('bytes',0),'detail':raw2.get('detail')})
                     result=_build_result(raw2,code,'municipality_scan_feature_id')
                     if result:
                         result['attempts']=attempts
                         return result
                 # Some GeoServer responses omit feature ids on propertyName requests.
-                raw3=_req({'service':'WFS','version':'1.0.0','request':'GetFeature','typeName':tn,'outputFormat':'application/json','srsName':'EPSG:4674','CQL_FILTER':f"cod_imovel='{code}'",'maxFeatures':'5'})
+                raw3=_req({'service':'WFS','version':'1.0.0','request':'GetFeature','typeName':tn,'outputFormat':'application/json','srsName':'EPSG:4674','CQL_FILTER':f"cod_imovel='{code}'",'maxFeatures':'5'},cancel_event)
                 result=_build_result(raw3,code,'municipality_scan_refetch')
                 if result:
                     result['attempts']=attempts

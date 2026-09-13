@@ -5,7 +5,7 @@ import math
 import time
 from typing import Any
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 import portal_v8
 import portal_sicar_resilient
@@ -61,6 +61,7 @@ def _cache_put(key: str, value: dict[str, Any]) -> None:
 
 @app.get("/v1/live/sicar/viewport-v46")
 async def live_sicar_viewport_v46(
+    request: Request,
     west: float,
     south: float,
     east: float,
@@ -113,7 +114,7 @@ async def live_sicar_viewport_v46(
     async def fetch_cell(cell: tuple[float, float, float, float]):
         cw, cs, ce, cn = cell
         return await portal_sicar_resilient.live_sicar_viewport_resilient(
-            cw, cs, ce, cn, uf=uf, limit=50
+            request, cw, cs, ce, cn, uf=uf, limit=50
         )
 
     results = await asyncio.gather(*(fetch_cell(cell) for cell in cells), return_exceptions=True)
