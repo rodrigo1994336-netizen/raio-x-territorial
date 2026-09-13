@@ -6,7 +6,7 @@ import time
 from fastapi import HTTPException, Request
 
 import monitoring_store as store
-from whatsapp_gateway import _send_text
+import whatsapp_gateway
 from github_oidc_auth import authorization_from_headers
 
 _LAST_RUN_MONOTONIC=0.0
@@ -14,16 +14,28 @@ _RUN_LOCK=asyncio.Lock()
 
 
 def _alert_text(car_code:str,diff:dict)->str:
-    keys=', '.join(diff.keys()) if diff else 'alteração detectada'
+    _severity,summary=store.classify_alert(diff or {})
     base=os.getenv('RX_PUBLIC_BASE_URL','https://raio-x-territorial-app.onrender.com').rstrip('/')
-    return ('ALERTA — RAIO-X TERRITORIAL\n'+f'Imóvel CAR: {car_code}\n'+f'Mudanças detectadas: {keys}\n\n'+f'Abra o Raio-X atualizado: {base}/\n\n'+'O alerta indica mudança nas fontes consultadas e não substitui conferência documental ou técnica.')
+    return ('RAIO-X TERRITORIAL — ALERTA DO IMÓVEL\n'+f'CAR {car_code}\n'+f'{summary}.\n\n'+f'Abra o Raio-X atualizado: {base}/\n\n'+'O alerta indica mudança nas fontes oficiais consultadas e não substitui conferência documental ou técnica.')
 
 
 async def _deliver_if_configured(mon:dict,saved:dict)->dict:
     if not saved.get('changed'):return {'attempted':False}
     channel=(mon.get('channel') or 'in_app').lower();destination=mon.get('destination')
     if channel!='whatsapp' or not destination:return {'attempted':False,'channel':channel}
-    result=await _send_text(destination,_alert_text(mon['car_code'],saved.get('diff') or {}));return {'attempted':True,'channel':'whatsapp','result':result}
+    diff=saved.get('diff') or {};template=os.getenv('WHATSAPP_ALERT_TEMPLATE','').strip()
+    if template:
+        _severity,summary=store.classify_alert(diff)
+        base=os.getenv('RX_PUBLIC_BASE_URL','https://raio-x-territorial-app.onrender.com').rstrip('/')
+        result=await whatsapp_gateway._send_template(destination,template,os.getenv('WHATSAPP_ALERT_TEMPLATE_LANG','pt_BR'),[mon['car_code'],summary,base+'/'])
+        return {'attempted':True,'channel':'whatsapp','mode':'template','result':result}
+    # Free text is only delivered inside the 24 h window after the person's last message.
+    result=await whatsapp_gateway._send_text(destination,_alert_text(mon['car_code'],diff));return {'attempted':True,'channel':'whatsapp','mode':'text_24h_window','result':result}
+
+
+def _public_monitor(row:dict)->dict:
+    # A phone number is personal data: never returned by the HTTP API.
+    return {k:v for k,v in (row or {}).items() if k!='destination'}
 
 
 def _authorize_scheduler(request:Request)->dict:
@@ -50,16 +62,19 @@ def register_monitoring_routes(app,analyze_fn):
         body={}
         try:body=await request.json()
         except Exception:pass
-        channel=(body.get('channel') or 'in_app').strip();destination=body.get('destination');monitor=await asyncio.to_thread(store.add_monitor,car_code,channel,destination);initial=None
+        channel=(body.get('channel') or 'in_app').strip().lower()
+        # A WhatsApp number is only registered from its own conversation, which proves the number is the requester's.
+        if channel!='in_app':raise HTTPException(status_code=403,detail='channel_registered_only_from_its_conversation')
+        monitor=await asyncio.to_thread(store.add_monitor,car_code,'in_app',None);initial=None
         try:
             result=await analyze_fn(car_code.upper());initial=await asyncio.to_thread(store.save_snapshot,monitor['id'],store.compact_snapshot(result))
         except Exception as exc:initial={'ok':False,'detail':f'{type(exc).__name__}:{str(exc)[:220]}'}
-        return {'ok':True,'backend':store.readiness().get('backend'),'monitor':monitor,'initial_snapshot':initial}
+        return {'ok':True,'backend':store.readiness().get('backend'),'monitor':_public_monitor(monitor),'initial_snapshot':initial}
 
     @app.get('/v1/monitoring/properties')
     async def list_property_monitors():
         if not store.readiness()['ready']:return {'ok':False,'detail':'monitoring_backend_not_ready','monitors':[]}
-        return {'ok':True,'backend':store.readiness().get('backend'),'monitors':await asyncio.to_thread(store.list_monitors,True,200)}
+        return {'ok':True,'backend':store.readiness().get('backend'),'monitors':[_public_monitor(m) for m in await asyncio.to_thread(store.list_monitors,True,200)]}
 
     @app.get('/v1/monitoring/alerts')
     async def monitoring_alerts(limit:int=50):

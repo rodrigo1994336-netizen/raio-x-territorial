@@ -174,13 +174,27 @@ def compact_snapshot(result:dict[str,Any])->dict[str,Any]:
     return {'car_code':props.get('cod_imovel'),'car_status':props.get('status_imovel'),'car_condition':props.get('condicao'),'area_ha':props.get('area'),'sigef_candidates':sigef.get('feature_count_bbox') if sigef.get('feature_count_bbox') is not None else sigef.get('feature_count'),'ibama_embargo_count':eex.get('occurrence_count'),'ibama_embargo_area_ha':eex.get('area_unique_ha'),'prodes_count':pex.get('occurrence_count'),'prodes_area_ha':pex.get('area_unique_ha'),'anm_count':aex.get('occurrence_count'),'anm_area_ha':aex.get('area_unique_ha'),'fire_inside_count':fire.get('inside_count'),'fire_near_count':fire.get('near_count'),'fire_latest_file':fire.get('latest_file'),'indigenous_count':(services.get('terra_indigena') or {}).get('occurrence_count'),'conservation_count':(services.get('unidade_conservacao') or {}).get('occurrence_count'),'quilombola_count':(services.get('quilombola') or {}).get('occurrence_count'),'settlement_count':(services.get('assentamento') or {}).get('occurrence_count'),'icmbio_embargo_count':(services.get('embargo_icmbio') or {}).get('occurrence_count'),'water_inside_count':water.get('inside_count'),'water_near_count':water.get('near_count'),'pivot_intersection_count':piv.get('intersection_count'),'pivot_intersection_area_ha':piv.get('intersection_area_unique_ha'),'rare_earth_signal':bool(minerals.get('rare_earth_signal')),'critical_minerals':sorted(minerals.get('mineral_codes') or [])}
 
 
+# Values that change without anything changing on the property (the INPE file name rolls every 10 minutes).
+VOLATILE_KEYS=frozenset({'fire_latest_file'})
+
+
 def snapshot_signature(payload:dict[str,Any])->str:
-    raw=json.dumps(payload,sort_keys=True,ensure_ascii=False,separators=(',',':')).encode('utf-8');return hashlib.sha256(raw).hexdigest()
+    stable={k:v for k,v in (payload or {}).items() if k not in VOLATILE_KEYS}
+    raw=json.dumps(stable,sort_keys=True,ensure_ascii=False,separators=(',',':')).encode('utf-8');return hashlib.sha256(raw).hexdigest()
+
+
+def merge_answered(old:dict[str,Any]|None,new:dict[str,Any])->dict[str,Any]:
+    """A source that did not answer keeps its last answered value: trying is not answering."""
+    merged=dict(new or {})
+    for k,v in merged.items():
+        if v is None and old and old.get(k) is not None:merged[k]=old[k]
+    return merged
 
 
 def _diff(old:dict[str,Any]|None,new:dict[str,Any])->dict[str,Any]:
     if old is None:return {'initial_snapshot':True}
-    return {k:{'before':old.get(k),'after':new.get(k)} for k in sorted(set(old)|set(new)) if old.get(k)!=new.get(k)}
+    return {k:{'before':old.get(k),'after':new.get(k)} for k in sorted(set(old)|set(new))
+            if k not in VOLATILE_KEYS and old.get(k) is not None and new.get(k) is not None and old.get(k)!=new.get(k)}
 
 
 def _number(v:Any)->float:
@@ -192,7 +206,7 @@ def _increased(diff:dict[str,Any],key:str)->bool:
     row=diff.get(key) or {};return _number(row.get('after'))>_number(row.get('before'))
 
 
-def _classify_alert(diff:dict[str,Any])->tuple[str,str]:
+def classify_alert(diff:dict[str,Any])->tuple[str,str]:
     critical=[];attention=[]
     for key,label in (('ibama_embargo_count','novo embargo IBAMA'),('icmbio_embargo_count','novo embargo ICMBio'),('fire_inside_count','novo foco de calor dentro do imóvel'),('indigenous_count','mudança em Terra Indígena'),('conservation_count','mudança em Unidade de Conservação')):
         if key in diff and _increased(diff,key):critical.append(label)
@@ -203,10 +217,13 @@ def _classify_alert(diff:dict[str,Any])->tuple[str,str]:
     return 'info','Mudança detectada em dados monitorados do imóvel'
 
 
+_classify_alert=classify_alert
+
+
 def save_snapshot(monitor_id:int,payload:dict[str,Any])->dict[str,Any]:
-    ensure_schema();sig=snapshot_signature(payload);state=readiness()
+    ensure_schema();state=readiness()
     if state.get('backend')=='redis':
-        r=_redis();code=str(payload.get('car_code') or '').upper();key=f'rx:snapshot:{code}';prev=_rget_json(r,key);old=(prev or {}).get('payload') if prev else None;old_sig=(prev or {}).get('signature');diff=_diff(old,payload);changed=bool(prev and old_sig!=sig);now=_now();snap={'captured_at':now,'signature':sig,'payload':payload};r.set(key,json.dumps(snap,ensure_ascii=False,separators=(',',':')))
+        r=_redis();code=str(payload.get('car_code') or '').upper();key=f'rx:snapshot:{code}';prev=_rget_json(r,key);old=(prev or {}).get('payload') if prev else None;payload=merge_answered(old,payload);sig=snapshot_signature(payload);diff=_diff(old,payload);changed=bool(prev and diff);now=_now();snap={'captured_at':now,'signature':sig,'payload':payload};r.set(key,json.dumps(snap,ensure_ascii=False,separators=(',',':')))
         mon=_rget_json(r,f'rx:monitor:{code}',{}) or {};mon['last_checked_at']=now;mon['updated_at']=now
         if changed:mon['last_changed_at']=now
         if mon:
@@ -216,7 +233,7 @@ def save_snapshot(monitor_id:int,payload:dict[str,Any])->dict[str,Any]:
         return {'changed':changed,'initial':prev is None,'signature':sig,'diff':diff}
     conn=_connect()
     try:
-        cur=conn.cursor();cur.execute('SELECT payload,signature FROM rx_monitor_snapshots WHERE monitor_id=%s ORDER BY captured_at DESC LIMIT 1',(monitor_id,));prev=cur.fetchone();old=prev[0] if prev else None;old_sig=prev[1] if prev else None;diff=_diff(old,payload);changed=bool(prev and old_sig!=sig);cur.execute('INSERT INTO rx_monitor_snapshots(monitor_id,signature,payload) VALUES (%s,%s,%s)',(monitor_id,sig,json.dumps(payload,ensure_ascii=False)));cur.execute('UPDATE rx_monitors SET last_checked_at=NOW(),last_changed_at=CASE WHEN %s THEN NOW() ELSE last_changed_at END,updated_at=NOW() WHERE id=%s',(changed,monitor_id));
+        cur=conn.cursor();cur.execute('SELECT payload,signature FROM rx_monitor_snapshots WHERE monitor_id=%s ORDER BY captured_at DESC LIMIT 1',(monitor_id,));prev=cur.fetchone();old=prev[0] if prev else None;payload=merge_answered(old,payload);sig=snapshot_signature(payload);diff=_diff(old,payload);changed=bool(prev and diff);cur.execute('INSERT INTO rx_monitor_snapshots(monitor_id,signature,payload) VALUES (%s,%s,%s)',(monitor_id,sig,json.dumps(payload,ensure_ascii=False)));cur.execute('UPDATE rx_monitors SET last_checked_at=NOW(),last_changed_at=CASE WHEN %s THEN NOW() ELSE last_changed_at END,updated_at=NOW() WHERE id=%s',(changed,monitor_id));
         if changed:
             sev,msg=_classify_alert(diff);cur.execute('INSERT INTO rx_monitor_alerts(monitor_id,kind,severity,message,diff) VALUES (%s,%s,%s,%s,%s)',(monitor_id,'property_change',sev,msg,json.dumps(diff,ensure_ascii=False)))
         conn.commit();return {'changed':changed,'initial':prev is None,'signature':sig,'diff':diff}
