@@ -111,7 +111,7 @@ jobs:
               'Mapa ajustando…','RX_MAP_STABILITY_V43_5','RX_MAP_POLISH_V43_6',
               'RX_CONTEXT_DEFAULT_DISABLED_V43_6',"color:'#73b99a'",'RX_SEARCH_AUTO_V43_7',
               'RX_REPORT_IDENTITY_V43_8','/v1/mobile/report/open/',
-              'RX_MAP_V46_TWO_LEVEL','rx46-anchor-popup','window.rxV46SelectProperty',
+              'RX_MAP_V46_TWO_LEVEL','rx46-anchor-popup','window.rxV46SelectProperty','rx46PlaceC2c','rx46-tipless',
               '/v1/live/sicar/viewport-v46','autoPan:false','window.rx46ViewportRequest',
           )
           absent=[x for x in required if x not in html]

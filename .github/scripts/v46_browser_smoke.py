@@ -402,6 +402,42 @@ async def assert_late_snapshot_keeps_panel(page, late):
     await page.unroute("**/v1/live/snapshot/**")
 
 
+PLACEMENT_JS = r"""()=>{const pop=document.querySelector('.rx46-anchor-popup .leaflet-popup-content-wrapper');const mr=document.querySelector('#map')?.getBoundingClientRect();
+  const sels=[...document.querySelectorAll('.rx46-selection')].map(e=>e.getBoundingClientRect()).filter(r=>r.width>0&&r.height>0);
+  if(!pop||!mr||!sels.length)return null;const w=pop.getBoundingClientRect();
+  const u=sels.reduce((a,r)=>({l:Math.min(a.l,r.left),t:Math.min(a.t,r.top),r:Math.max(a.r,r.right),b:Math.max(a.b,r.bottom)}),{l:1e9,t:1e9,r:-1e9,b:-1e9});
+  const ix=Math.max(0,Math.min(w.right,u.r)-Math.max(w.left,u.l)),iy=Math.max(0,Math.min(w.bottom,u.b)-Math.max(w.top,u.t));
+  return {placement:window.__rx46Placement||null,card:{l:w.left,t:w.top,r:w.right,b:w.bottom},sel:u,overlap_px:Math.round(ix*iy),map:{l:mr.left,t:mr.top,r:mr.right,b:mr.bottom}}}"""
+
+TEXT_FIT_JS = r"""()=>{const q=document.querySelector('#q');if(!q)return null;const cs=getComputedStyle(q);const ctx=document.createElement('canvas').getContext('2d');
+  ctx.font=`${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;const w=q.clientWidth-parseFloat(cs.paddingLeft)-parseFloat(cs.paddingRight);
+  const st=document.querySelector('#rxMapState');
+  return {placeholder:q.placeholder,text_px:ctx.measureText(q.placeholder).width,box_px:w,
+    state:st?{text:st.innerText,sw:st.scrollWidth,cw:st.clientWidth,visible:getComputedStyle(st).display!=='none'&&!!(st.textContent||'').trim()}:null}}"""
+
+
+async def assert_card_placement(page, label, inside_map):
+    # C2c: the card never covers the clicked property unless no side fits (then it is marked 'overlap').
+    probe = await js(page, PLACEMENT_JS)
+    assert probe and probe["placement"], (label, "placement_not_run", probe)
+    print("RX_C2C_PLACEMENT", label, json.dumps({"side": probe["placement"]["side"], "overlap_px": probe["overlap_px"], "inside_map": inside_map}))
+    c, m = probe["card"], probe["map"]
+    if inside_map:
+        assert c["l"] >= m["l"] - 1 and c["r"] <= m["r"] + 1 and c["t"] >= m["t"] - 1 and c["b"] <= m["b"] + 1, (label, "card_outside_map", probe)
+    if probe["placement"]["side"] != "overlap":
+        assert probe["overlap_px"] <= 4, (label, "card_covers_property", probe)
+    return probe
+
+
+async def assert_text_fits(page, label):
+    # C2c: search hint and map notice are shortened/wrapped, never cut mid-word.
+    p = await js(page, TEXT_FIT_JS)
+    assert p and p["text_px"] <= p["box_px"] + 1, (label, "search_placeholder_cut", p)
+    if p["state"] and p["state"]["visible"]:
+        assert p["state"]["sw"] <= p["state"]["cw"] + 1, (label, "map_state_cut", p)
+    print("RX_C2C_TEXT_FIT", label, json.dumps({"placeholder": p["placeholder"], "state": (p["state"] or {}).get("text")}, ensure_ascii=False))
+
+
 async def viewport_flow(browser, width, height, label):
     context = await browser.new_context(
         viewport={"width": width, "height": height}, accept_downloads=True
@@ -425,9 +461,13 @@ async def viewport_flow(browser, width, height, label):
     await wait_runtime(page)
     await set_dense(page)
     await assert_parcel_tooltips(page)
+    await assert_text_fits(page, label)
     before = await map_center(page)
     await click_first_parcel(page)
+    await page.wait_for_timeout(700)
+    await assert_card_placement(page, label, inside_map=True)
     card = await assert_card_contract(page, before, width)
+    await assert_card_placement(page, label, inside_map=False)
     await assert_car_copy(page, ".rx46-card")
     await assert_official_sicar_action(page)
     await page.screenshot(path=str(OUT / f"{label}-card.png"), full_page=True)
