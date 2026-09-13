@@ -673,6 +673,176 @@ async def search_regression(page, label):
     await assert_search_dropdown_escaped(page, car, state['geometry'])
 
 
+# C2b: the SIGEF/INCRA reference inside the anchored card and the V45 panel, driven by
+# /map-panel fixtures in a flow of its own (the real-click flows above stay untouched).
+SIGEF_CAR = "MG-3152006-BB48D05173F540CD9703B23088C3ABF4"
+SIGEF_LABEL = "PROJETO DE ASSENTAMENTO PAULISTA"
+SIGEF_ORIGIN = "SIGEF/INCRA · espelho público IBAMA/PAMGIA"
+SIGEF_GEOMETRY = {"type": "Polygon", "coordinates": [[[-45.02, -19.22], [-44.98, -19.22], [-44.98, -19.18], [-45.02, -19.18], [-45.02, -19.22]]]}
+
+REF_JS = """(root)=>{
+  const s=document.querySelector(root);if(!s)return {missing:true,present:false,all:''};
+  const lum=c=>{const m=String(c).match(/[\\d.]+/g)||[0,0,0];const f=v=>{v=Number(v)/255;return v<=.03928?v/12.92:Math.pow((v+.055)/1.055,2.4)};return .2126*f(m[0])+.7152*f(m[1])+.0722*f(m[2])};
+  const bg=el=>{for(let x=el;x;x=x.parentElement){const c=getComputedStyle(x).backgroundColor,m=String(c).match(/[\\d.]+/g)||[];if(m.length>=3&&(m.length<4||Number(m[3])>.5))return c}return 'rgb(7,21,15)'};
+  const ratio=el=>{const a=lum(getComputedStyle(el).color),b=lum(bg(el));return (Math.max(a,b)+.05)/(Math.min(a,b)+.05)};
+  const sr=s.getBoundingClientRect(),t=s.querySelector('.rx46-title,.rx45-title h2');
+  const base={missing:false,all:s.innerText||'',title:t?String(t.innerText||'').replace(/\\s+/g,'').trim():'',cardWidth:sr.width,cardTop:sr.top,enriched:s.dataset.rx46Enriched||''};
+  const b=s.querySelector('[data-rx-sigef-ref]');if(!b)return {...base,present:false};
+  const texts=[b,...b.querySelectorAll('*')].filter(e=>[...e.childNodes].some(n=>n.nodeType===3&&n.textContent.trim()));
+  const br=b.getBoundingClientRect();
+  return {...base,present:true,state:b.dataset.rxSigefRef,text:b.innerText,
+    minFont:Math.min(...texts.map(e=>parseFloat(getComputedStyle(e).fontSize))),
+    minContrast:Math.min(...texts.map(ratio)),
+    inside:br.left>=sr.left-1&&br.right<=sr.right+1,noOverflow:b.scrollWidth<=b.clientWidth+1};
+}"""
+
+
+def sigef_body(car, state, reference=None, others=0, osm=()):
+    return {"ok": True, "car_code": car, "municipality": "Pompéu", "uf": "MG", "area_ha": 1243.5656,
+            "car_status": "AT", "validated_name": None, "validated_name_state": "unresolved",
+            "name_validation_status": "UNRESOLVED", "panel_name_eligible": False,
+            "geographic_references": list(osm), "geometry": SIGEF_GEOMETRY,
+            "sigef_reference": reference, "sigef_reference_state": state, "sigef_reference_others": others}
+
+
+def assert_ref_readable(info, where):
+    assert info["present"] and info["minFont"] >= 9, (where, info)
+    assert info["minContrast"] >= 4.5, (where, info)
+    assert info["inside"] and info["noOverflow"], (where, info)
+    assert "sem referência" not in info["all"].casefold(), (where, info)
+
+
+async def sigef_reference_flow(browser, width, height, scenarios):
+    context = await browser.new_context(viewport={"width": width, "height": height})
+    page = await context.new_page()
+    errors = []
+    page.on("pageerror", lambda exc: errors.append("pageerror:" + str(exc)))
+    page.on("console", lambda msg: errors.append(f"console:{msg.type}:{msg.text}") if msg.type == "error" else None)
+    fixtures = {}
+    hits = {}
+
+    async def map_panel(route):
+        car = route.request.url.split("?", 1)[0].rstrip("/").rsplit("/", 1)[-1]
+        hits[car] = hits.get(car, 0) + 1
+        fx = fixtures.get(car) or {}
+        if fx.get("delay"):
+            await asyncio.sleep(fx["delay"])
+        await route.fulfill(json=fx.get("body") or {"ok": False})
+
+    async def quiet(route):
+        await route.fulfill(json={"ok": False, "detail": "c2b_fixture"})
+
+    await page.goto(BASE, wait_until="domcontentloaded", timeout=30000)
+    await wait_runtime(page)
+    await page.route("**/v1/live/map-panel/**", map_panel)
+    for pattern in ("**/v1/live/snapshot/**", "**/v1/live/property-identity/**", "**/v1/live/conformity/**", "**/v1/live/car-integrity/**"):
+        await page.route(pattern, quiet)
+    # Below z11 the viewport loader stays idle, so no external source is involved.
+    await js(page, "()=>map.setView([-19.2,-45.0],10,{animate:false})")
+    await page.wait_for_timeout(300)
+
+    async def select(car):
+        await js(page, "()=>{window.rxV46CloseAnchor?.();window.rx43CloseDossier?.()}")
+        await js(page, "a=>window.rxV46SelectProperty({car_code:a.car,municipality:'Pompéu',uf:'MG'},a.g,null)", {"car": car, "g": SIGEF_GEOMETRY})
+        await page.wait_for_selector(f'.rx46-card[data-car="{car}"]', state="visible", timeout=5000)
+
+    async def open_panel(car):
+        await js(page, "()=>document.querySelector('.rx46-card [data-rx46-action=\"full\"]')?.click()")
+        await page.wait_for_selector(f'.rx45-panel-card[data-car="{car}"]', state="visible", timeout=8000)
+
+    helper = await js(page, """()=>{const R=window.rxSigefRefC2;if(!R)return null;const f=(o,st)=>R.html({car_code:'X',sigef_reference_state:st||'found',sigef_reference:{label:'L',car_overlap_ratio:o}},'card');
+      return {p9995:R.pct(0.9995),p99996:R.pct(0.99996),p1:R.pct(1),p05:R.pct(0.5),below:f(0.49),none:f(0.99,'none'),nq:f(0.99,'not_queried'),found:f(0.6).includes('60,00%')}}""")
+    assert helper == {"p9995": "99,95%", "p99996": "99,99%", "p1": "100,00%", "p05": "50,00%", "below": "",
+                      "none": "", "nq": "", "found": True}, helper
+
+    if "found" in scenarios:
+        car = SIGEF_CAR
+        ref = {"label": SIGEF_LABEL, "kind": "SIGEF_CADASTRAL", "origin": SIGEF_ORIGIN, "car_overlap_ratio": 0.999512,
+               "parcel_overlap_ratio": 0.99962, "incra_property_code": "4170920078203", "parcel_code": "0d94a58a"}
+        fixtures[car] = {"delay": 1.0, "body": sigef_body(car, "found", ref, others=1, osm=("Fazenda Teste OSM",))}
+        await select(car)
+        loading = await page.evaluate(REF_JS, ".rx46-card")
+        assert not loading["present"] and loading["enriched"] == "", ("reference shown while loading", loading)
+        await page.wait_for_function("document.querySelector('.rx46-card')?.dataset.rx46Enriched==='1'", timeout=10000)
+        await page.wait_for_timeout(200)
+        info = await page.evaluate(REF_JS, ".rx46-card")
+        assert_ref_readable(info, "card-found")
+        assert info["state"] == "found", info
+        for required in ("Referência INCRA", SIGEF_LABEL, "99,95%", SIGEF_ORIGIN):
+            assert required in info["text"], (required, info)
+        assert "100,00%" not in info["all"], info
+        assert SIGEF_LABEL.replace(" ", "") not in info["title"] and info["title"] == car, info
+        assert 195 <= info["cardWidth"] <= 235 and abs(info["cardTop"] - loading["cardTop"]) < 2, (loading, info)
+        await page.screenshot(path=str(OUT / f"c2b-{width}-card-found.png"), full_page=True)
+        await open_panel(car)
+        await page.wait_for_function("document.querySelector('.rx45-panel-card [data-rx-sigef-ref]')", timeout=8000)
+        await page.wait_for_timeout(700)
+        pinfo = await page.evaluate(REF_JS, ".rx45-panel-card")
+        assert_ref_readable(pinfo, "panel-found")
+        for required in ("Referência INCRA", SIGEF_LABEL, "99,95%", SIGEF_ORIGIN, "não é o nome do CAR", "+1 outra parcela SIGEF"):
+            assert required in pinfo["text"], (required, pinfo)
+        assert SIGEF_LABEL.replace(" ", "") not in pinfo["title"], pinfo
+        assert "OpenStreetMap" in pinfo["all"] and "Fazenda Teste OSM" in pinfo["all"], pinfo
+        assert "Fazenda Teste OSM" not in pinfo["text"], ("OSM names belong to their own block", pinfo)
+        await page.screenshot(path=str(OUT / f"c2b-{width}-panel-found.png"), full_page=True)
+
+    if "unavailable" in scenarios:
+        car = SIGEF_CAR[:-1] + "1"
+        fixtures[car] = {"body": sigef_body(car, "unavailable")}
+        await select(car)
+        await page.wait_for_function("document.querySelector('.rx46-card')?.dataset.rx46Enriched==='1'", timeout=10000)
+        await page.wait_for_timeout(300)
+        first = await page.evaluate(REF_JS, ".rx46-card")
+        assert not first["present"] and "consulta pendente" not in first["all"], ("hidden before the retry", first)
+        assert hits.get(car) == 1, hits
+        # One automatic retry (setTimeout, ~8 s) while the same card is open; then a discreet pending line.
+        await page.wait_for_function("document.querySelector('.rx46-card [data-rx-sigef-ref]')", timeout=15000)
+        pending = await page.evaluate(REF_JS, ".rx46-card")
+        assert_ref_readable(pending, "card-pending")
+        assert pending["state"] == "pending" and "Referência INCRA: consulta pendente" in pending["text"], pending
+        assert hits.get(car) == 2, hits
+        await page.wait_for_timeout(9500)
+        assert hits.get(car) == 2, ("more than one automatic retry", hits)
+        still = await page.evaluate(REF_JS, ".rx46-card")
+        assert still["state"] == "pending" and still["title"] == car, still
+        await page.screenshot(path=str(OUT / f"c2b-{width}-card-pending.png"), full_page=True)
+        await open_panel(car)
+        await page.wait_for_timeout(2500)
+        pinfo = await page.evaluate(REF_JS, ".rx45-panel-card")
+        assert_ref_readable(pinfo, "panel-pending")
+        assert pinfo["state"] == "pending" and "consulta pendente" in pinfo["text"], pinfo
+
+        # The panel opened before the card retry fired still gets exactly one retry.
+        car = SIGEF_CAR[:-1] + "2"
+        fixtures[car] = {"body": sigef_body(car, "unavailable")}
+        await select(car)
+        await page.wait_for_function("document.querySelector('.rx46-card')?.dataset.rx46Enriched==='1'", timeout=10000)
+        await open_panel(car)
+        await page.wait_for_timeout(1500)
+        early = await page.evaluate(REF_JS, ".rx45-panel-card")
+        assert not early["present"] and "sem referência" not in early["all"].casefold(), early
+        loads = hits.get(car, 0)
+        await page.wait_for_function("document.querySelector('.rx45-panel-card [data-rx-sigef-ref=\"pending\"]')", timeout=15000)
+        await page.wait_for_timeout(9500)
+        late = await page.evaluate(REF_JS, ".rx45-panel-card")
+        assert late["state"] == "pending", late
+        assert hits.get(car, 0) == loads + 1, ("exactly one automatic retry for the open panel", loads, hits)
+
+    if "none" in scenarios:
+        car = SIGEF_CAR[:-1] + "3"
+        fixtures[car] = {"body": sigef_body(car, "none")}
+        await select(car)
+        await page.wait_for_function("document.querySelector('.rx46-card')?.dataset.rx46Enriched==='1'", timeout=10000)
+        await page.wait_for_timeout(1200)
+        info = await page.evaluate(REF_JS, ".rx46-card")
+        assert not info["present"] and "Referência INCRA" not in info["all"] and "sem referência" not in info["all"].casefold(), info
+        assert hits.get(car) == 1, hits
+
+    results.setdefault("c2b_sigef_reference", {})[str(width)] = {"scenarios": list(scenarios), "hits": hits, "errors": errors}
+    assert not errors, errors
+    await context.close()
+
+
 async def main():
     OUT.mkdir(parents=True, exist_ok=True)
     async with async_playwright() as p:
@@ -685,6 +855,8 @@ async def main():
         await viewport_flow(browser, 768, 900, "768")
         await viewport_flow(browser, 1440, 900, "1440")
         await movement_gate(browser)
+        await sigef_reference_flow(browser, 1440, 900, ("found", "unavailable", "none"))
+        await sigef_reference_flow(browser, 375, 812, ("found",))
         await browser.close()
     (OUT / "results.json").write_text(
         json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8"
