@@ -25,8 +25,9 @@ _HIDDEN_PLANNED = [
 ]
 
 
-def _panel_sync_v48(car_code: str) -> dict[str, Any]:
-    base = _BASE_PANEL_SYNC(car_code)
+def _panel_sync_v48(car_code: str, *, cancel_event=None) -> dict[str, Any]:
+    # The map-panel route always passes cancel_event; forward it so F1 can stop curl.
+    base = _BASE_PANEL_SYNC(car_code, cancel_event=cancel_event)
     if not base.get("ok"):
         return dict(base)
 
