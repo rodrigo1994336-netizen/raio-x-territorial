@@ -63,6 +63,10 @@ jobs:
           import portal_v8, portal_action_runtime_v25, portal_resource_guard_v27
           import property_identity_runtime as identity
           import runpy
+          import inspect, portal_map_panel_v45, portal_experience_v43, car_resilient, deploy_app
+          # F1: routes hand these to run_sync_with_request_lifecycle, which always passes cancel_event.
+          for fn in (portal_map_panel_v45._panel_sync, portal_experience_v43._snapshot_sync, car_resilient.fetch_car_live_resilient, identity.resolve_property_identity_sync, deploy_app._curl):
+              assert 'cancel_event' in inspect.signature(fn).parameters, f'{fn.__module__}.{fn.__qualname__} drops cancel_event'
           runpy.run_path('.github/scripts/v47_name_truth.py')
           import cafir_name_search_v44 as cafir_search
           from shapely.geometry import box, mapping
