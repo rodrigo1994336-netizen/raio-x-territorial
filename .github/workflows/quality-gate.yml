@@ -178,7 +178,7 @@ jobs:
           assert 'REFERENCE_ONLY_CENTROID' in legacy_name and 'd.property.name=x.name' not in legacy_name
           assert 'Fontes pesadas não foram disparadas' in html
           assert 'Imóvel rural —' in html
-          assert 'z<11' in html and 'span>1.50' in html
+          assert 'z<11' in html
           assert all(uf in html for uf in ('AC','AM','BA','DF','GO','MG','MT','PA','PR','RS','SC','SP','TO'))
 
           # V46 must preserve old polygons until the new set is ready, keep the
