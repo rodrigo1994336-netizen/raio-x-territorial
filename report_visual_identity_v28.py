@@ -10,14 +10,8 @@ from sicar_detail_sources_v2 import query_sicar_details_v2
 
 
 def _name(result:dict,props:dict)->str:
-    requested=str(result.get('_requested_property_name') or '').strip()
-    if requested and not requested.lower().startswith(('imóvel rural','imovel rural')):
-        return requested[:180]
-    for key in ('nome_imovel','denominacao','nome_area','nom_imovel','nome_fazenda','fazenda','nome_propriedade'):
-        value=str(props.get(key) or '').strip()
-        if value and not value.lower().startswith(('imóvel rural','imovel rural')):
-            return value[:180]
-    return f"Imóvel rural · {props.get('municipio') or '—'}/{props.get('uf') or '—'}"
+    # Same rule as v13._best_property_name: only a SICAR denomination is a name.
+    return v13._best_property_name(result)[0]
 
 
 async def _extras_v28(result:dict,car_code:str,out_dir:Path):

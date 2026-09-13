@@ -36,14 +36,17 @@ def _font(size:int,bold=False):
 
 
 def _best_property_name(result:dict[str,Any]) -> tuple[str,str]:
-    requested=_s(result.get('_requested_property_name'))
-    if requested and requested.lower() not in {'imóvel rural','imovel rural'} and not requested.lower().startswith('imóvel rural —'):
-        return requested[:120],'nome informado na busca'
+    """Name printed as the property's name: only a public SICAR denomination.
+
+    A name typed in the search or found in another registry is a reference, and the
+    municipality is never a name; without a SICAR denomination the report identifies
+    the property by its CAR code.
+    """
     props=(result.get('car') or {}).get('properties') or {}
     for key in ('nome_imovel','denominacao','denom_imovel','nome_area','nom_imovel','nome'):
         value=_s(props.get(key))
-        if value and value not in {'-','—'}:return value[:120],f'SICAR:{key}'
-    return f"Imóvel rural — {_s(props.get('municipio'),'município não informado')}/{_s(props.get('uf'))}",'SICAR sem denominação pública'
+        if value and value not in {'-','—'} and not value.lower().startswith(('imóvel rural','imovel rural')):return value[:120],f'SICAR:{key}'
+    return '','SICAR sem denominação pública'
 
 
 def _stamp_image(path:str|Path|None,name:str,kind:str):
@@ -74,10 +77,11 @@ def _patch_identity(payload:dict,result:dict,name:str,name_source:str):
     p=payload.setdefault('property',{});p['name']=name;p['name_source']=name_source
     car=payload.setdefault('car',{});fields=list(car.get('fields') or [])
     fields=[x for x in fields if str(x[0]).lower() not in {'denominação do imóvel','denominacao do imovel','nome do imóvel','nome do imovel'}]
-    fields.insert(0,['Denominação do imóvel',name])
+    if name:fields.insert(0,['Denominação do imóvel',name])
     car['fields']=fields
-    car['summary']=f"{name} • CAR {_s(p.get('car_code'),'—')} • situação {_s(car.get('status'),'—')} • {_s(car.get('analysis_status'),'—')}."
-    _append_source(payload,'Identidade/denominação do imóvel',f'{name}. Origem usada nesta emissão: {name_source}.','CONSULTADA' if name_source!='SICAR sem denominação pública' else 'PARCIAL','ok' if name_source!='SICAR sem denominação pública' else 'attention')
+    car['summary']=' • '.join(x for x in (name,f"CAR {_s(p.get('car_code'),'—')}",f"situação {_s(car.get('status'),'—')}",_s(car.get('analysis_status'),'—')) if x)+'.'
+    if name:_append_source(payload,'Identidade/denominação do imóvel',f'{name}. Origem usada nesta emissão: {name_source}.','CONSULTADA','ok')
+    else:_append_source(payload,'Identidade/denominação do imóvel','O SICAR não publica denominação para este imóvel; ele é identificado pelo código do CAR.','CONSULTADA','ok')
     return payload
 
 
@@ -155,7 +159,7 @@ def _patch_climate_full(payload:dict,result:dict,clim:dict):
             ['Último dado climático disponível',recent.get('latest_data_date') or '—'],
         ])
     for m in (clim.get('months') or [])[:12]:
-        rows.append([f"Climatologia {m.get('month')}",f"chuva {m.get('rain_mm') if m.get('rain_mm') is not None else '—'} mm • média {m.get('t_avg_c') if m.get('t_avg_c') is not None else '—'} °C • máx {m.get('t_max_c') if m.get('t_max_c') is not None else '—'} °C • mín {m.get('t_min_c') if m.get('t_min_c') is not None else '—'} °C"])
+        rows.append([f"Climatologia {m.get('month')}",f"chuva {m.get('rain_mm') if m.get('rain_mm') is not None else '—'} mm/dia • média {m.get('t_avg_c') if m.get('t_avg_c') is not None else '—'} °C • máx {m.get('t_max_c') if m.get('t_max_c') is not None else '—'} °C • mín {m.get('t_min_c') if m.get('t_min_c') is not None else '—'} °C"])
     drought=build_drought_screening(recent,clim);water['drought_screening']=drought
     if drought.get('ok'):rows.append(['Triagem de seca recente',f"{drought.get('state')} • dias secos {drought.get('dry_day_share_pct')}%"])
     _append_source(payload,'NASA POWER — climatologia mensal',clim.get('note') or 'Climatologia mensal no centróide da propriedade.','CONSULTADA' if clim.get('ok') else 'INDISPONÍVEL','ok' if clim.get('ok') else 'attention')
@@ -205,8 +209,9 @@ def generate_live_report(result:dict,car_code:str):
     try:extras=asyncio.run(_extras(result,car_code,out_dir))
     except Exception as e:extras=[{'ok':False,'detail':f'parallel:{type(e).__name__}:{str(e)[:180]}'}]*8
     sat,gw,safras,car_details,aero,soil,clim,sif=[_safe_extra(x,s) for x,s in zip(extras,['Sentinel-2','SGB/SIAGAS','IBGE/PAM','SICAR detalhado','ANAC','SoilGrids','NASA climatology','MAPA/SIGSIF'])]
-    _stamp_image(technical_map,name,'technical')
-    if sat.get('ok') and sat.get('path'):_stamp_image(sat.get('path'),name,'satellite')
+    stamp_label=name or f'CAR {car_code.upper()}'
+    _stamp_image(technical_map,stamp_label,'technical')
+    if sat.get('ok') and sat.get('path'):_stamp_image(sat.get('path'),stamp_label,'satellite')
     primary=sat.get('path') if sat.get('ok') and sat.get('path') else technical_map
     payload=build_live_payload(result,report_id,now.isoformat(),primary)
     payload=_patch_identity(payload,result,name,name_source)

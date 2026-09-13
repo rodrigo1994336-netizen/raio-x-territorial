@@ -19,7 +19,7 @@ jobs:
       - name: Install gate dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install fastapi httpx shapely pyproj pillow reportlab uvicorn "psycopg[binary]" "redis>=5,<7" "numpy>=2,<3" "rasterio>=1.4,<2" "PyJWT[crypto]>=2.10,<3"
+          pip install fastapi httpx shapely pyproj pillow reportlab uvicorn "psycopg[binary]" "redis>=5,<7" "numpy>=2,<3" "rasterio>=1.4,<2" "PyJWT[crypto]>=2.10,<3" "pypdf>=4,<7"
       - name: Compile Python modules
         run: |
           python -m compileall -q .
@@ -29,6 +29,10 @@ jobs:
         run: PYTHONPATH=. python scripts/d0_source_registry_gate.py
       - name: D1a CAR title provenance gate
         run: PYTHONPATH=. python scripts/d1a_identity_title_gate.py
+      - name: R1 report pt-BR presentation gate
+        env:
+          RX_RELEASE: OFF
+        run: PYTHONPATH=. python scripts/r1_report_ptbr_gate.py
       - name: Import standalone engines
         env:
           RX_RELEASE: OFF

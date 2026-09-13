@@ -3,11 +3,13 @@ from __future__ import annotations
 import threading
 
 import report_engine_v6 as v6
+import report_ptbr_v50
 import report_engine_v8 as v8
 from reportlab.lib.units import mm
 from reportlab.platypus import Paragraph, Spacer
 
 
+report_ptbr_v50.install()
 _RENDER_LOCK = threading.RLock()
 
 
@@ -18,6 +20,7 @@ def build_premium_property_report_v9(path, payload):
     existing rendering to V8/V7/V6, preserving prior pagination and visual
     behavior outside the new V47 block.
     """
+    payload = report_ptbr_v50.client_payload(payload)
     env = payload.get("environment") or {}
     rows = env.get("car_integrity_table_rows") or []
     integrity = payload.get("car_integrity_v47") or {}

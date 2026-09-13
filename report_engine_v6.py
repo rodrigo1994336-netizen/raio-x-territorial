@@ -89,7 +89,7 @@ def build_premium_property_report_v6(path:str|Path,payload:dict[str,Any])->str:
     # 3 — cobertura
     stats=_source_stats(sources)
     story += _section('Cobertura das fontes','Uma fonte só conta como consultada quando efetivamente respondeu nesta emissão.')
-    story.append(_kpis([('Consultadas',stats['ok'],'responderam','CONSULTADA'),('Parciais',stats['partial'],'retorno incompleto','PARCIAL'),('Indisponíveis',stats['unavailable'],'falha temporária','INDISPONÍVEL'),('Outras',stats['other'],'restritas/preparadas','ATENÇÃO')]))
+    story.append(_kpis([('Consultadas',stats['ok'],'responderam','CONSULTADA'),('Parciais',stats['partial'],'retorno incompleto','PARCIAL'),('Pendentes',stats['unavailable'],'refeitas na próxima emissão','ATENÇÃO'),('Outras',stats['other'],'não consultadas nesta emissão','ATENÇÃO')]))
     story += [Spacer(1,5*mm),_sources_table(sources),PageBreak()]
 
     # 4 — CAR e fundiário

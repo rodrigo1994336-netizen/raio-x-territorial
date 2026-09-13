@@ -5,6 +5,7 @@ from typing import Any
 
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 from shapely.geometry import shape
+import report_ptbr_v50
 
 
 def _font(size:int,bold:bool=False):
@@ -56,18 +57,22 @@ def build_property_visual_plate(
     W,H=1900,1240
     bg=Image.new('RGB',(W,H),(6,17,13));draw=ImageDraw.Draw(bg,'RGBA')
 
-    name=_clean(property_meta.get('name'),'Imóvel rural')
+    name=_clean(property_meta.get('name'),'')
     municipality=_clean(property_meta.get('municipality'),'—')
     uf=_clean(property_meta.get('uf'),'—')
     car_code=_clean(property_meta.get('car_code'),'—')
     area=property_meta.get('area_ha')
-    try:area_txt=f'{float(area):,.3f}'.replace(',','X').replace('.',',').replace('X','.')+' ha'
+    # Same half-up rounding as the PDF text (14.795 -> 14,80), never binary float rounding.
+    try:area_txt=report_ptbr_v50.format_decimal(area,2)+' ha'
     except Exception:area_txt='—'
 
     # Header: property identity first, product title second.
     draw.text((62,34),'RAIO-X VISUAL DA PROPRIEDADE',fill=(99,230,165),font=_font(22,True))
-    draw.text((62,69),_short(name,58),fill=(245,253,248),font=_font(39,True))
-    draw.text((62,119),f'{municipality}/{uf}  •  {area_txt}  •  CAR {car_code}',fill=(166,196,179),font=_font(17))
+    # Title is the SICAR denomination or the CAR code; the municipality is never a name.
+    title=name or f'CAR {car_code}'
+    subtitle=f'{municipality}/{uf}  •  {area_txt}'+(f'  •  CAR {car_code}' if name else '')
+    draw.text((62,69),_short(title,58),fill=(245,253,248),font=_font(39 if name else 30,True))
+    draw.text((62,119),subtitle,fill=(166,196,179),font=_font(17))
     try:
         g=shape(car_geometry);c=g.centroid
         center=f'{abs(c.y):.5f}° {"S" if c.y<0 else "N"}  •  {abs(c.x):.5f}° {"W" if c.x<0 else "E"}'
