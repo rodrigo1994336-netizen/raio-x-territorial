@@ -145,4 +145,5 @@ def install_shutdown_cleanup(app: Any) -> None:
         if killed:
             print(f"RX_EXTERNAL_PROCESS_SHUTDOWN_KILLED={len(killed)}", flush=True)
 
-    app.add_event_handler("shutdown", _shutdown_cleanup)
+    # Starlette 1.x removed add_event_handler; router.on_shutdown works on 0.x and 1.x.
+    app.router.on_shutdown.append(_shutdown_cleanup)
