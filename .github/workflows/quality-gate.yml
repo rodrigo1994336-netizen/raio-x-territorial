@@ -115,7 +115,7 @@ jobs:
           absent=[x for x in required if x not in html]
           assert not absent, f'missing V46 UI/action markers: {absent}'
           # C1: no property name is written on the map; a name only appears after a click.
-          drawn=[x for x in ('rx-farm-name','rxFarmNameSource','/v1/live/property-names/viewport','rxRefreshVisiblePropertyNames','rxNameCoverageV43') if x in html]
+          drawn=[x for x in ('rx-farm-name','rxFarmNameSource','/v1/live/property-names/viewport','rxRefreshVisiblePropertyNames','rxNameCoverageV43','rx-name-label','permanent:true') if x in html]
           assert not drawn, f'map name labels leaked into final portal HTML: {drawn}'
           retired=(
               'RX_PORTAL_IDENTITY_V18','RX_MOBILE_DOSSIER_V20','RX_HUMAN_READING_V23',
