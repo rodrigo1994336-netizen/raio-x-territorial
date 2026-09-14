@@ -25,6 +25,10 @@ broken single-flight, unbounded retry, other-CAR answer, "ok" not required, stic
 PDF as a small link, plain /map-panel fetch) and requires the rule's check to FAIL on the mutant.
 A check that passes on its mutant fails the gate.
 
+Part 2 (1B.6 UF by the IBGE borders and municipality search without Nominatim, 1B.7 card painted at once
+with the SICAR dates and without jumping, 1B.8 report engine wake with tab and server locks) lives in
+scripts/f1b_parte2_checks.py (+ scripts/f1b_parte2_harness.js), run from main() with its own positive controls.
+
 Run: PYTHONPATH=. python scripts/f1b_tela_gate.py   (needs node on PATH; re-runs itself with the
 portal env). The real screens (hover, calls per source measured in a browser, button position at
 375/768/1440 and 1440x900) are in scripts/f1b_tela_smoke.py (local, needs SICAR: not in CI).
@@ -381,6 +385,14 @@ def main() -> int:
         mres = run_harness(parts["f1b"], parts["f2"], parts["integrity"])
         got = judge_harness(mres)
         check(any(reason[label] in x for x in got), f"positive control catches: {label} (for its reason: {reason[label]!r}; got {got[:2]})")
+
+    # ------------------------------------------------------------ part 2: 1B.6, 1B.7, 1B.8
+    try:
+        import f1b_parte2_checks
+
+        f1b_parte2_checks.run_all(html, check)
+    except Exception as exc:  # a part-2 rule that cannot run is a failure, never a skip
+        check(False, f"F1B part 2 checks could not run: {type(exc).__name__}: {exc}")
 
     print("F1B_TELA_GATE=" + ("PASS" if not FAILURES else "FAIL " + json.dumps(FAILURES, ensure_ascii=False)), flush=True)
     return 0 if not FAILURES else 1

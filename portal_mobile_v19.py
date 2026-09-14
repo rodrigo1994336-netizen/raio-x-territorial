@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 from shapely.geometry import Point, mapping, shape
 
 import portal_v8
@@ -46,17 +46,18 @@ async def _resolve_ufs(lat:float,lon:float)->list[str]:
     raise HTTPException(status_code=422,detail='Não foi possível determinar nenhum estado candidato para este ponto no Brasil.')
 
 
-async def viewport_v19(west:float,south:float,east:float,north:float,uf:str|None=None,limit:int=50):
+async def viewport_v19(west:float,south:float,east:float,north:float,uf:str|None=None,limit:int=50,request:Request=None):
     if not (-180<=west<east<=180 and -90<=south<north<=90):
         raise HTTPException(status_code=422,detail='Área do mapa inválida.')
     span=max(east-west,north-south)
     if span>1.5:raise HTTPException(status_code=422,detail='Aproxime o mapa para carregar os imóveis rurais.')
     center_lat=(south+north)/2;center_lon=(west+east)/2
-    ufs=[uf.upper()] if uf else await _resolve_ufs(center_lat,center_lon)
+    local=None if uf else _local_ufs(west,south,east,north)
+    ufs=[uf.upper()] if uf else (local if local else await _resolve_ufs(center_lat,center_lon))
     # Near borders query several plausible states. Stop early after useful data,
     # but never depend on reverse geocoding to get to SICAR.
     async def one(code):
-        try:return code,await sicar._fetch_sicar_bbox(west,south,east,north,code,limit),None
+        try:return code,await sicar._fetch_sicar_bbox(request,west,south,east,north,code,limit),None
         except Exception as exc:return code,None,exc
     vals=await asyncio.gather(*(one(x) for x in ufs[:5]))
     features=[];used=[];errors=[]
@@ -86,25 +87,59 @@ async def viewport_v19(west:float,south:float,east:float,north:float,uf:str|None
     return {'type':'FeatureCollection','features':out,'uf':used[0] if len(used)==1 else None,'ufs_consultadas':used,'source':'SICAR/WFS público · UF resiliente sem dependência obrigatória de geocodificador','truncated':len(features)>len(out),'fallback_uf':not bool(uf)}
 
 
-async def resolve_v19(lat:float,lon:float):
+def _local_ufs(west:float,south:float,east:float,north:float)->list[str]|None:
+    """F1B 1B.6: every UF whose IBGE border is within the measured ambiguity band of the box (uf_locator_br).
+
+    None only when the embedded mesh cannot be read (then the legacy resolver is the fallback). An empty
+    list means the box is outside Brazil: there is no SICAR layer to ask.
+    """
+    try:
+        import uf_locator_br
+        return uf_locator_br.ufs_for_bbox(west,south,east,north)
+    except Exception:
+        return None
+
+
+RESOLVE_EPS=.0018
+
+
+async def resolve_v19(lat:float,lon:float,request:Request=None):
+    """Property at a point. F1B 1B.6: the UF comes from the IBGE borders, not Nominatim.
+
+    A point on a state border asks the SICAR layer of EVERY UF within the band, together, and returns the
+    property whose polygon contains the point (the UF that covers the point first). Absence is only
+    declared when every candidate UF answered: a UF that did not answer makes it a pending consultation
+    (502), never "no property here" (tentar não é responder).
+    """
     if not (-90<=lat<=90 and -180<=lon<=180):raise HTTPException(status_code=422,detail='Coordenadas inválidas.')
-    ufs=await _resolve_ufs(lat,lon);point=Point(float(lon),float(lat));candidates=[];errors=[]
-    eps=.0018
-    for code in ufs[:5]:
-        try:
-            fetched=await sicar._fetch_sicar_bbox(lon-eps,lat-eps,lon+eps,lat+eps,code,30)
-            for f in fetched.get('data',{}).get('features') or []:
-                try:
-                    g=shape(f.get('geometry'))
-                    if g.contains(point) or g.touches(point):candidates.append((code,f))
-                except Exception:continue
-            if candidates:break
-        except Exception as exc:errors.append(f'{code}:{type(exc).__name__}')
+    eps=RESOLVE_EPS
+    local=_local_ufs(lon-eps,lat-eps,lon+eps,lat+eps)
+    ufs=local if local is not None else await _resolve_ufs(lat,lon)
+    if not ufs:raise HTTPException(status_code=404,detail='Nenhum imóvel do SICAR foi localizado exatamente neste ponto.')
+    point=Point(float(lon),float(lat))
+    async def one(code):
+        try:return code,await sicar._fetch_sicar_bbox(request,lon-eps,lat-eps,lon+eps,lat+eps,code,30),None
+        except HTTPException as exc:
+            if exc.status_code==499:raise
+            return code,None,exc
+        except Exception as exc:return code,None,exc
+    vals=await asyncio.gather(*(one(code) for code in ufs[:5]))
+    candidates=[];errors=[];asked=[]
+    for code,fetched,err in vals:
+        if err is not None:
+            errors.append(f'{code}:{type(err).__name__}')
+            continue
+        asked.append(code)
+        for f in (fetched or {}).get('data',{}).get('features') or []:
+            try:
+                g=shape(f.get('geometry'))
+                if g.contains(point) or g.touches(point):candidates.append((code,f))
+            except Exception:continue
     if not candidates:
-        if errors and len(errors)>=len(ufs):raise HTTPException(status_code=502,detail='SICAR indisponível para os estados candidatos: '+', '.join(errors))
+        if errors:raise HTTPException(status_code=502,detail='SICAR indisponível para os estados candidatos: '+', '.join(errors))
         raise HTTPException(status_code=404,detail='Nenhum imóvel do SICAR foi localizado exatamente neste ponto.')
     code,chosen=candidates[0];props=chosen.get('properties') or {}
-    return {'ok':True,'source':'SICAR/WFS público · resolução resiliente','uf':props.get('uf') or code,'property':{'car_code':props.get('cod_imovel'),'municipality':props.get('municipio'),'uf':props.get('uf') or code,'area_ha':props.get('area'),'status':props.get('status_imovel'),'condition':props.get('condicao'),'type':props.get('tipo_imovel'),'fiscal_modules':props.get('m_fiscal')},'geometry':chosen.get('geometry'),'candidate_count':len(candidates),'exact_count':len(candidates)}
+    return {'ok':True,'source':'SICAR/WFS público · UF pelos limites do IBGE','uf':props.get('uf') or code,'ufs_consultadas':asked,'property':{'car_code':props.get('cod_imovel'),'municipality':props.get('municipio'),'uf':props.get('uf') or code,'area_ha':props.get('area'),'status':props.get('status_imovel'),'condition':props.get('condicao'),'type':props.get('tipo_imovel'),'fiscal_modules':props.get('m_fiscal'),'created_at':props.get('dat_criacao'),'updated_at':props.get('data_atualizacao')},'geometry':chosen.get('geometry'),'candidate_count':len(candidates),'exact_count':len(candidates)}
 
 # Replace map routes after all previous SICAR compatibility patches.
 app.router.routes=[r for r in app.router.routes if getattr(r,'path',None) not in {'/v1/live/sicar/viewport','/v1/live/resolve'}]

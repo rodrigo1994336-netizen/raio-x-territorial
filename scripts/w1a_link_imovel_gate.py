@@ -140,9 +140,10 @@ def check_final_html(html: str) -> str:
     assert "textContent=text" in block and "innerHTML" not in block, "notices are text, and paint never rewrites nodes"
 
     # The base loadCar mapping W1a mirrors (search and link must build the same property).
-    assert "showProperty({car_code:p.cod_imovel,municipality:p.municipio,uf:p.uf,area_ha:p.area,status:p.status_imovel,condition:p.condicao,type:p.tipo_imovel,fiscal_modules:p.m_fiscal},c.geometry)" in html, \
+    # F1B 1B.7: both carry the SICAR creation/update dates, so the card paints them at once.
+    assert "showProperty({car_code:p.cod_imovel,municipality:p.municipio,uf:p.uf,area_ha:p.area,status:p.status_imovel,condition:p.condicao,type:p.tipo_imovel,fiscal_modules:p.m_fiscal,created_at:p.dat_criacao,updated_at:p.data_atualizacao},c.geometry)" in html, \
         "base loadCar mapping changed: update openFromLink in portal_share_link_w1a.py"
-    assert "{car_code:code,municipality:p.municipio,uf:p.uf,area_ha:p.area,status:p.status_imovel,condition:p.condicao,type:p.tipo_imovel,fiscal_modules:p.m_fiscal}" in block
+    assert "{car_code:code,municipality:p.municipio,uf:p.uf,area_ha:p.area,status:p.status_imovel,condition:p.condicao,type:p.tipo_imovel,fiscal_modules:p.m_fiscal,created_at:p.dat_criacao,updated_at:p.data_atualizacao}" in block
 
     # Touch targets: every W1a control is >= 44 px on every screen, without growing the card.
     css = html[html.index('<style id="rxShareLinkW1a">'): html.index("</style>", html.index('<style id="rxShareLinkW1a">'))]

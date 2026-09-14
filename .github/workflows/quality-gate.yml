@@ -61,7 +61,7 @@ jobs:
         env:
           RX_RELEASE: V8_OPERATIONAL_ZERO_COST
         run: PYTHONPATH=. python scripts/w1a_link_imovel_gate.py
-      - name: F1B screen gate (no tooltip over the map, full analysis visible in the panel, one request per source, sticky 44 px actions; rules and positive controls; needs Node)
+      - name: F1B screen gate (no tooltip over the map, full analysis visible in the panel, one request per source, sticky 44 px actions; part 2 - UF by IBGE borders, municipality search without Nominatim, card with SICAR dates and no jump, report engine wake with tab and server locks; rules and positive controls; needs Node)
         env:
           RX_RELEASE: V8_OPERATIONAL_ZERO_COST
         run: PYTHONPATH=. python scripts/f1b_tela_gate.py

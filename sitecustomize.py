@@ -98,6 +98,7 @@ def _load_portal_deferred():
                 import portal_identity_title_guard_v49  # noqa: F401
                 import portal_share_link_w1a  # noqa: F401
                 import portal_full_reading_f1b  # noqa: F401  (F1B: análise completa visível no painel)
+                import portal_report_wake_f1b  # noqa: F401  (F1B 1B.8: acorda o motor do relatório ao abrir o cartão)
                 import portal_pmtiles_consumer_v48  # noqa: F401
 
                 import portal_resource_guard_v27  # noqa: F401
@@ -150,6 +151,13 @@ def _load_portal_deferred():
                     raise RuntimeError('w1a_share_link_not_loaded')
                 if 'RX_FULL_READING_F1B' not in portal_v8.PORTAL_HTML:
                     raise RuntimeError('f1b_full_reading_not_loaded')
+                if 'RX_REPORT_WAKE_F1B' not in portal_v8.PORTAL_HTML or '/v1/live/report-engine/wake' not in ready:
+                    raise RuntimeError('f1b_report_wake_not_loaded')
+                try:  # F1B 1B.6: warm the IBGE lists in this thread, never inside a request
+                    import municipios_ibge_br
+                    municipios_ibge_br._load()
+                except Exception as exc:  # the search answers 503 'indisponível', never 'not found'
+                    print(f'RX_CITY_SEARCH_IBGE=unavailable:{type(exc).__name__}', flush=True)
                 if str(portal_v8.APP_PORTAL_VERSION) != '0.47.0-v47-search-name-truth-fill':
                     raise RuntimeError('v46_release_identity_not_loaded')
                 if 'RX_MAP_STABILITY_V43_5' not in portal_v8.PORTAL_HTML:

@@ -130,7 +130,12 @@ def per_source_contract(traffic: Traffic, label: str, failures: list) -> dict:
         check(len(calls) <= limit, f"{label}:{src}:asked_{len(calls)}x_limit_{limit}", failures)
     report["quick"] = {"calls": len(by.get("quick", []))}
     report["progressive-status"] = {"calls": len(by.get("progressive-status", []))}
-    check(len(by.get("quick", [])) == 1, f"{label}:quick:asked_{len(by.get('quick', []))}x", failures)
+    # One /v1/live/quick per property. The reading's single automatic retry is legitimate only when the engine
+    # did not answer within its wait (DEEP_WAIT_MS=110 s in portal_full_reading_f1b.py): a second call earlier
+    # than that, or a third call, is a duplicate. (Measured 14/09: engine slower than 110 s -> retry at +116 s.)
+    quick = by.get("quick", [])
+    retry_ok = len(quick) == 2 and quick[1]["t"] - quick[0]["t"] >= 110
+    check(len(quick) == 1 or retry_ok, f"{label}:quick:asked_{len(quick)}x", failures)
     check(not traffic.legacy, f"{label}:legacy_hidden_calls:{traffic.legacy}", failures)
     return report
 

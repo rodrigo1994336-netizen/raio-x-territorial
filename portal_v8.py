@@ -36,7 +36,7 @@ EXTRA_JS = r'''
   const qs=(s)=>document.querySelector(s);
   function rxMap(){try{return (typeof map!=='undefined'&&map&&map.getBounds)?map:null}catch(e){return null}}
   function setMapState(t){let el=qs('#rxMapState');if(!el){el=document.createElement('div');el.id='rxMapState';el.className='rx-map-state';qs('.main')?.appendChild(el)}if(el)el.textContent=t||''}
-  function propertyFromFeature(f){const p=f?.properties||{};return {car_code:p.cod_imovel||p.car_code||'',municipality:p.municipio||p.municipality||'',uf:p.uf||rxLastUf||'',area_ha:p.area??p.area_ha,status:p.status_imovel||p.status||'',condition:p.condicao||p.condition||'',type:p.tipo_imovel||p.type||'',fiscal_modules:p.m_fiscal||p.fiscal_modules}}
+  function propertyFromFeature(f){const p=f?.properties||{};return {car_code:p.cod_imovel||p.car_code||'',municipality:p.municipio||p.municipality||'',uf:p.uf||rxLastUf||'',area_ha:p.area??p.area_ha,status:p.status_imovel||p.status||'',condition:p.condicao||p.condition||'',type:p.tipo_imovel||p.type||'',fiscal_modules:p.m_fiscal||p.fiscal_modules,created_at:p.dat_criacao||p.created_at||'',updated_at:p.data_atualizacao||p.updated_at||''}}
   function clearCityResults(){qs('#rxCityResults')?.remove()}
   function cityResults(items){clearCityResults();const host=document.createElement('div');host.id='rxCityResults';host.className='rx-city-results';(items||[]).forEach(x=>{const b=document.createElement('button');b.type='button';b.innerHTML=`<b>${x.name||x.display_name||'Município'}</b><small>${x.state||''}${x.uf?' · '+x.uf:''}</small>`;b.onclick=()=>{clearCityResults();rxLastUf=x.uf||null;const m=rxMap();if(m){m.setView([Number(x.lat),Number(x.lon)],13);setTimeout(()=>loadVisibleParcels(true),350)}qs('#q').value=''};host.appendChild(b)});if(host.childNodes.length)document.body.appendChild(host)}
   async function searchCity(q){setMapState('Localizando município…');try{const r=await fetch(`/v1/live/cities?q=${encodeURIComponent(q)}`);const d=await r.json();if(!r.ok)throw new Error(d.detail||'Município não localizado');if(!d.items?.length)throw new Error('Município não localizado');cityResults(d.items);if(d.items.length===1){const x=d.items[0];rxLastUf=x.uf||null;const m=rxMap();if(m){m.setView([Number(x.lat),Number(x.lon)],13);clearCityResults();setTimeout(()=>loadVisibleParcels(true),350)}}setMapState('Escolha o município ou aproxime o mapa para ver os imóveis do CAR.')}catch(e){setMapState(e.message);if(typeof toast==='function')toast(e.message)}}
@@ -66,13 +66,6 @@ def _db_binding_names():
     return [k for k in keys if bool(os.getenv(k))]
 
 
-def _uf_from_address(address: dict) -> str | None:
-    iso=address.get('ISO3166-2-lvl4') or address.get('ISO3166-2-lvl6') or ''
-    if isinstance(iso,str) and iso.upper().startswith('BR-'):
-        return iso[-2:].upper()
-    return base.STATE_TO_UF.get(base._norm(address.get('state')))
-
-
 print('RX_PERSISTENCE_BINDING=' + ('yes' if _db_binding_names() else 'no'), flush=True)
 print('RX_POSTGRES_DRIVER=' + str(_postgres_driver_available() or 'none'), flush=True)
 
@@ -89,24 +82,18 @@ def portal_head_v8():
 
 @app.get('/v1/live/cities')
 async def live_city_search(q: str):
-    text=(q or '').strip()
+    text=(q or '').strip()[:120]  # the longest municipality name has 32 characters
     if len(text)<2:
         raise HTTPException(status_code=422,detail='Digite pelo menos 2 caracteres do município.')
-    params={'q':f'{text}, Brasil','format':'jsonv2','countrycodes':'br','addressdetails':'1','limit':'6','accept-language':'pt-BR'}
-    headers={'User-Agent':'Raio-X-Territorial/0.19 (city-search)'}
+    # F1B 1B.6: the IBGE municipality list lives in the server (municipios_ibge_br); Nominatim is no
+    # longer asked. Same item contract as before (name, display_name, state, uf, lat, lon, boundingbox).
     try:
-        async with httpx.AsyncClient(timeout=18,follow_redirects=True,headers=headers) as client:
-            r=await client.get('https://nominatim.openstreetmap.org/search',params=params)
-            r.raise_for_status(); data=r.json()
-    except Exception as exc:
-        raise HTTPException(status_code=502,detail=f'Busca de município indisponível: {type(exc).__name__}')
-    items=[];seen=set()
-    for x in data:
-        a=x.get('address') or {}; name=a.get('city') or a.get('town') or a.get('municipality') or a.get('village') or x.get('name') or x.get('display_name','').split(',')[0]
-        uf=_uf_from_address(a); key=(name,uf)
-        if not name or key in seen: continue
-        seen.add(key); items.append({'name':name,'display_name':x.get('display_name'),'state':a.get('state'),'uf':uf,'lat':float(x['lat']),'lon':float(x['lon']),'boundingbox':x.get('boundingbox')})
-    return {'ok':True,'items':items[:6]}
+        import municipios_ibge_br
+        items=[municipios_ibge_br.city_item(x) for x in municipios_ibge_br.search(text,limit=6)]
+    except Exception as exc:  # a missing/broken list is 'unavailable', never 'not found'
+        print(f'RX_CITY_SEARCH_IBGE=failed:{type(exc).__name__}',flush=True)
+        raise HTTPException(status_code=503,detail='Busca de município indisponível no momento.')
+    return {'ok':True,'items':items,'source':'IBGE — lista oficial de municípios'}
 
 
 @app.get('/v1/live/sicar/viewport')
