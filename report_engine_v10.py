@@ -16,6 +16,9 @@ import threading
 
 import report_engine_v6 as v6
 import report_engine_v9 as v9
+from report_engine_v5 import _esc
+from reportlab.lib.enums import TA_LEFT
+from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import mm
 from reportlab.platypus import PageBreak, Paragraph, Spacer
 
@@ -87,8 +90,10 @@ def credits_blocks(payload):
     credits = [c for c in payload.get("sources_page_credits") or [] if isinstance(c, dict) and c.get("text")]
     if not credits:
         return []
+    # Alinhado à esquerda: texto justificado com endereço de licença abria buracos na linha.
+    style = ParagraphStyle("rx_f2_credit", parent=v6.S["small"], alignment=TA_LEFT)
     return [Paragraph("Créditos das bases combinadas neste relatório", v6.S["h2"])] + [
-        _para(f"{c['text']} ({c['license_url']})." if c.get("license_url") else f"{c['text']}.", "small") for c in credits
+        Paragraph(_esc(f"{c['text']} ({c['license_url']})." if c.get("license_url") else f"{c['text']}."), style) for c in credits
     ] + [Spacer(1, 4 * mm)]
 
 
