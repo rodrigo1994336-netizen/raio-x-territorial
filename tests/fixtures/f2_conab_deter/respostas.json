@@ -1,0 +1,718 @@
+{
+ "capturado_em_utc": "2026-09-14T00:12:58+00:00",
+ "car": "MG-3120904-DFB380BECD7A4323AD8AA68FA14D011F",
+ "conab_last_modified": "Fri, 11 Sep 2026 12:00:01 GMT",
+ "conab_linhas_escolhidas": {
+  "37.9683.0001-3": "empresario_individual",
+  "37.9684.0001-8": "empresario_individual",
+  "54.0000.0119-7": "pessoa_fisica",
+  "54.0000.0121-9": "pessoa_fisica",
+  "54.0000.0336-0": "ate_80km_de_curvelo",
+  "54.0000.0503-6": "ponto_fora_do_municipio_declarado",
+  "54.6096.0001-9": "ate_80km_de_curvelo",
+  "54.6096.0002-7": "ate_80km_de_curvelo",
+  "54.7645.0001-4": "ate_80km_de_curvelo",
+  "69.0000.0034-2": "coordenada_fora_do_brasil",
+  "56.A873.0021-1": "cda_duplicado",
+  "54.0472.0006-4": "ate_80km_de_curvelo",
+  "79.G955.0001-1": "capacidade_zero"
+ },
+ "conab_mal_localizado": {
+  "cda": "54.0000.0503-6",
+  "municipio_declarado": "3106200"
+ },
+ "lgpd": "e-mail e endereço de todas as linhas e nomes fora dos dois armazéns da prova trocados por marcadores fictícios",
+ "respostas": [
+  {
+   "cenario": "ibge_malha_bh",
+   "url": "https://servicodados.ibge.gov.br/api/v3/malhas/municipios/3106200",
+   "params": {
+    "formato": "application/vnd.geo+json",
+    "qualidade": "intermediaria"
+   },
+   "headers_enviados": {},
+   "status": 200,
+   "headers": {
+    "content-type": "application/vnd.geo+json; charset=utf-8",
+    "content-encoding": "gzip"
+   },
+   "arquivo": "respostas/ibge_malha_bh_5ad366a562.json",
+   "ms": 244
+  },
+  {
+   "cenario": "conab_download",
+   "url": "https://portaldeinformacoes.conab.gov.br/downloads/arquivos/ArmazensCadastrados.txt",
+   "params": {},
+   "headers_enviados": {},
+   "status": 200,
+   "headers": {
+    "etag": "\"7534e8ce1e57f689642d34311e5ae147-gzip\"",
+    "last-modified": "Fri, 11 Sep 2026 12:00:01 GMT",
+    "content-type": "text/plain; charset=utf-8",
+    "content-encoding": "gzip"
+   },
+   "arquivo": "respostas/conab_download_8b7e0f301b.txt.gz",
+   "ms": 732
+  },
+  {
+   "cenario": "conab_condicional",
+   "url": "https://portaldeinformacoes.conab.gov.br/downloads/arquivos/ArmazensCadastrados.txt",
+   "params": {},
+   "headers_enviados": {
+    "If-None-Match": "\"7534e8ce1e57f689642d34311e5ae147\"",
+    "If-Modified-Since": "Fri, 11 Sep 2026 12:00:01 GMT"
+   },
+   "status": 304,
+   "headers": {
+    "etag": "\"7534e8ce1e57f689642d34311e5ae147\""
+   },
+   "arquivo": "respostas/conab_condicional_5f15b4ffd4.txt.gz",
+   "ms": 170
+  },
+  {
+   "cenario": "ibge_malha_curvelo",
+   "url": "https://servicodados.ibge.gov.br/api/v3/malhas/municipios/3120904",
+   "params": {
+    "formato": "application/vnd.geo+json",
+    "qualidade": "intermediaria"
+   },
+   "headers_enviados": {},
+   "status": 200,
+   "headers": {
+    "content-type": "application/vnd.geo+json; charset=utf-8",
+    "content-encoding": "gzip"
+   },
+   "arquivo": "respostas/ibge_malha_curvelo_f71ac73d29.json",
+   "ms": 270
+  },
+  {
+   "cenario": "deter_curvelo",
+   "url": "https://terrabrasilis.dpi.inpe.br/geoserver/prodes-legal-amz/ows",
+   "params": {
+    "service": "WFS",
+    "version": "2.0.0",
+    "request": "GetFeature",
+    "typeNames": "prodes-legal-amz:brazilian_legal_amazon",
+    "resultType": "hits",
+    "CQL_FILTER": "INTERSECTS(geom,SRID=4674;POLYGON ((-44.18335255 -18.89374922, -44.18422244 -18.89211885, -44.18434439 -18.89188334, -44.18447638 -18.89156552, -44.18457306 -18.89115169, -44.18122273 -18.8893647, -44.1808485 -18.88918022, -44.17968008 -18.88876769, -44.1791532 -18.89089278, -44.1823879 -18.89343326, -44.18335255 -18.89374922)))"
+   },
+   "headers_enviados": {},
+   "status": 200,
+   "headers": {
+    "content-type": "text/xml",
+    "content-encoding": "gzip"
+   },
+   "arquivo": "respostas/deter_curvelo_a32bd3de93.xml",
+   "ms": 531
+  },
+  {
+   "cenario": "deter_curvelo",
+   "url": "https://terrabrasilis.dpi.inpe.br/geoserver/prodes-cerrado-nb/ows",
+   "params": {
+    "service": "WFS",
+    "version": "2.0.0",
+    "request": "GetFeature",
+    "typeNames": "prodes-cerrado-nb:biome_border",
+    "resultType": "hits",
+    "CQL_FILTER": "INTERSECTS(geom,SRID=4674;POLYGON ((-44.18335255 -18.89374922, -44.18422244 -18.89211885, -44.18434439 -18.89188334, -44.18447638 -18.89156552, -44.18457306 -18.89115169, -44.18122273 -18.8893647, -44.1808485 -18.88918022, -44.17968008 -18.88876769, -44.1791532 -18.89089278, -44.1823879 -18.89343326, -44.18335255 -18.89374922)))"
+   },
+   "headers_enviados": {},
+   "status": 200,
+   "headers": {
+    "content-type": "text/xml",
+    "content-encoding": "gzip"
+   },
+   "arquivo": "respostas/deter_curvelo_73f27dc762.xml",
+   "ms": 816
+  },
+  {
+   "cenario": "deter_curvelo",
+   "url": "https://terrabrasilis.dpi.inpe.br/geoserver/prodes-cerrado-nb/ows",
+   "params": {
+    "service": "WFS",
+    "version": "2.0.0",
+    "request": "GetFeature",
+    "typeNames": "prodes-cerrado-nb:biome_border",
+    "resultType": "hits",
+    "CQL_FILTER": "CONTAINS(geom,SRID=4674;POLYGON ((-44.18335255 -18.89374922, -44.18422244 -18.89211885, -44.18434439 -18.89188334, -44.18447638 -18.89156552, -44.18457306 -18.89115169, -44.18122273 -18.8893647, -44.1808485 -18.88918022, -44.17968008 -18.88876769, -44.1791532 -18.89089278, -44.1823879 -18.89343326, -44.18335255 -18.89374922)))"
+   },
+   "headers_enviados": {},
+   "status": 200,
+   "headers": {
+    "content-type": "text/xml",
+    "content-encoding": "gzip"
+   },
+   "arquivo": "respostas/deter_curvelo_1fcf251918.xml",
+   "ms": 473
+  },
+  {
+   "cenario": "deter_curvelo",
+   "url": "https://terrabrasilis.dpi.inpe.br/geoserver/deter-cerrado-nb/ows",
+   "params": {
+    "service": "WFS",
+    "version": "2.0.0",
+    "request": "GetFeature",
+    "typeNames": "deter-cerrado-nb:deter_cerrado",
+    "srsName": "EPSG:4674",
+    "bbox": "-44.18457306,-18.89374922,-44.1791532,-18.88876769,EPSG:4674",
+    "outputFormat": "csv",
+    "count": "2000"
+   },
+   "headers_enviados": {},
+   "status": 200,
+   "headers": {
+    "content-type": "text/csv;charset=UTF-8",
+    "content-encoding": "gzip"
+   },
+   "arquivo": "respostas/deter_curvelo_e0e06814b5.csv",
+   "ms": 478
+  },
+  {
+   "cenario": "deter_curvelo",
+   "url": "https://terrabrasilis.dpi.inpe.br/geoserver/prodes-cerrado-nb/ows",
+   "params": {
+    "service": "WFS",
+    "version": "2.0.0",
+    "request": "GetFeature",
+    "outputFormat": "application/json",
+    "typeNames": "prodes-cerrado-nb:yearly_deforestation",
+    "count": "1",
+    "sortBy": "year D",
+    "propertyName": "year"
+   },
+   "headers_enviados": {},
+   "status": 200,
+   "headers": {
+    "content-type": "application/json;charset=UTF-8",
+    "content-encoding": "gzip"
+   },
+   "arquivo": "respostas/deter_curvelo_7513e7a055.json",
+   "ms": 1913
+  },
+  {
+   "cenario": "deter_curvelo",
+   "url": "https://terrabrasilis.dpi.inpe.br/geoserver/deter-cerrado-nb/ows",
+   "params": {
+    "service": "WFS",
+    "version": "2.0.0",
+    "request": "GetFeature",
+    "outputFormat": "application/json",
+    "typeNames": "deter-cerrado-nb:deter_cerrado",
+    "count": "1",
+    "sortBy": "view_date D",
+    "propertyName": "view_date"
+   },
+   "headers_enviados": {},
+   "status": 200,
+   "headers": {
+    "content-type": "application/json;charset=UTF-8",
+    "content-encoding": "gzip"
+   },
+   "arquivo": "respostas/deter_curvelo_7a5cc1de9c.json",
+   "ms": 2430
+  },
+  {
+   "cenario": "deter_curvelo",
+   "url": "https://terrabrasilis.dpi.inpe.br/geoserver/deter-cerrado-nb/ows",
+   "params": {
+    "service": "WFS",
+    "version": "2.0.0",
+    "request": "GetFeature",
+    "outputFormat": "application/json",
+    "typeNames": "deter-cerrado-nb:deter_cerrado",
+    "count": "1",
+    "sortBy": "view_date D",
+    "propertyName": "view_date",
+    "CQL_FILTER": "gid LIKE '%_hist'"
+   },
+   "headers_enviados": {},
+   "status": 200,
+   "headers": {
+    "content-type": "application/json;charset=UTF-8",
+    "content-encoding": "gzip"
+   },
+   "arquivo": "respostas/deter_curvelo_89b86b603c.json",
+   "ms": 1834
+  },
+  {
+   "cenario": "deter_controle_alerta_recente_cerrado",
+   "url": "https://terrabrasilis.dpi.inpe.br/geoserver/prodes-cerrado-nb/ows",
+   "params": {
+    "service": "WFS",
+    "version": "2.0.0",
+    "request": "GetFeature",
+    "typeNames": "prodes-cerrado-nb:biome_border",
+    "resultType": "hits",
+    "CQL_FILTER": "INTERSECTS(geom,SRID=4674;POLYGON ((-44.2045 -18.5455, -44.2045 -18.5385, -44.1955 -18.5385, -44.1955 -18.5455, -44.2045 -18.5455)))"
+   },
+   "headers_enviados": {},
+   "status": 200,
+   "headers": {
+    "content-type": "text/xml",
+    "content-encoding": "gzip"
+   },
+   "arquivo": "respostas/deter_controle_alerta_recente_cerrado_d0ac18ab11.xml",
+   "ms": 318
+  },
+  {
+   "cenario": "deter_controle_alerta_recente_cerrado",
+   "url": "https://terrabrasilis.dpi.inpe.br/geoserver/prodes-cerrado-nb/ows",
+   "params": {
+    "service": "WFS",
+    "version": "2.0.0",
+    "request": "GetFeature",
+    "typeNames": "prodes-cerrado-nb:biome_border",
+    "resultType": "hits",
+    "CQL_FILTER": "CONTAINS(geom,SRID=4674;POLYGON ((-44.2045 -18.5455, -44.2045 -18.5385, -44.1955 -18.5385, -44.1955 -18.5455, -44.2045 -18.5455)))"
+   },
+   "headers_enviados": {},
+   "status": 200,
+   "headers": {
+    "content-type": "text/xml",
+    "content-encoding": "gzip"
+   },
+   "arquivo": "respostas/deter_controle_alerta_recente_cerrado_66b299ca30.xml",
+   "ms": 248
+  },
+  {
+   "cenario": "deter_controle_alerta_recente_cerrado",
+   "url": "https://terrabrasilis.dpi.inpe.br/geoserver/prodes-legal-amz/ows",
+   "params": {
+    "service": "WFS",
+    "version": "2.0.0",
+    "request": "GetFeature",
+    "typeNames": "prodes-legal-amz:brazilian_legal_amazon",
+    "resultType": "hits",
+    "CQL_FILTER": "INTERSECTS(geom,SRID=4674;POLYGON ((-44.2045 -18.5455, -44.2045 -18.5385, -44.1955 -18.5385, -44.1955 -18.5455, -44.2045 -18.5455)))"
+   },
+   "headers_enviados": {},
+   "status": 200,
+   "headers": {
+    "content-type": "text/xml",
+    "content-encoding": "gzip"
+   },
+   "arquivo": "respostas/deter_controle_alerta_recente_cerrado_e15bac963c.xml",
+   "ms": 400
+  },
+  {
+   "cenario": "deter_controle_alerta_recente_cerrado",
+   "url": "https://terrabrasilis.dpi.inpe.br/geoserver/deter-cerrado-nb/ows",
+   "params": {
+    "service": "WFS",
+    "version": "2.0.0",
+    "request": "GetFeature",
+    "typeNames": "deter-cerrado-nb:deter_cerrado",
+    "srsName": "EPSG:4674",
+    "bbox": "-44.2045,-18.5455,-44.1955,-18.5385,EPSG:4674",
+    "outputFormat": "csv",
+    "count": "2000"
+   },
+   "headers_enviados": {},
+   "status": 200,
+   "headers": {
+    "content-type": "text/csv;charset=UTF-8",
+    "content-encoding": "gzip"
+   },
+   "arquivo": "respostas/deter_controle_alerta_recente_cerrado_e60a2fc681.csv",
+   "ms": 345
+  },
+  {
+   "cenario": "deter_controle_alerta_recente_cerrado",
+   "url": "https://terrabrasilis.dpi.inpe.br/geoserver/prodes-cerrado-nb/ows",
+   "params": {
+    "service": "WFS",
+    "version": "2.0.0",
+    "request": "GetFeature",
+    "outputFormat": "application/json",
+    "typeNames": "prodes-cerrado-nb:yearly_deforestation",
+    "count": "1",
+    "sortBy": "year D",
+    "propertyName": "year"
+   },
+   "headers_enviados": {},
+   "status": 200,
+   "headers": {
+    "content-type": "application/json;charset=UTF-8",
+    "content-encoding": "gzip"
+   },
+   "arquivo": "respostas/deter_controle_alerta_recente_cerrado_7513e7a055.json",
+   "ms": 1923
+  },
+  {
+   "cenario": "deter_controle_alerta_recente_cerrado",
+   "url": "https://terrabrasilis.dpi.inpe.br/geoserver/deter-cerrado-nb/ows",
+   "params": {
+    "service": "WFS",
+    "version": "2.0.0",
+    "request": "GetFeature",
+    "outputFormat": "application/json",
+    "typeNames": "deter-cerrado-nb:deter_cerrado",
+    "count": "1",
+    "sortBy": "view_date D",
+    "propertyName": "view_date"
+   },
+   "headers_enviados": {},
+   "status": 200,
+   "headers": {
+    "content-type": "application/json;charset=UTF-8",
+    "content-encoding": "gzip"
+   },
+   "arquivo": "respostas/deter_controle_alerta_recente_cerrado_7a5cc1de9c.json",
+   "ms": 2518
+  },
+  {
+   "cenario": "deter_controle_alerta_recente_cerrado",
+   "url": "https://terrabrasilis.dpi.inpe.br/geoserver/deter-cerrado-nb/ows",
+   "params": {
+    "service": "WFS",
+    "version": "2.0.0",
+    "request": "GetFeature",
+    "outputFormat": "application/json",
+    "typeNames": "deter-cerrado-nb:deter_cerrado",
+    "count": "1",
+    "sortBy": "view_date D",
+    "propertyName": "view_date",
+    "CQL_FILTER": "gid LIKE '%_hist'"
+   },
+   "headers_enviados": {},
+   "status": 200,
+   "headers": {
+    "content-type": "application/json;charset=UTF-8",
+    "content-encoding": "gzip"
+   },
+   "arquivo": "respostas/deter_controle_alerta_recente_cerrado_89b86b603c.json",
+   "ms": 1928
+  },
+  {
+   "cenario": "deter_controle_alerta_18km_cerrado",
+   "url": "https://terrabrasilis.dpi.inpe.br/geoserver/prodes-cerrado-nb/ows",
+   "params": {
+    "service": "WFS",
+    "version": "2.0.0",
+    "request": "GetFeature",
+    "typeNames": "prodes-cerrado-nb:biome_border",
+    "resultType": "hits",
+    "CQL_FILTER": "INTERSECTS(geom,SRID=4674;POLYGON ((-44.36 -18.92, -44.36 -18.9, -44.34 -18.9, -44.34 -18.92, -44.36 -18.92)))"
+   },
+   "headers_enviados": {},
+   "status": 200,
+   "headers": {
+    "content-type": "text/xml",
+    "content-encoding": "gzip"
+   },
+   "arquivo": "respostas/deter_controle_alerta_18km_cerrado_ce041810c6.xml",
+   "ms": 466
+  },
+  {
+   "cenario": "deter_controle_alerta_18km_cerrado",
+   "url": "https://terrabrasilis.dpi.inpe.br/geoserver/prodes-cerrado-nb/ows",
+   "params": {
+    "service": "WFS",
+    "version": "2.0.0",
+    "request": "GetFeature",
+    "typeNames": "prodes-cerrado-nb:biome_border",
+    "resultType": "hits",
+    "CQL_FILTER": "CONTAINS(geom,SRID=4674;POLYGON ((-44.36 -18.92, -44.36 -18.9, -44.34 -18.9, -44.34 -18.92, -44.36 -18.92)))"
+   },
+   "headers_enviados": {},
+   "status": 200,
+   "headers": {
+    "content-type": "text/xml",
+    "content-encoding": "gzip"
+   },
+   "arquivo": "respostas/deter_controle_alerta_18km_cerrado_54ed4da288.xml",
+   "ms": 416
+  },
+  {
+   "cenario": "deter_controle_alerta_18km_cerrado",
+   "url": "https://terrabrasilis.dpi.inpe.br/geoserver/prodes-legal-amz/ows",
+   "params": {
+    "service": "WFS",
+    "version": "2.0.0",
+    "request": "GetFeature",
+    "typeNames": "prodes-legal-amz:brazilian_legal_amazon",
+    "resultType": "hits",
+    "CQL_FILTER": "INTERSECTS(geom,SRID=4674;POLYGON ((-44.36 -18.92, -44.36 -18.9, -44.34 -18.9, -44.34 -18.92, -44.36 -18.92)))"
+   },
+   "headers_enviados": {},
+   "status": 200,
+   "headers": {
+    "content-type": "text/xml",
+    "content-encoding": "gzip"
+   },
+   "arquivo": "respostas/deter_controle_alerta_18km_cerrado_ae7d296450.xml",
+   "ms": 966
+  },
+  {
+   "cenario": "deter_controle_alerta_18km_cerrado",
+   "url": "https://terrabrasilis.dpi.inpe.br/geoserver/deter-cerrado-nb/ows",
+   "params": {
+    "service": "WFS",
+    "version": "2.0.0",
+    "request": "GetFeature",
+    "typeNames": "deter-cerrado-nb:deter_cerrado",
+    "srsName": "EPSG:4674",
+    "bbox": "-44.36,-18.92,-44.34,-18.9,EPSG:4674",
+    "outputFormat": "csv",
+    "count": "2000"
+   },
+   "headers_enviados": {},
+   "status": 200,
+   "headers": {
+    "content-type": "text/csv;charset=UTF-8",
+    "content-encoding": "gzip"
+   },
+   "arquivo": "respostas/deter_controle_alerta_18km_cerrado_71ff116392.csv",
+   "ms": 542
+  },
+  {
+   "cenario": "deter_controle_alerta_18km_cerrado",
+   "url": "https://terrabrasilis.dpi.inpe.br/geoserver/prodes-cerrado-nb/ows",
+   "params": {
+    "service": "WFS",
+    "version": "2.0.0",
+    "request": "GetFeature",
+    "outputFormat": "application/json",
+    "typeNames": "prodes-cerrado-nb:yearly_deforestation",
+    "count": "1",
+    "sortBy": "year D",
+    "propertyName": "year"
+   },
+   "headers_enviados": {},
+   "status": 200,
+   "headers": {
+    "content-type": "application/json;charset=UTF-8",
+    "content-encoding": "gzip"
+   },
+   "arquivo": "respostas/deter_controle_alerta_18km_cerrado_7513e7a055.json",
+   "ms": 1845
+  },
+  {
+   "cenario": "deter_controle_alerta_18km_cerrado",
+   "url": "https://terrabrasilis.dpi.inpe.br/geoserver/deter-cerrado-nb/ows",
+   "params": {
+    "service": "WFS",
+    "version": "2.0.0",
+    "request": "GetFeature",
+    "outputFormat": "application/json",
+    "typeNames": "deter-cerrado-nb:deter_cerrado",
+    "count": "1",
+    "sortBy": "view_date D",
+    "propertyName": "view_date"
+   },
+   "headers_enviados": {},
+   "status": 200,
+   "headers": {
+    "content-type": "application/json;charset=UTF-8",
+    "content-encoding": "gzip"
+   },
+   "arquivo": "respostas/deter_controle_alerta_18km_cerrado_7a5cc1de9c.json",
+   "ms": 2594
+  },
+  {
+   "cenario": "deter_controle_alerta_18km_cerrado",
+   "url": "https://terrabrasilis.dpi.inpe.br/geoserver/deter-cerrado-nb/ows",
+   "params": {
+    "service": "WFS",
+    "version": "2.0.0",
+    "request": "GetFeature",
+    "outputFormat": "application/json",
+    "typeNames": "deter-cerrado-nb:deter_cerrado",
+    "count": "1",
+    "sortBy": "view_date D",
+    "propertyName": "view_date",
+    "CQL_FILTER": "gid LIKE '%_hist'"
+   },
+   "headers_enviados": {},
+   "status": 200,
+   "headers": {
+    "content-type": "application/json;charset=UTF-8",
+    "content-encoding": "gzip"
+   },
+   "arquivo": "respostas/deter_controle_alerta_18km_cerrado_89b86b603c.json",
+   "ms": 1866
+  },
+  {
+   "cenario": "deter_controle_alerta_amazonia",
+   "url": "https://terrabrasilis.dpi.inpe.br/geoserver/prodes-cerrado-nb/ows",
+   "params": {
+    "service": "WFS",
+    "version": "2.0.0",
+    "request": "GetFeature",
+    "typeNames": "prodes-cerrado-nb:biome_border",
+    "resultType": "hits",
+    "CQL_FILTER": "INTERSECTS(geom,SRID=4674;POLYGON ((-55.36 -12.05, -55.36 -12.035, -55.33 -12.035, -55.33 -12.05, -55.36 -12.05)))"
+   },
+   "headers_enviados": {},
+   "status": 200,
+   "headers": {
+    "content-type": "text/xml",
+    "content-encoding": "gzip"
+   },
+   "arquivo": "respostas/deter_controle_alerta_amazonia_cacc0851ee.xml",
+   "ms": 464
+  },
+  {
+   "cenario": "deter_controle_alerta_amazonia",
+   "url": "https://terrabrasilis.dpi.inpe.br/geoserver/prodes-legal-amz/ows",
+   "params": {
+    "service": "WFS",
+    "version": "2.0.0",
+    "request": "GetFeature",
+    "typeNames": "prodes-legal-amz:brazilian_legal_amazon",
+    "resultType": "hits",
+    "CQL_FILTER": "INTERSECTS(geom,SRID=4674;POLYGON ((-55.36 -12.05, -55.36 -12.035, -55.33 -12.035, -55.33 -12.05, -55.36 -12.05)))"
+   },
+   "headers_enviados": {},
+   "status": 200,
+   "headers": {
+    "content-type": "text/xml",
+    "content-encoding": "gzip"
+   },
+   "arquivo": "respostas/deter_controle_alerta_amazonia_8662d14c18.xml",
+   "ms": 476
+  },
+  {
+   "cenario": "deter_controle_alerta_amazonia",
+   "url": "https://terrabrasilis.dpi.inpe.br/geoserver/prodes-legal-amz/ows",
+   "params": {
+    "service": "WFS",
+    "version": "2.0.0",
+    "request": "GetFeature",
+    "typeNames": "prodes-legal-amz:brazilian_legal_amazon",
+    "resultType": "hits",
+    "CQL_FILTER": "CONTAINS(geom,SRID=4674;POLYGON ((-55.36 -12.05, -55.36 -12.035, -55.33 -12.035, -55.33 -12.05, -55.36 -12.05)))"
+   },
+   "headers_enviados": {},
+   "status": 200,
+   "headers": {
+    "content-type": "text/xml",
+    "content-encoding": "gzip"
+   },
+   "arquivo": "respostas/deter_controle_alerta_amazonia_60853ef1e9.xml",
+   "ms": 460
+  },
+  {
+   "cenario": "deter_controle_alerta_amazonia",
+   "url": "https://terrabrasilis.dpi.inpe.br/geoserver/deter-amz/ows",
+   "params": {
+    "service": "WFS",
+    "version": "2.0.0",
+    "request": "GetFeature",
+    "outputFormat": "application/json",
+    "typeNames": "deter-amz:prodes_reference"
+   },
+   "headers_enviados": {},
+   "status": 200,
+   "headers": {
+    "content-type": "application/json;charset=UTF-8",
+    "content-encoding": "gzip"
+   },
+   "arquivo": "respostas/deter_controle_alerta_amazonia_3c12420edb.json",
+   "ms": 194
+  },
+  {
+   "cenario": "deter_controle_alerta_amazonia",
+   "url": "https://terrabrasilis.dpi.inpe.br/geoserver/deter-amz/ows",
+   "params": {
+    "service": "WFS",
+    "version": "2.0.0",
+    "request": "GetFeature",
+    "outputFormat": "application/json",
+    "typeNames": "deter-amz:updated_date"
+   },
+   "headers_enviados": {},
+   "status": 200,
+   "headers": {
+    "content-type": "application/json;charset=UTF-8",
+    "content-encoding": "gzip"
+   },
+   "arquivo": "respostas/deter_controle_alerta_amazonia_03d557f271.json",
+   "ms": 505
+  },
+  {
+   "cenario": "deter_controle_alerta_amazonia",
+   "url": "https://terrabrasilis.dpi.inpe.br/geoserver/deter-amz/ows",
+   "params": {
+    "service": "WFS",
+    "version": "2.0.0",
+    "request": "GetFeature",
+    "typeNames": "deter-amz:deter_amz",
+    "srsName": "EPSG:4674",
+    "bbox": "-55.36,-12.05,-55.33,-12.035,EPSG:4674",
+    "outputFormat": "csv",
+    "count": "2000"
+   },
+   "headers_enviados": {},
+   "status": 200,
+   "headers": {
+    "content-type": "text/csv;charset=UTF-8",
+    "content-encoding": "gzip"
+   },
+   "arquivo": "respostas/deter_controle_alerta_amazonia_b9f486e7a3.csv",
+   "ms": 1500
+  },
+  {
+   "cenario": "deter_controle_fora_cobertura",
+   "url": "https://terrabrasilis.dpi.inpe.br/geoserver/prodes-cerrado-nb/ows",
+   "params": {
+    "service": "WFS",
+    "version": "2.0.0",
+    "request": "GetFeature",
+    "typeNames": "prodes-cerrado-nb:biome_border",
+    "resultType": "hits",
+    "CQL_FILTER": "INTERSECTS(geom,SRID=4674;POLYGON ((-46.64 -23.56, -46.64 -23.54, -46.62 -23.54, -46.62 -23.56, -46.64 -23.56)))"
+   },
+   "headers_enviados": {},
+   "status": 200,
+   "headers": {
+    "content-type": "text/xml",
+    "content-encoding": "gzip"
+   },
+   "arquivo": "respostas/deter_controle_fora_cobertura_2f647f717f.xml",
+   "ms": 332
+  },
+  {
+   "cenario": "deter_controle_fora_cobertura",
+   "url": "https://terrabrasilis.dpi.inpe.br/geoserver/prodes-legal-amz/ows",
+   "params": {
+    "service": "WFS",
+    "version": "2.0.0",
+    "request": "GetFeature",
+    "typeNames": "prodes-legal-amz:brazilian_legal_amazon",
+    "resultType": "hits",
+    "CQL_FILTER": "INTERSECTS(geom,SRID=4674;POLYGON ((-46.64 -23.56, -46.64 -23.54, -46.62 -23.54, -46.62 -23.56, -46.64 -23.56)))"
+   },
+   "headers_enviados": {},
+   "status": 200,
+   "headers": {
+    "content-type": "text/xml",
+    "content-encoding": "gzip"
+   },
+   "arquivo": "respostas/deter_controle_fora_cobertura_f2a802ddd3.xml",
+   "ms": 383
+  },
+  {
+   "cenario": "prodes_controle_18km",
+   "url": "https://terrabrasilis.dpi.inpe.br/geoserver/prodes-cerrado-nb/ows",
+   "params": {
+    "service": "WFS",
+    "version": "2.0.0",
+    "request": "GetFeature",
+    "typeNames": "prodes-cerrado-nb:yearly_deforestation",
+    "srsName": "EPSG:4674",
+    "bbox": "-44.36,-18.92,-44.34,-18.9,EPSG:4674",
+    "count": "2000",
+    "outputFormat": "application/json"
+   },
+   "headers_enviados": {},
+   "status": 200,
+   "headers": {
+    "content-type": "application/json;charset=UTF-8",
+    "content-encoding": "gzip"
+   },
+   "arquivo": "respostas/prodes_controle_18km_57cb168bce.json",
+   "ms": 2345
+  }
+ ]
+}
