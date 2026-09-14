@@ -97,6 +97,7 @@ def _load_portal_deferred():
                 import portal_map_v46_anchor_state  # noqa: F401
                 import portal_identity_title_guard_v49  # noqa: F401
                 import portal_share_link_w1a  # noqa: F401
+                import portal_full_reading_f1b  # noqa: F401  (F1B: análise completa visível no painel)
                 import portal_pmtiles_consumer_v48  # noqa: F401
 
                 import portal_resource_guard_v27  # noqa: F401
@@ -147,6 +148,8 @@ def _load_portal_deferred():
                     raise RuntimeError('c2_card_format_not_loaded')
                 if 'RX_SHARE_LINK_W1A' not in portal_v8.PORTAL_HTML:
                     raise RuntimeError('w1a_share_link_not_loaded')
+                if 'RX_FULL_READING_F1B' not in portal_v8.PORTAL_HTML:
+                    raise RuntimeError('f1b_full_reading_not_loaded')
                 if str(portal_v8.APP_PORTAL_VERSION) != '0.47.0-v47-search-name-truth-fill':
                     raise RuntimeError('v46_release_identity_not_loaded')
                 if 'RX_MAP_STABILITY_V43_5' not in portal_v8.PORTAL_HTML:
