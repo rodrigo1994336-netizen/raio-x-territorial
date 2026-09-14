@@ -481,7 +481,8 @@ def outorga_fonte_parcial_nunca_vira_nenhuma():
     import outorga_vazao as ov
 
     partial = run_water(igam_ok=False)
-    assert partial["ok"] is True  # comportamento herdado: basta uma camada responder
+    # H1 (source_layer_guard): a leitura só é resposta com as duas autoridades respondendo.
+    assert partial["ok"] is False and partial.get("source_state") == "pending", partial.get("source_state")
     p = ov.water_grants_payload(partial, uf="MG", today=TODAY)
     assert p["state"] == "pending" and p["count"] is None and "nenhuma" not in p["headline"].lower(), p
     capped = run_water()

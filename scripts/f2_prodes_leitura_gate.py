@@ -84,7 +84,7 @@ def run_analyze_car(fixture: dict) -> dict:
     fx = copy.deepcopy(fixture)
     saved = {k: getattr(deploy_app, k) for k in ("fetch_car_live", "query_sigef", "query_embargos", "query_anm", "query_prodes")}
 
-    async def empty(_bbox):
+    async def empty(*_args):  # H1: query_embargos também recebe a geometria do CAR
         return {"ok": True, "features": [], "feature_count": 0}
 
     async def prodes(_bbox):
@@ -441,8 +441,13 @@ def part_c() -> None:
         elif con.get("overall_risk") == "BAIXO" and pending:
             con["overall_risk"] = "NÃO CLASSIFICADO"
 
+    # H1 (deploy_app.finalize_prodes) também recalcula 'exact' na nova tentativa e é um segundo
+    # garantidor do MODERADO: aqui ele fica neutro, senão o controle passa com a regra desligada.
+    def raw_finalize(prodes, _geometry):
+        return prodes
+
     for label, mods in (("regra", {}), ("sem_regra", {"_reconcile_overall_risk": old_reconcile})):
-        with patched(report_api, _reapply_prodes_reading=no_reapply), patched(f2, **mods):
+        with patched(report_api, _reapply_prodes_reading=no_reapply), patched(deploy_app, finalize_prodes=raw_finalize), patched(f2, **mods):
             _, payload = retry_case(core_retry_fast_v29._retry_failed_core_v30)
         ok = (payload.get("conclusion") or {}).get("overall_risk") == "MODERADO"
         if label == "regra":
