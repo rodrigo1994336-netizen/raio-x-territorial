@@ -273,6 +273,49 @@ async def zero_verdict_async(key: str, *, zero: bool, answer_problem: str | None
     return await asyncio.to_thread(zero_verdict, key, zero=zero, answer_problem=answer_problem)
 
 
+def blank_counts(result: dict[str, Any]) -> dict[str, Any]:
+    """A pending result carries no number: whoever skips ``ok`` must not read a zero.
+
+    ``exact`` keeps its keys (callers index it) but every count and area becomes None
+    and the occurrence lists are emptied.
+    """
+    exact = result.get("exact")
+    if isinstance(exact, dict):
+        for key in list(exact):
+            if key.endswith(("_count", "_ha")):
+                exact[key] = None
+        for key in ("occurrences", "items"):
+            if key in exact:
+                exact[key] = []
+        exact["available"] = False
+    return result
+
+
+# Reasons a second attempt a few seconds later cannot change: the base itself is empty,
+# below its floor, stopped, or the CAR geometry is missing/unmeasurable.
+NOT_TRANSIENT_REASONS = ("stale_base", "layer_empty", "layer_below_floor", "car_geometry_missing", "geometry_error",
+                         "prodes_layer_empty", "prodes_layer_below_floor", "prodes_catalog_incomplete")
+
+
+def worth_retry(result: Any) -> bool:
+    """True when a quick second consultation can still turn this result into an answer."""
+    if not isinstance(result, dict):
+        return True
+    if result.get("ok") is True and result.get("source_state") != "partial":
+        return False
+    reason = str((result.get("layer_guard") or {}).get("reason") or "")
+    return not reason.startswith(NOT_TRANSIENT_REASONS)
+
+
+def keep_better(old: Any, new: Any) -> Any:
+    """After a retry: never trade an answer (even a partial one) for a worse reading."""
+    old = old if isinstance(old, dict) else {}
+    new = new if isinstance(new, dict) else {}
+    if old.get("ok") is True and not (new.get("ok") is True and new.get("source_state") != "partial"):
+        return old
+    return new
+
+
 def apply_verdict(result: dict[str, Any], verdict: dict[str, Any]) -> dict[str, Any]:
     """Stamp the verdict on a source result; a non-answer can never keep ok=True."""
     result["source_state"] = verdict.get("state")
@@ -281,7 +324,30 @@ def apply_verdict(result: dict[str, Any], verdict: dict[str, Any]) -> dict[str, 
     if not verdict.get("answer"):
         result["ok"] = False
         result.setdefault("detail", f"consulta_pendente:{verdict.get('reason')}")
+        blank_counts(result)
     return result
+
+
+def prodes_verdict(candidate_layers: list[str], failed_layers: list[Any], truncated_layers: list[str], has_hits: bool) -> dict[str, Any]:
+    """PRODES reading for the whole catalog.
+
+    With polygons found, the reading is an answer: complete (``answered_hit``) or,
+    when a yearly layer failed, truncated or is missing, ``partial`` — the polygons
+    found are real and must be shown, but they are not the whole count. Whether a
+    partial reading still holds an occurrence inside the property is decided by
+    ``deploy_app.finalize_prodes`` with the CAR geometry. Without polygons, the zero
+    goes through ``prodes_zero_verdict``.
+    """
+    if not has_hits:
+        return prodes_zero_verdict(candidate_layers, failed_layers, truncated_layers)
+    yearly = [name for name in candidate_layers if "yearly_deforestation" in name]
+    if failed_layers:
+        return {"answer": True, "state": "partial", "reason": "prodes_layer_failed"}
+    if truncated_layers:
+        return {"answer": True, "state": "partial", "reason": "prodes_layer_truncated"}
+    if len(yearly) < 6:
+        return {"answer": True, "state": "partial", "reason": "prodes_catalog_incomplete"}
+    return {"answer": True, "state": "answered_hit", "reason": "hits"}
 
 
 def prodes_zero_verdict(candidate_layers: list[str], failed_layers: list[Any], truncated_layers: list[str]) -> dict[str, Any]:

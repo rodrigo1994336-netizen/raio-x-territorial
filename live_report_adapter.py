@@ -146,23 +146,37 @@ def build_live_payload(result: dict[str, Any], report_id: str, generated_at: str
     eex = emb.get('exact') or {}
     aex = anm.get('exact') or {}
     prodes_rows = _extract_prodes_occurrences(result)
-    prodes_area = float(pex.get('area_unique_ha') or 0)
-    prodes_count = int(pex.get('occurrence_count') or 0)
+    # H1: a PRODES reading exists only when the result is an answer (deploy_app.finalize_prodes);
+    # a pending one has no count and never reads as "nenhuma interseção".
+    prodes_ok = prodes.get('ok') is True
+    prodes_partial = prodes_ok and prodes.get('source_state') == 'partial'
+    prodes_area = float(pex.get('area_unique_ha') or 0) if prodes_ok else 0.0
+    prodes_count = int(pex.get('occurrence_count') or 0) if prodes_ok else 0
+    prodes_rows = prodes_rows if prodes_ok else []
     emb_ok = emb.get('ok') is True
     emb_count = int(eex.get('occurrence_count') or 0) if emb_ok else 0
     emb_items = list(eex.get('items') or []) if emb_ok else []
     emb_area = float(eex.get('area_unique_ha') or 0) if emb_ok else 0.0
-    anm_count = int(aex.get('occurrence_count') or 0)
+    anm_ok = anm.get('ok') is True
+    anm_count = int(aex.get('occurrence_count') or 0) if anm_ok else 0
 
     car_status = _s(props.get('status_imovel'))
     condition = _s(props.get('condicao'))
-    sigef_count = int(sigef.get('feature_count') or 0)
+    sigef_ok = sigef.get('ok') is True
+    sigef_count = int(sigef.get('feature_count') or 0) if sigef_ok else 0
+    sigef_text = f'{sigef_count} parcela(s)' if sigef_ok else 'CONSULTA PENDENTE'
 
     # PRODES is evidence of mapped deforestation, not automatic evidence of an environmental offense.
-    if prodes_count:
+    if not prodes_ok:
+        env_risk = 'CONSULTA PENDENTE'
+        env_level = 'neutral'
+        env_text = 'Consulta pendente: o PRODES não respondeu de forma conferível nesta emissão. Isso não é tratado como ausência de desmatamento.'
+    elif prodes_count:
         env_risk = 'ATENÇÃO'
         env_level = 'attention'
         env_text = f'{prodes_count} ocorrências PRODES intersectam o imóvel; a legalidade depende de data, autorização e enquadramento aplicável.'
+        if prodes_partial:
+            env_text += ' A contagem pode aumentar: parte das camadas anuais do PRODES não respondeu nesta emissão.'
     else:
         env_risk = 'BAIXO'
         env_level = 'ok'
@@ -186,7 +200,6 @@ def build_live_payload(result: dict[str, Any], report_id: str, generated_at: str
         enforcement_risk = 'BAIXO'; enforcement_level = 'ok'
         enforcement_text = 'Nenhum embargo do IBAMA com mapa sobre o imóvel na base oficial de áreas embargadas. Embargos registrados sem mapa não aparecem nesta consulta.'
 
-    anm_ok = anm.get('ok') is True
     if not anm_ok:
         mining_risk = 'CONSULTA PENDENTE'; mining_level = 'neutral'; mining_text = 'Consulta pendente: a base da ANM não respondeu de forma conferível nesta emissão. Isso não é tratado como ausência de processo minerário.'
     elif anm_count:
@@ -194,8 +207,9 @@ def build_live_payload(result: dict[str, Any], report_id: str, generated_at: str
     else:
         mining_risk = 'BAIXO'; mining_level = 'ok'; mining_text = 'Nenhum processo ANM intersectante foi localizado na consulta atual.'
 
-    overall = 'ALTO' if emb_count else ('MODERADO' if prodes_count else 'BAIXO')
-    overall_level = 'attention' if overall == 'MODERADO' else ('critical' if overall == 'ALTO' else 'ok')
+    # A pending embargo or PRODES reading never lets the headline read BAIXO (green).
+    overall = 'ALTO' if emb_count else ('MODERADO' if prodes_count else ('PENDENTE' if not (emb_ok and prodes_ok) else 'BAIXO'))
+    overall_level = 'attention' if overall == 'MODERADO' else ('critical' if overall == 'ALTO' else ('neutral' if overall == 'PENDENTE' else 'ok'))
 
     exact_rows = []
     for r in prodes_rows[:8]:
@@ -241,15 +255,15 @@ def build_live_payload(result: dict[str, Any], report_id: str, generated_at: str
             'areas': [],
         },
         'land': {
-            'summary': f'SIGEF público: {sigef_count} parcela(s) candidata(s) no envelope do imóvel. SNCI e matrícula ainda não consultados neste ciclo.',
+            'summary': (f'SIGEF público: {sigef_count} parcela(s) candidata(s) no envelope do imóvel. ' if sigef_ok else 'SIGEF público: consulta pendente nesta emissão. ') + 'SNCI e matrícula ainda não consultados neste ciclo.',
             'risk': 'ATENÇÃO',
             'certifications': [
-                ['SIGEF', 'CONSULTADO', sigef_count, 'Espelho público SIGEF/INCRA disponibilizado no PAMGIA/IBAMA'],
+                ['SIGEF', 'CONSULTADO' if sigef_ok else 'CONSULTA PENDENTE', sigef_count if sigef_ok else '-', 'Espelho público SIGEF/INCRA disponibilizado no PAMGIA/IBAMA'],
                 ['SNCI', 'NÃO CONSULTADO', '-', 'Conector específico ainda não ativado neste ciclo'],
             ],
             'matrix': [
                 ['CAR', car_status, f'{round(area_ha,3)} ha', 'Cadastro ambiental consultado'],
-                ['SIGEF', f'{sigef_count} parcela(s)', '-', 'Não equivale a matrícula imobiliária'],
+                ['SIGEF', sigef_text, '-', 'Não equivale a matrícula imobiliária'],
                 ['Matrícula', 'NÃO CONSULTADA', '-', 'Exige fonte registral adequada'],
                 ['Detentor/titular', 'NÃO CONSULTADO', '-', 'Não inferido a partir do CAR'],
             ],
@@ -257,11 +271,13 @@ def build_live_payload(result: dict[str, Any], report_id: str, generated_at: str
         },
         'environment': {
             'prodes': {
-                'count': prodes_count,
-                'area_ha': round(prodes_area, 6),
+                'count': prodes_count if prodes_ok else 'PENDENTE',
+                'area_ha': round(prodes_area, 6) if prodes_ok else '-',
                 'status': env_risk,
                 'summary': env_text,
-                'rows': [
+                'pending': not prodes_ok,
+                'partial': prodes_partial,
+                'rows': [('Resultado', 'CONSULTA PENDENTE'), ('Fonte', 'INPE / TerraBrasilis / PRODES')] if not prodes_ok else [
                     ('Ocorrências exatas', prodes_count),
                     ('Área única intersectada', f'{round(prodes_area,6)} ha'),
                     ('Percentual do CAR', f'{_pct(prodes_area, area_ha)}%'),
@@ -273,7 +289,7 @@ def build_live_payload(result: dict[str, Any], report_id: str, generated_at: str
             'unique_problem_area_ha': 0,
             'unique_problem_area_pct': 0,
             'layer_rows': [
-                ['PRODES', f'{prodes_count} ocorrência(s) • {round(prodes_area,6)} ha', 'INPE/TerraBrasilis'],
+                ['PRODES', f'{prodes_count} ocorrência(s) • {round(prodes_area,6)} ha' if prodes_ok else 'CONSULTA PENDENTE', 'INPE/TerraBrasilis'],
                 ['Embargo IBAMA', f'{emb_count} ocorrência(s) • {round(emb_area, 4)} ha' if emb_ok else 'CONSULTA PENDENTE', 'IBAMA — áreas embargadas'],
                 ['Terra Indígena', 'NÃO CONSULTADO', 'Conector pendente'],
                 ['Unidade de Conservação', 'NÃO CONSULTADO', 'Conector pendente'],
@@ -292,9 +308,10 @@ def build_live_payload(result: dict[str, Any], report_id: str, generated_at: str
             'autos': [],
         },
         'mining': {
-            'process_count': anm_count,
-            'overlap_area_ha': round(float(aex.get('area_unique_ha') or 0), 6),
-            'rare_earth_count': 0 if anm_count == 0 else 'A CLASSIFICAR',
+            'process_count': anm_count if anm_ok else 'PENDENTE',
+            'overlap_area_ha': round(float(aex.get('area_unique_ha') or 0), 6) if anm_ok else '-',
+            'rare_earth_count': ('PENDENTE' if not anm_ok else (0 if anm_count == 0 else 'A CLASSIFICAR')),
+            'pending': not anm_ok,
             'max_maturity': '-',
             'summary': mining_text,
             'risk': mining_risk,
@@ -326,16 +343,16 @@ def build_live_payload(result: dict[str, Any], report_id: str, generated_at: str
             'cadences': [['Semanal','7 dias'],['Quinzenal','15 dias'],['Mensal','1 mês'],['Trimestral','3 meses'],['Semestral','6 meses'],['Anual','12 meses']],
             'ndvi':'NÃO CONSULTADO','ndvi_date_source':'satélite pendente','fire_inside_365d':'NÃO CONSULTADO','fire_5km_365d':'NÃO CONSULTADO','last_fire':'-'
         },
-        'quick_read': f'CAR real localizado em {_s(props.get("municipio"))}/{_s(props.get("uf"))}, com {round(area_ha,3)} ha. A consulta encontrou {prodes_count} ocorrência(s) PRODES em interseção exata, {(str(emb_count) + " embargo(s) IBAMA") if emb_ok else "embargo IBAMA com consulta pendente"} e {anm_count} processo(s) ANM. Fontes ainda não ativadas aparecem explicitamente como NÃO CONSULTADO.',
+        'quick_read': f'CAR real localizado em {_s(props.get("municipio"))}/{_s(props.get("uf"))}, com {round(area_ha,3)} ha. A consulta encontrou {(str(prodes_count) + " ocorrência(s) PRODES em interseção exata") if prodes_ok else "PRODES com consulta pendente"}, {(str(emb_count) + " embargo(s) IBAMA") if emb_ok else "embargo IBAMA com consulta pendente"} e {(str(anm_count) + " processo(s) ANM") if anm_ok else "ANM com consulta pendente"}. Fontes ainda não ativadas aparecem explicitamente como NÃO CONSULTADO.',
         'attention_points': [
-            f'PRODES: {prodes_count} ocorrência(s) históricas, totalizando {round(prodes_area,6)} ha de interseção única; isso não equivale automaticamente a infração.',
+            (f'PRODES: {prodes_count} ocorrência(s) históricas, totalizando {round(prodes_area,6)} ha de interseção única; isso não equivale automaticamente a infração.' if prodes_ok else 'PRODES: consulta pendente nesta emissão; não é tratada como ausência de desmatamento.'),
             'Matrícula, titularidade registral e SNCI ainda não foram consultados neste ciclo.',
             'Outorgas, solo, aptidão, clima, NDVI e infraestrutura ainda precisam entrar no pipeline real.',
         ],
         'executive_summary_rows': [
             ['CAR', f'{round(area_ha,3)} ha • {_s(condition)}', car_status, 'ok'],
-            ['Fundiário', f'SIGEF: {sigef_count} parcela(s); matrícula não consultada', 'ATENÇÃO', 'attention'],
-            ['Ambiental / PRODES', f'{prodes_count} ocorrência(s) • {round(prodes_area,6)} ha', env_risk, env_level],
+            ['Fundiário', f'SIGEF: {sigef_text if sigef_ok else "consulta pendente"}; matrícula não consultada', 'ATENÇÃO', 'attention'],
+            ['Ambiental / PRODES', f'{prodes_count} ocorrência(s) • {round(prodes_area,6)} ha' if prodes_ok else 'Consulta pendente', env_risk, env_level],
             ['Embargos IBAMA', enforcement_text, enforcement_risk, enforcement_level],
             ['Mineração ANM', mining_text, mining_risk, mining_level],
         ],
@@ -346,8 +363,8 @@ def build_live_payload(result: dict[str, Any], report_id: str, generated_at: str
         ],
         'compliance': [
             {'label':'CAR','text':f'Cadastro localizado • {round(area_ha,3)} ha','badge':'CONSULTADO','level':'ok'},
-            {'label':'SIGEF','text':f'{sigef_count} parcela(s) candidata(s) no envelope do imóvel','badge':'CONSULTADO','level':'ok'},
-            {'label':'PRODES','text':f'{prodes_count} ocorrência(s) exatas • {round(prodes_area,6)} ha','badge':env_risk,'level':env_level},
+            ({'label':'SIGEF','text':f'{sigef_count} parcela(s) candidata(s) no envelope do imóvel','badge':'CONSULTADO','level':'ok'} if sigef_ok else {'label':'SIGEF','text':'Consulta pendente.','badge':'CONSULTA PENDENTE','level':'neutral'}),
+            ({'label':'PRODES','text':f'{prodes_count} ocorrência(s) exatas • {round(prodes_area,6)} ha','badge':env_risk,'level':env_level} if prodes_ok else {'label':'PRODES','text':'Consulta pendente.','badge':'CONSULTA PENDENTE','level':'neutral'}),
             {'label':'Embargos IBAMA','text':enforcement_text,'badge':enforcement_risk,'level':enforcement_level},
             {'label':'ANM','text':mining_text,'badge':mining_risk,'level':mining_level},
             {'label':'Matrícula','text':'Fonte registral não consultada nesta emissão','badge':'NÃO CONSULTADO','level':'neutral'},
@@ -368,7 +385,7 @@ def build_live_payload(result: dict[str, Any], report_id: str, generated_at: str
             'main_attention':'O maior ponto de atenção desta emissão é a necessidade de interpretar corretamente as ocorrências PRODES e completar a diligência registral; nenhum desses pontos deve ser inferido além do que as fontes consultadas suportam.',
             'verdict':'Há dados reais suficientes para um Raio-X parcial, mas ainda não para uma conclusão integral sobre aquisição ou financiamento. O sistema marca explicitamente o que foi consultado e o que permanece pendente.',
             'positives':['CAR localizado com geometria real.'] + (['Nenhum embargo do IBAMA com mapa sobre o imóvel.'] if emb_ok and not emb_count else []) + (['Nenhum processo ANM intersectante localizado.'] if anm_ok and not anm_count else []),
-            'risks':[f'{prodes_count} ocorrência(s) PRODES exigem análise temporal e documental.','Matrícula e titularidade registral ainda não confirmadas.','Algumas camadas do relatório completo ainda não foram consultadas nesta emissão.'],
+            'risks':([f'{prodes_count} ocorrência(s) PRODES exigem análise temporal e documental.'] if prodes_count else []) + ['Matrícula e titularidade registral ainda não confirmadas.','Algumas camadas do relatório completo ainda não foram consultadas nesta emissão.'],
             'opportunities':['Ativar monitoramento contínuo para mudanças futuras.','Completar due diligence com fontes hídricas, produtivas e registrais.'],
             'diligence':['Obter matrícula atualizada e verificar titularidade/ônus.','Conferir cada ocorrência PRODES por data, autorização e enquadramento aplicável.','Executar outorgas, UC/TI/quilombola/assentamentos, solo, aptidão, clima e infraestrutura.','Repetir consultas críticas na data da negociação.'],
             'limit':'O Raio-X Territorial consolida fontes públicas e cálculos geoespaciais. Não substitui certidão registral, vistoria, laudo técnico, autorização ambiental ou parecer jurídico quando necessários.'

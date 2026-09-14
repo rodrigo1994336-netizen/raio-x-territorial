@@ -58,6 +58,12 @@ def _fmt_area_pct(sample):
 
 def _patch_prodes_lens(payload:dict,result:dict):
     env=payload.setdefault('environment',{});pd=env.setdefault('prodes',{})
+    if (result.get('prodes') or {}).get('ok') is not True:
+        # H1: a pending PRODES reading never becomes "0 ocorrência(s)" in the lens rows.
+        pd['lens']={'status':'CONSULTA PENDENTE','historical':None,'post_2019_07_31':None}
+        pd['rows']=[['Histórico PRODES completo','CONSULTA PENDENTE'],['Recorte pós-31/07/2019','CONSULTA PENDENTE']]+[r for r in (pd.get('rows') or []) if r and str(r[0]) not in ('Histórico PRODES completo','Recorte pós-31/07/2019','Triagem para crédito rural','Base regulatória')]
+        payload.setdefault('interpretation_rules',[]).append('Consulta PRODES pendente nunca é interpretada como zero ocorrência ou ausência de desmatamento.')
+        return payload
     props=(result.get('car') or {}).get('properties') or {}
     lens=derive_prodes_lens(result.get('prodes') or {},props.get('m_fiscal'))
     pd['lens']=lens

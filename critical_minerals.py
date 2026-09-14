@@ -45,6 +45,9 @@ def _classify_text(text: str) -> list[str]:
 
 def classify_anm(anm_result: dict[str,Any] | None) -> dict[str,Any]:
     exact = ((anm_result or {}).get('exact') or {})
+    if (anm_result or {}).get('ok') is not True:
+        # H1: ANM that did not answer has no process count (None), never 0.
+        return {'process_count':None,'critical_process_count':None,'counts':{},'occurrences':[],'pending':True}
     rows=[]; counts={k:0 for k in MINERAL_TERMS}
     for occ in exact.get('occurrences') or []:
         props=occ.get('properties') or {}
@@ -115,7 +118,7 @@ async def _get_feature_info(layer: dict[str,Any], geom) -> dict[str,Any]:
     if maxx-minx < 1e-5: minx-=5e-5; maxx+=5e-5
     if maxy-miny < 1e-5: miny-=5e-5; maxy+=5e-5
     pts=[geom.representative_point(),geom.centroid]
-    hits=[]
+    hits=[];failed=0
     async with httpx.AsyncClient(timeout=25,follow_redirects=True,headers={'User-Agent':'Raio-X-Territorial/0.18'}) as c:
         for p in pts:
             x=max(0,min(511,round((p.x-minx)/(maxx-minx)*511)))
@@ -129,8 +132,11 @@ async def _get_feature_info(layer: dict[str,Any], geom) -> dict[str,Any]:
             }
             try:
                 rr=await c.get(SGB_WMS,params=params)
-                if rr.status_code>=400: continue
+                if rr.status_code>=400:
+                    failed+=1; continue
                 data=rr.json()
+                if not isinstance(data,dict) or not isinstance(data.get('features'),list):
+                    failed+=1; continue
                 fs=data.get('features') or []
                 for f in fs:
                     props=f.get('properties') or {}
@@ -138,8 +144,9 @@ async def _get_feature_info(layer: dict[str,Any], geom) -> dict[str,Any]:
                     if key not in {x['_key'] for x in hits}:
                         hits.append({'_key':key,'properties':props})
             except Exception:
+                failed+=1
                 continue
-    return {'layer':layer['name'],'title':layer['title'],'minerals':layer['minerals'],'hit_count':len(hits),'samples':[{'properties':x['properties']} for x in hits[:10]]}
+    return {'layer':layer['name'],'title':layer['title'],'minerals':layer['minerals'],'hit_count':len(hits),'failed_points':failed,'samples':[{'properties':x['properties']} for x in hits[:10]]}
 
 
 async def query_critical_minerals(car_geometry: dict[str,Any], anm_result: dict[str,Any] | None=None) -> dict[str,Any]:
@@ -151,17 +158,20 @@ async def query_critical_minerals(car_geometry: dict[str,Any], anm_result: dict[
     # Bound work: prefer rare-earth layers, then other critical minerals.
     layers=sorted(layers,key=lambda x:(0 if 'terras_raras' in x['minerals'] else 1,x['title']))[:24]
     queryable=[x for x in layers if x.get('queryable')][:12]
-    results=[]
+    results=[];failed_layers=0
     if queryable:
         vals=await asyncio.gather(*[_get_feature_info(x,geom) for x in queryable],return_exceptions=True)
         for v in vals:
             if isinstance(v,dict): results.append(v)
+            if not isinstance(v,dict) or v.get('failed_points'): failed_layers+=1
+    # H1: "no SGB signal" is an answer only when every queried layer answered.
+    sgb_complete=err is None and bool(queryable) and failed_layers==0
     sgb_hits=[x for x in results if x.get('hit_count')]
     mineral_codes=sorted(set(sum((x.get('minerals') or [] for x in sgb_hits),[])))
     if anm.get('counts'):
         mineral_codes=sorted(set(mineral_codes)|set(anm['counts']))
     return {
-        'ok': err is None,
+        'ok': sgb_complete,
         'source':'ANM/SIGMINE + Serviço Geológico do Brasil (GeoSGB/WMS)',
         'anm':anm,
         'sgb':{
@@ -170,7 +180,9 @@ async def query_critical_minerals(car_geometry: dict[str,Any], anm_result: dict[
             'candidate_layers':layers,
             'queried_layer_count':len(queryable),
             'hit_layers':sgb_hits,
-            'detail':err,
+            'failed_layer_count':failed_layers,
+            'complete':sgb_complete,
+            'detail':err or (None if sgb_complete else ('sgb_sem_camada_consultavel' if not queryable else f'sgb_camadas_sem_resposta:{failed_layers}')),
         },
         'mineral_codes':mineral_codes,
         'rare_earth_signal': bool(anm.get('counts',{}).get('terras_raras')) or any('terras_raras' in (x.get('minerals') or []) for x in sgb_hits),

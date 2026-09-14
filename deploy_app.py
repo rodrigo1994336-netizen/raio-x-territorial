@@ -10,12 +10,13 @@ import source_layer_guard as layer_guard
 try:
     from shapely.geometry import shape, mapping
     from shapely.ops import unary_union
+    from shapely.validation import make_valid
     from pyproj import Geod
     GEO_AVAILABLE=True
     GEOD=Geod(ellps='GRS80')
 except Exception:
     GEO_AVAILABLE=False
-    shape=mapping=unary_union=GEOD=None
+    shape=mapping=unary_union=GEOD=make_valid=None
 
 app = FastAPI(title='Raio-X Territorial API', version='0.14.6-exact-live-analysis')
 app.add_middleware(CORSMiddleware, allow_origins=['*'], allow_credentials=False, allow_methods=['*'], allow_headers=['*'])
@@ -71,15 +72,21 @@ def _area_ha(g):
     try:return abs(GEOD.geometry_area_perimeter(g)[0])/10000.0
     except Exception:return None
 
+def _valid_shape(geometry):
+    """shapely geometry, repaired when invalid (a self-intersecting ring makes GEOS raise)."""
+    g=shape(geometry)
+    if not g.is_valid:g=make_valid(g)
+    return g
+
 def _exact_geojson_intersections(car_geometry,features):
     if not GEO_AVAILABLE:return {'available':False,'reason':'shapely/pyproj_not_installed'}
-    car=shape(car_geometry)
-    items=[]; intersections=[]
+    car=_valid_shape(car_geometry)
+    items=[]; intersections=[]; geometry_errors=0
     for f in features or []:
         geom=f.get('geometry')
         if not isinstance(geom,dict):continue
         try:
-            src=shape(geom)
+            src=_valid_shape(geom)
             if not car.intersects(src):continue
             inter=car.intersection(src)
             if inter.is_empty:continue
@@ -87,10 +94,40 @@ def _exact_geojson_intersections(car_geometry,features):
             if ha is None or ha<=0:continue
             intersections.append(inter)
             items.append({'id':f.get('id'),'area_intersection_ha':round(ha,6),'properties':f.get('properties') or {}})
-        except Exception:continue
+        except Exception:
+            # H1: a feature that could not be measured is not an absence; callers turn it into a pending reading.
+            geometry_errors+=1
     union=unary_union(intersections) if intersections else None
     total=_area_ha(union) if union is not None else 0.0
-    return {'available':True,'occurrence_count':len(items),'area_unique_ha':round(total or 0.0,6),'occurrences':items}
+    return {'available':True,'occurrence_count':len(items),'area_unique_ha':round(total or 0.0,6),'occurrences':items,'geometry_errors':geometry_errors}
+
+def finalize_prodes(prodes,car_geometry):
+    """Exact PRODES reading for the property, and the final answer/pending decision.
+
+    Runs wherever a PRODES result is produced (analyze_car and the core retries), so a
+    retried result never loses ``exact``. A partial catalog (a yearly layer failed or
+    truncated) is an answer only while it still holds an occurrence inside the property;
+    a feature that could not be measured makes a zero pending. A pending reading keeps
+    no count (source_layer_guard.blank_counts)."""
+    prodes=prodes if isinstance(prodes,dict) else {'ok':False,'detail':'consulta_pendente:prodes_sem_resultado'}
+    if GEO_AVAILABLE and isinstance(car_geometry,dict):
+        pfs=[]
+        for h in prodes.get('hits') or []:pfs.extend(h.get('features') or [])
+        try:prodes['exact']=_exact_geojson_intersections(car_geometry,pfs)
+        except Exception as e:prodes['exact']={'available':False,'reason':f'geometry_error:{type(e).__name__}'}
+    ex=prodes.get('exact') or {}
+    count=ex.get('occurrence_count') if ex.get('available') else None
+    if prodes.get('ok') is True:
+        reason=None
+        if count is None:reason='prodes_exact_unavailable'
+        elif not count and ex.get('geometry_errors'):reason='geometry_error'
+        elif not count and prodes.get('source_state')=='partial':reason=(prodes.get('layer_guard') or {}).get('reason') or 'prodes_partial'
+        if reason:
+            layer_guard.apply_verdict(prodes,{'answer':False,'state':'pending','reason':reason})
+            prodes['detail']=f'consulta_pendente:{reason}'
+    else:
+        layer_guard.blank_counts(prodes)
+    return prodes
 
 def fetch_car_live(car_code:str):
     uf=car_code[:2];tn=f"sicar:sicar_imoveis_{'DF' if uf=='DF' else uf.lower()}"
@@ -142,12 +179,12 @@ def _embargo_public_row(props,area_in_property_ha):
     }
 
 def _embargo_exact(car_geometry,features):
-    car=shape(car_geometry);rows=[];polys=[];occ=[]
+    car=_valid_shape(car_geometry);rows=[];polys=[];occ=[];geometry_errors=0
     for f in features or []:
         geom=f.get('geometry');props=f.get('properties') or {}
         if not isinstance(geom,dict):continue
         try:
-            src=shape(geom)
+            src=_valid_shape(geom)
             if not car.intersects(src):continue
             point=str(props.get('origem_geom') or '').lower().startswith('ponto')
             if point:
@@ -160,12 +197,14 @@ def _embargo_exact(car_geometry,features):
                 polys.append(inter)
             row=_embargo_public_row(props,round(area,4) if area is not None else None)
             rows.append(row);occ.append({'id':props.get('objectid'),'area_intersection_ha':row['area_in_property_ha'],'properties':row})
-        except Exception:continue
+        except Exception:
+            # An embargo returned for the envelope that could not be measured is never dropped silently.
+            geometry_errors+=1
     order=sorted(range(len(rows)),key=lambda i:float(rows[i].get('date_ms') or 0),reverse=True)
     rows=[rows[i] for i in order];occ=[occ[i] for i in order]
     union=unary_union(polys) if polys else None
     return {'available':True,'occurrence_count':len(rows),'area_unique_ha':round(_area_ha(union) or 0.0,4) if union is not None else 0.0,
-            'point_occurrence_count':sum(1 for x in rows if x['geometry_origin']=='ponto'),'occurrences':occ,'items':rows}
+            'point_occurrence_count':sum(1 for x in rows if x['geometry_origin']=='ponto'),'occurrences':occ,'items':rows,'geometry_errors':geometry_errors}
 
 async def query_embargos(bbox,geometry=None):
     """Official IBAMA embargoes intersecting the property (exact geometry).
@@ -196,8 +235,12 @@ async def query_embargos(bbox,geometry=None):
     out={**base,'status':status,'feature_count':len(features)}
     if problem:
         return layer_guard.apply_verdict({**out,'ok':False,'detail':f'consulta_pendente:{problem}'},{'answer':False,'state':'pending','reason':problem})
-    exact=_embargo_exact(geometry,features)
+    try:exact=_embargo_exact(geometry,features)
+    except Exception as e:
+        return layer_guard.apply_verdict({**out,'ok':False,'detail':'consulta_pendente:geometry_error'},{'answer':False,'state':'pending','reason':f'geometry_error:{type(e).__name__}'})
     out.update(ok=True,exact=exact)
+    if exact.get('geometry_errors'):
+        return layer_guard.apply_verdict({**out,'ok':False,'detail':'consulta_pendente:geometry_error'},{'answer':False,'state':'pending','reason':'geometry_error'})
     verdict=await layer_guard.zero_verdict_async('ibama_embargos',zero=exact['occurrence_count']==0)
     return layer_guard.apply_verdict(out,verdict)
 async def query_anm(bbox):
@@ -251,9 +294,11 @@ async def analyze_car(car_code:str):
     bbox=car['bbox'];sigef,emb,anm,prodes=await asyncio.gather(query_sigef(bbox),query_embargos(bbox,car.get('geometry')),query_anm(bbox),query_prodes(bbox))
     if GEO_AVAILABLE:
         anm['exact']=_exact_geojson_intersections(car['geometry'],anm.get('features') or [])
-        pfs=[]
-        for h in prodes.get('hits') or []:pfs.extend(h.get('features') or [])
-        prodes['exact']=_exact_geojson_intersections(car['geometry'],pfs)
+        if anm.get('ok') is True and anm['exact'].get('geometry_errors'):
+            layer_guard.apply_verdict(anm,{'answer':False,'state':'pending','reason':'geometry_error'})
+        elif anm.get('ok') is not True:
+            layer_guard.blank_counts(anm)
+    prodes=finalize_prodes(prodes,car.get('geometry'))
     return {'car':car,'sigef':sigef,'embargos_ibama':emb,'anm':anm,'prodes':prodes}
 
 def _exact_summary(r):

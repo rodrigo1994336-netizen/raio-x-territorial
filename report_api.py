@@ -11,7 +11,8 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, Response
 
-from deploy_app import analyze_car, fetch_car_live, _safe_summary, TEST_CAR, query_embargos, query_prodes, query_sigef
+from deploy_app import analyze_car, fetch_car_live, _safe_summary, TEST_CAR, query_embargos, query_prodes, query_sigef, finalize_prodes
+import source_layer_guard as layer_guard
 from anm_resilient import query_anm_curl_exact
 from fire_live import analyze_fire_near_property
 from live_extra_sources import query_ibama_autos
@@ -117,14 +118,15 @@ async def _retry_failed_core(result:dict):
     car=result.get('car') or {}; bbox=car.get('bbox')
     if not bbox: return result
     jobs=[]; keys=[]
-    if not (result.get('sigef') or {}).get('ok'): keys.append('sigef'); jobs.append(query_sigef(bbox))
-    if not (result.get('embargos_ibama') or {}).get('ok'): keys.append('embargos_ibama'); jobs.append(query_embargos(bbox,car.get('geometry')))
-    if not (result.get('prodes') or {}).get('ok'): keys.append('prodes'); jobs.append(query_prodes(bbox))
+    if layer_guard.worth_retry(result.get('sigef')): keys.append('sigef'); jobs.append(query_sigef(bbox))
+    if layer_guard.worth_retry(result.get('embargos_ibama')): keys.append('embargos_ibama'); jobs.append(query_embargos(bbox,car.get('geometry')))
+    if layer_guard.worth_retry(result.get('prodes')): keys.append('prodes'); jobs.append(query_prodes(bbox))
     if jobs:
         values=await asyncio.gather(*jobs,return_exceptions=True)
         for k,v in zip(keys,values):
-            if isinstance(v,Exception): result[k]={'ok':False,'detail':f'{type(v).__name__}:{v}'}
-            else: result[k]=v
+            if isinstance(v,Exception): v={'ok':False,'detail':f'{type(v).__name__}:{v}'}
+            if k=='prodes': v=finalize_prodes(v,car.get('geometry'))
+            result[k]=layer_guard.keep_better(result.get(k),v)
     if not (result.get('anm') or {}).get('ok'):
         try: result['anm']=await asyncio.to_thread(query_anm_curl_exact,car.get('geometry'),bbox)
         except Exception as e: result['anm']={'ok':False,'source':'ANM/SIGMINE','detail':f'{type(e).__name__}:{e}'}

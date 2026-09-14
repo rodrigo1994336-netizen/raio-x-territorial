@@ -197,6 +197,12 @@ _LAND_SUMMARY = (
 )
 
 
+_LAND_PENDING = (
+    "SIGEF público: consulta pendente nesta emissão. "
+    "Matrícula, ônus e titularidade dependem de certidão do cartório de registro de imóveis e não são inferidos do CAR."
+)
+
+
 def _not_activated(status) -> bool:
     text = str(status or "").upper()
     return text.startswith(("INTEGRAÇÃO PREPARADA", "INTEGRAÇÃO RESTRITA", "NÃO ATIVADA"))
@@ -266,7 +272,8 @@ def client_payload(payload: dict) -> dict:
         summary = str(land.get("summary") or "")
         if "permanecem preparadas para ativação" in summary:
             m = re.search(r"(\d+) parcela", summary)
-            land["summary"] = _LAND_SUMMARY.format(n=m.group(1) if m else "0")
+            # H1: no parcel number in the source text means the consultation is pending, never "0".
+            land["summary"] = _LAND_SUMMARY.format(n=m.group(1)) if m else _LAND_PENDING
     return out
 
 

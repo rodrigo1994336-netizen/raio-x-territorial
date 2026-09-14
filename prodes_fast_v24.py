@@ -93,11 +93,9 @@ async def query_prodes_fast(bbox):
             failed=[x for x in rows if x and x.get('error')]
             truncated=[x.get('layer') for x in rows if x and x.get('truncated')]
             # H1: "no PRODES intersection" needs every yearly layer answering, complete,
-            # from a live catalog; a failed or truncated layer makes the whole reading pending.
-            if failed or truncated or not hits:
-                verdict=await asyncio.to_thread(layer_guard.prodes_zero_verdict,[x[1] for x in layers],failed,truncated)
-            else:
-                verdict={'answer':True,'state':'answered_hit','reason':'hits'}
+            # from a live catalog. Polygons found while a layer failed or truncated stay an
+            # answer marked partial (deploy_app.finalize_prodes decides with the CAR geometry).
+            verdict=await asyncio.to_thread(layer_guard.prodes_verdict,[x[1] for x in layers],failed,truncated,bool(hits))
             total_ms=round((time.monotonic()-started)*1000)
             print(f'RX_PRODES_FAST_READY={total_ms}ms:hits={len(hits)}:failed={len(failed)}:truncated={len(truncated)}:catalog_cache={cached}:state={verdict.get("state")}',flush=True)
             return {
