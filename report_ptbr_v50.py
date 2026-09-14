@@ -191,10 +191,12 @@ def normalize_text(text):
 
 
 _PENDING_TEXT = "A fonte não respondeu nesta emissão. Isso não é tratado como ausência de ocorrência; a consulta é refeita na próxima emissão."
+# F2: a count taken from the PAMGIA mirror envelope is never the property's certification.
 _LAND_SUMMARY = (
-    "SIGEF público consultado nesta emissão: {n} parcela(s) candidata(s) no entorno do imóvel. "
+    "Certificação SIGEF e SNCI (INCRA): consulta pendente. "
     "Matrícula, ônus e titularidade dependem de certidão do cartório de registro de imóveis e não são inferidos do CAR."
 )
+_MIRROR_CERT_ROW = ["SIGEF", "CONSULTA PENDENTE", "—", "A base oficial do INCRA não respondeu nesta emissão; isso não indica ausência de certificação."]
 
 
 def _not_activated(status) -> bool:
@@ -238,10 +240,15 @@ def client_payload(payload: dict) -> dict:
             rows = land.get(key)
             if isinstance(rows, list):
                 land[key] = [r for r in rows if not (isinstance(r, (list, tuple)) and len(r) > 1 and _not_activated(r[1]))]
+        certs = land.get("certifications")
+        if isinstance(certs, list):
+            land["certifications"] = [
+                list(_MIRROR_CERT_ROW) if isinstance(r, (list, tuple)) and len(r) > 3 and str(r[0]).strip().upper() == "SIGEF" and "espelho" in str(r[3]).lower() else r
+                for r in certs
+            ]
         summary = str(land.get("summary") or "")
-        if "permanecem preparadas para ativação" in summary:
-            m = re.search(r"(\d+) parcela", summary)
-            land["summary"] = _LAND_SUMMARY.format(n=m.group(1) if m else "0")
+        if "permanecem preparadas para ativação" in summary or re.search(r"\d+ parcela\(s\) candidata", summary):
+            land["summary"] = _LAND_SUMMARY
     return out
 
 

@@ -10,6 +10,7 @@ from PIL import Image, ImageDraw, ImageFont
 from shapely.geometry import shape
 
 from report_engine import build_premium_property_report
+import incra_acervo_f2
 
 REPORT_DIR = Path('/tmp/raiox_reports')
 REPORT_DIR.mkdir(parents=True, exist_ok=True)
@@ -138,7 +139,6 @@ def build_live_payload(result: dict[str, Any], report_id: str, generated_at: str
     car = result.get('car') or {}
     props = car.get('properties') or {}
     area_ha = float(props.get('area') or 0)
-    sigef = result.get('sigef') or {}
     emb = result.get('embargos_ibama') or {}
     anm = result.get('anm') or {}
     prodes = result.get('prodes') or {}
@@ -153,7 +153,6 @@ def build_live_payload(result: dict[str, Any], report_id: str, generated_at: str
 
     car_status = _s(props.get('status_imovel'))
     condition = _s(props.get('condicao'))
-    sigef_count = int(sigef.get('feature_count') or 0)
 
     # PRODES is evidence of mapped deforestation, not automatic evidence of an environmental offense.
     if prodes_count:
@@ -222,15 +221,17 @@ def build_live_payload(result: dict[str, Any], report_id: str, generated_at: str
             'areas': [],
         },
         'land': {
-            'summary': f'SIGEF público: {sigef_count} parcela(s) candidata(s) no envelope do imóvel. SNCI e matrícula ainda não consultados neste ciclo.',
+            # F2: SIGEF/SNCI lines come from the official INCRA answer (incra_acervo_f2) at the end;
+            # the PAMGIA mirror envelope count is never shown as the property's certification.
+            'summary': 'Certificação SIGEF e SNCI (INCRA): consulta pendente.',
             'risk': 'ATENÇÃO',
             'certifications': [
-                ['SIGEF', 'CONSULTADO', sigef_count, 'Espelho público SIGEF/INCRA disponibilizado no PAMGIA/IBAMA'],
-                ['SNCI', 'NÃO CONSULTADO', '-', 'Conector específico ainda não ativado neste ciclo'],
+                ['SIGEF', 'CONSULTA PENDENTE', '—', 'A base oficial do INCRA não respondeu nesta emissão.'],
+                ['SNCI', 'CONSULTA PENDENTE', '—', 'A base oficial do INCRA não respondeu nesta emissão.'],
             ],
             'matrix': [
                 ['CAR', car_status, f'{round(area_ha,3)} ha', 'Cadastro ambiental consultado'],
-                ['SIGEF', f'{sigef_count} parcela(s)', '-', 'Não equivale a matrícula imobiliária'],
+                ['SIGEF', 'CONSULTA PENDENTE', '-', 'Não equivale a matrícula imobiliária'],
                 ['Matrícula', 'NÃO CONSULTADA', '-', 'Exige fonte registral adequada'],
                 ['Detentor/titular', 'NÃO CONSULTADO', '-', 'Não inferido a partir do CAR'],
             ],
@@ -312,7 +313,7 @@ def build_live_payload(result: dict[str, Any], report_id: str, generated_at: str
         ],
         'executive_summary_rows': [
             ['CAR', f'{round(area_ha,3)} ha • {_s(condition)}', car_status, 'ok'],
-            ['Fundiário', f'SIGEF: {sigef_count} parcela(s); matrícula não consultada', 'ATENÇÃO', 'attention'],
+            ['Fundiário', 'Certificação SIGEF/SNCI: consulta pendente; matrícula não consultada', 'ATENÇÃO', 'attention'],
             ['Ambiental / PRODES', f'{prodes_count} ocorrência(s) • {round(prodes_area,6)} ha', env_risk, env_level],
             ['Embargos IBAMA', enforcement_text, enforcement_risk, enforcement_level],
             ['Mineração ANM', mining_text, mining_risk, mining_level],
@@ -324,7 +325,7 @@ def build_live_payload(result: dict[str, Any], report_id: str, generated_at: str
         ],
         'compliance': [
             {'label':'CAR','text':f'Cadastro localizado • {round(area_ha,3)} ha','badge':'CONSULTADO','level':'ok'},
-            {'label':'SIGEF','text':f'{sigef_count} parcela(s) candidata(s) no envelope do imóvel','badge':'CONSULTADO','level':'ok'},
+            {'label':'SIGEF','text':'Certificação SIGEF: consulta pendente.','badge':'CONSULTA PENDENTE','level':'neutral'},
             {'label':'PRODES','text':f'{prodes_count} ocorrência(s) exatas • {round(prodes_area,6)} ha','badge':env_risk,'level':env_level},
             {'label':'Embargos IBAMA','text':enforcement_text,'badge':enforcement_risk,'level':enforcement_level},
             {'label':'ANM','text':mining_text,'badge':mining_risk,'level':mining_level},
@@ -353,11 +354,9 @@ def build_live_payload(result: dict[str, Any], report_id: str, generated_at: str
         },
         'sources': [
             _source_row('SICAR', car.get('ok'), 'Cadastro Ambiental Rural consultado via WFS público.'),
-            _source_row('SIGEF / INCRA (espelho PAMGIA)', sigef.get('ok'), 'Consulta pública de parcelas SIGEF disponibilizada em serviço do IBAMA/PAMGIA.'),
             _source_row('IBAMA / PAMGIA', emb.get('ok'), 'Embargos SISCOM com cruzamento espacial exato.'),
             _source_row('INPE / TerraBrasilis / PRODES', prodes.get('ok'), 'Camadas PRODES consultadas por WFS e intersectadas geometricamente com o CAR.'),
             _source_row('ANM / SIGMINE', anm.get('ok'), 'Processos minerários consultados e intersectados geometricamente.'),
-            _source_row('SNCI', None, 'Conector ainda não ativado nesta emissão.'),
             _source_row('Registro de imóveis', None, 'Matrícula e titularidade não consultadas nesta emissão.'),
         ],
         'interpretation_rules': [
@@ -368,7 +367,7 @@ def build_live_payload(result: dict[str, Any], report_id: str, generated_at: str
             'Interseções espaciais exatas são recalculadas localmente sobre a geometria do CAR.',
         ],
     }
-    return payload
+    return incra_acervo_f2.apply_to_report_payload(payload, result.get('incra_acervo'))
 
 
 def generate_live_report(result: dict[str, Any], car_code: str) -> dict[str, Any]:
