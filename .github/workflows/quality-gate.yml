@@ -52,6 +52,15 @@ jobs:
         env:
           RX_RELEASE: OFF
         run: PYTHONPATH=. python scripts/f2_prodes_leitura_gate.py
+      - name: W1a fast CAR parcels gate (UF local, cell cache, canvas loader, single-flight, aborted request is not a connection failure; rules and positive controls; needs Node)
+        env:
+          RX_RELEASE: V8_OPERATIONAL_ZERO_COST
+          RX_PORTAL_RSS_BUDGET_MB: '220'
+        run: PYTHONPATH=. python scripts/w1a_imoveis_rapidos_gate.py
+      - name: W1a property link, share menu and offline shell gate (rules and positive controls)
+        env:
+          RX_RELEASE: V8_OPERATIONAL_ZERO_COST
+        run: PYTHONPATH=. python scripts/w1a_link_imovel_gate.py
       - name: Import standalone engines
         env:
           RX_RELEASE: OFF
@@ -271,6 +280,8 @@ jobs:
           assert rss < 220, f'portal RSS too high in gate: {rss:.1f} MB'
           print('RX_CI_PORTAL_V46_READY',len(paths),'rss_mb=',round(rss,1),'mutation_observers=',observer_count,'intervals=',interval_count,'version=',portal_v8.APP_PORTAL_VERSION,'name_truth=on','cafir_inverse=on','osm_reference_only=on','two_level_map=on')
           PY
+      - name: W1a boot without reload, hashed assets with retry, honest failed page and offline shell gate (rules and positive controls; needs Node)
+        run: PYTHONPATH=. python scripts/w1a_arranque_gate.py
       - name: V41 report bounded-latency, CAR-composition and PRODES truth gate
         env:
           RX_RELEASE: OFF

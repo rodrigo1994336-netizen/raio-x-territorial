@@ -65,6 +65,15 @@ def _kml_geometry(geometry: dict) -> str:
 
 
 async def _reverse_uf(lat: float, lon: float) -> str:
+    # W1a: the embedded IBGE state mesh answers locally. Nominatim stays only for points
+    # outside Brazil or within the measured border-ambiguity band (uf_locator_br).
+    try:
+        import uf_locator_br
+        local_uf = uf_locator_br.uf_for_point(float(lat), float(lon))
+    except Exception:
+        local_uf = None
+    if local_uf:
+        return local_uf
     url = os.getenv('NOMINATIM_REVERSE_URL', 'https://nominatim.openstreetmap.org/reverse')
     params = {'format':'jsonv2','lat':str(lat),'lon':str(lon),'zoom':'8','addressdetails':'1'}
     headers = {'User-Agent':'Raio-X-Territorial/0.18 (territorial-analysis)'}
@@ -191,3 +200,10 @@ def portal_root():
 @app.get('/v1/portal/status')
 def portal_status():
     return {'ok':True,'portal_version':APP_PORTAL_VERSION,'mode':'live','cost_mode':'zero-cost-public-sources'}
+
+
+# W1a: boot page while the deferred modules load, then the final HTML with hashed,
+# immutable JS/CSS and local Leaflet. Must be installed here, before the app starts.
+import portal_boot_assets_w1a  # noqa: E402
+
+portal_boot_assets_w1a.install(app)

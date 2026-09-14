@@ -67,11 +67,21 @@ jobs:
                   await page.wait_for_function("window.rxV46Installed===true",timeout=15000)
                   await page.wait_for_function("typeof map!=='undefined' && !!map && !!map.getBounds",timeout=10000)
                   await page.evaluate("p=>map.setView([p.lat,p.lon],p.zoom,{animate:false})",DENSE)
-                  await page.wait_for_function("document.querySelectorAll('.leaflet-overlay-pane path.leaflet-interactive').length>0",timeout=25000)
-
+                  # W1a: parcels may be on a canvas renderer; wait for CAR layers, not SVG paths.
+                  await page.wait_for_function("(()=>{let n=0;map.eachLayer(l=>{if(l.feature?.properties?.cod_imovel)n++});return n>0})()",timeout=25000)
+                  await page.wait_for_timeout(600)
+                  points=await page.evaluate("""()=>{const r=document.querySelector('#map').getBoundingClientRect(),out=[];map.eachLayer(l=>{const p=l.feature&&l.feature.properties;if(out.length>=12||!p||!p.cod_imovel||!l._containsPoint||l._path)return;const c=map.latLngToContainerPoint(l.getBounds().getCenter()),x=r.left+c.x,y=r.top+c.y;if(x<r.left+30||x>r.right-60||y<r.top+60||y>r.bottom-70)return;if(!l._containsPoint(map.containerPointToLayerPoint([c.x,c.y])))return;const el=document.elementFromPoint(x,y);if(el&&el.tagName==='CANVAS')out.push({x,y})});return out}""")
                   paths=page.locator('.leaflet-overlay-pane path.leaflet-interactive')
                   opened=False
-                  for i in range(min(await paths.count(),12)):
+                  for pt in points:
+                      try:
+                          await page.mouse.click(pt['x'],pt['y'])
+                          await page.wait_for_selector('.rx46-card',state='visible',timeout=4000)
+                          opened=True
+                          break
+                      except Exception:
+                          pass
+                  for i in range(0 if opened else min(await paths.count(),12)):
                       b=await paths.nth(i).bounding_box()
                       if not b or b['width']<=4 or b['height']<=4:
                           continue
@@ -115,12 +125,16 @@ jobs:
                   empty=await page.evaluate("""()=>{
                     const mapEl=document.querySelector('#map'),r=mapEl?.getBoundingClientRect();
                     if(!r)return null;
-                    const fx=[.08,.16,.24,.32,.40,.48,.56,.64,.72,.80,.88,.94];
-                    const fy=[.12,.22,.32,.42,.52,.62,.72,.82,.90];
+                    // W1a: with every CAR drawn, bare pixels are rarer; scan a finer grid (coarse points first).
+                    const fx=[.08,.16,.24,.32,.40,.48,.56,.64,.72,.80,.88,.94,.04,.12,.20,.28,.36,.44,.52,.60,.68,.76,.84,.92];
+                    const fy=[.12,.22,.32,.42,.52,.62,.72,.82,.90,.17,.27,.37,.47,.57,.67,.77,.86];
                     for(const yy of fy)for(const xx of fx){
                       const x=r.left+r.width*xx,y=r.top+r.height*yy,el=document.elementFromPoint(x,y);
                       if(!el||!el.closest('#map'))continue;
-                      if(el.closest('.leaflet-popup,.leaflet-control,.leaflet-interactive'))continue;
+                      if(el.closest('.leaflet-popup,.leaflet-control')||(el.tagName!=='CANVAS'&&el.closest('.leaflet-interactive')))continue; // a canvas keeps .leaflet-interactive while hovered; parcels are excluded below
+                      const lp=map.containerPointToLayerPoint([x-r.left,y-r.top]);let onParcel=false;
+                      const ll=map.containerPointToLatLng([x-r.left,y-r.top]);map.eachLayer(l=>{if(!onParcel&&l.feature?.properties?.cod_imovel&&l._containsPoint&&l.getBounds){try{onParcel=l.getBounds().contains(ll)&&l._containsPoint(lp)}catch(e){}}});
+                      if(onParcel)continue;
                       return {x,y,tag:el.tagName,id:el.id||null,cls:String(el.className||'')};
                     }
                     return null;

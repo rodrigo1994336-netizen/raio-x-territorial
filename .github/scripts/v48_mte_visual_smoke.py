@@ -85,7 +85,7 @@ async def assert_audit_counter(page, panel_selector, label):
 
 async def wait_runtime(page):
     await page.wait_for_function(
-        "sessionStorage.getItem('rx-v26-ready-reload')==='1' && !document.querySelector('#rxBootGuard')",
+        "(window.rxPortalBootReady===true || sessionStorage.getItem('rx-v26-ready-reload')==='1') && !document.querySelector('#rxBootGuard')",
         timeout=20000,
     )
     await page.wait_for_function("window.rxV46Installed===true", timeout=20000)
