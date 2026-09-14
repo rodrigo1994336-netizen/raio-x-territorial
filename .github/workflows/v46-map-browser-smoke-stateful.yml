@@ -68,6 +68,9 @@ jobs:
       - name: W1a mutation controls (each broken rule must turn the smoke red at its own check)
         if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
         run: python .github/scripts/w1a_imoveis_rapidos_smoke.py --mutation-controls
+      - name: W1a property link, share menu, polygon click and link notices (375 and 1440, SICAR mocked)
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
+        run: python .github/scripts/w1a_link_imovel_smoke.py
       - name: Enforce browser smoke execution
         if: always()
         run: |
