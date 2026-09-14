@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -14,6 +15,14 @@ MOJIBAKE = (
     "\u00c3\u00b3", "\u00c3\u00a1", "\u00c3\u00ad", "\u00c3\u00ba",
     "\u00e2\u20ac", "\u00c2\u00b7", "\u00c2\u00a0",
 )
+
+# Byte de controle em texto (fora de tab, LF e CR) é gravação quebrada: um "\b" que
+# virou backspace dentro de uma regex já passou despercebido (F2, 13/09/2026).
+CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+
+def control_chars(line: str) -> list[str]:
+    return sorted({f"\\x{ord(c):02x}" for c in CONTROL_CHARS.findall(line)})
 
 
 def tracked_files() -> list[Path]:
@@ -37,8 +46,9 @@ def main() -> None:
             decode_errors.append(f"{path.relative_to(ROOT)}:{exc.start}")
             continue
         checked += 1
-        for line_no, line in enumerate(text.splitlines(), 1):
+        for line_no, line in enumerate(text.split("\n"), 1):  # splitlines() engoliria \x0b, \x0c e \x1c-\x1e
             found = [m.encode("unicode_escape").decode("ascii") for m in MOJIBAKE if m in line]
+            found += control_chars(line)
             if found:
                 hits.append(f"{path.relative_to(ROOT)}:{line_no}:{','.join(found)}")
     assert not decode_errors, "non_utf8_text_files=" + " | ".join(decode_errors[:20])
