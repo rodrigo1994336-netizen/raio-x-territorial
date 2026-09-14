@@ -6,6 +6,7 @@ import xml.etree.ElementTree as ET
 from urllib.parse import urlencode
 from datetime import datetime, timedelta, timezone
 import source_layer_guard as layer_guard
+import incra_acervo_f2
 
 try:
     from shapely.geometry import shape, mapping
@@ -309,6 +310,9 @@ def _safe_summary(result):
     for key in ('sigef','embargos_ibama','anm'):
         r=result.get(key) or {};item={'ok':r.get('ok'),'feature_count_bbox':r.get('feature_count'),'source':r.get('source')}
         if key!='sigef':item['exact']=_exact_summary(r)
+        else:
+            # F2: the mirror envelope count is not the certification; the summary carries the official state.
+            summary[key]=incra_acervo_f2.summary_item(result.get('incra_acervo'));continue
         if r.get('features'):
             f=r['features'][0];item['sample_properties']=f.get('properties') or f.get('attributes') or {}
         summary[key]=item

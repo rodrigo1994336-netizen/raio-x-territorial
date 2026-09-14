@@ -19,7 +19,7 @@ except ImportError:  # shapely < 2
 import portal_v8
 import public_property_name_seed_v43 as seed
 from car_resilient import fetch_car_live_resilient, CAR_RE
-from deploy_app import SIGEF_MIRROR, _curl
+import incra_acervo_f2
 from external_process_lifecycle import ManagedOperationTimeout, RequestDisconnected, install_shutdown_cleanup, run_sync_with_request_lifecycle
 
 app=portal_v8.app
@@ -39,7 +39,6 @@ _OSM_ENDPOINTS=(
     'https://overpass.kumi.systems/api/interpreter',
 )
 _OSM_SOURCE='OpenStreetMap contributors — denominação geográfica pública (ODbL)'
-_SIGEF_RECORD_CAP=80
 # C2b: minimum share of the CAR a SIGEF parcel must cover to be shown as its cadastral reference.
 SIGEF_REFERENCE_MIN_OVERLAP=0.50
 # C2b: an attempt that did not answer (SICAR or SIGEF) is remembered only briefly and never as an
@@ -100,77 +99,20 @@ def _first_name(props:dict[str,Any])->str|None:
     return None
 
 
-def _sigef_candidates(car_geom:dict[str,Any],bbox:list[float],cancel_event=None):
-    env=','.join(str(float(x)) for x in bbox)
-    params={
-        'f':'geojson','where':'1=1','geometry':env,'geometryType':'esriGeometryEnvelope',
-        'inSR':'4326','spatialRel':'esriSpatialRelIntersects',
-        'outFields':'parcela_co,codigo_imo,nome_area,registro_m,registro_d,municipio_,uf_id,status,situacao_i',
-        'returnGeometry':'true','outSR':'4326','resultRecordCount':str(_SIGEF_RECORD_CAP),
-        # Largest parcels first: a capped page can then be proven complete for the 50% question.
-        'orderByFields':'Shape__Area DESC'
-    }
-    params['outFields']+=',Shape__Area'
-    raw=_curl(SIGEF_MIRROR+'?'+urlencode(params),True,cancel_event=cancel_event,connect_timeout=12,max_time=40,hard_timeout=45)
-    if not raw.get('ok'):
-        return {'ok':False,'detail':raw.get('detail') or raw.get('preview'),'items':[]}
-    data=raw.get('json')
-    # ArcGIS answers overload, a secured service or a rejected query as HTTP 200 + {"error":...}.
-    # Trying is not answering: only a FeatureCollection with a features list is an answer.
-    if not isinstance(data,dict) or 'error' in data or not isinstance(data.get('features'),list):
-        err=data.get('error') if isinstance(data,dict) else None
-        code=err.get('code') if isinstance(err,dict) else None
-        return {'ok':False,'detail':f'arcgis_error:{code}' if err is not None else 'arcgis_malformed_answer','items':[]}
-    features=data['features']
-    # 200 is not all: ArcGIS flags a capped answer (top level and, in GeoJSON, under properties).
-    truncated=bool(data.get('exceededTransferLimit') or (data.get('properties') or {}).get('exceededTransferLimit') or len(features)>=_SIGEF_RECORD_CAP)
-    try:car=_valid(shape(car_geom));car_area=max(float(car.area),1e-12);car_centroid=car.centroid
-    except Exception as exc:return {'ok':False,'detail':f'geometry:{type(exc).__name__}:{exc}','items':[]}
-    items=[];failed=0;areas=[];ordered=True
-    for f in features:
-        props=(f.get('properties') if isinstance(f,dict) else None) or {}
-        try:shape_area=float(props.get('Shape__Area'))
-        except Exception:shape_area=None
-        if shape_area is None or not math.isfinite(shape_area):ordered=False
-        else:
-            if areas and shape_area>areas[-1]*(1+1e-9):ordered=False
-            areas.append(shape_area)
-        name=_clean_name(props.get('nome_area'))
-        if not name:continue
-        try:
-            # An invalid ring (self-intersection) is repaired before any area math: never a wrong share.
-            g=_valid(shape(f.get('geometry')))
-            if g.is_empty or not g.intersects(car):continue
-            inter=car.intersection(g)
-            overlap=float(inter.area/car_area) if not inter.is_empty else 0.0
-            area_ratio=float(g.area/car_area) if car_area else math.inf
-            parcel_overlap=float(inter.area/g.area) if g.area>0 and not inter.is_empty else 0.0
-            centroid_inside=bool(g.contains(car_centroid) or g.touches(car_centroid))
-        except Exception:
-            failed+=1;continue
-        score=overlap
-        if centroid_inside:score+=0.08
-        if 0.50<=area_ratio<=2.0:score+=0.06
-        items.append({
-            'name':name,'overlap_ratio':_share(overlap),'parcel_overlap_ratio':_share(parcel_overlap),'area_ratio':round(area_ratio,4),
-            'centroid_inside':centroid_inside,'score':round(score,4),
-            'parcel_code':props.get('parcela_co'),'property_code':props.get('codigo_imo'),
-            'registry':props.get('registro_m') or props.get('registro_d'),
-            'municipality':props.get('municipio_'),'uf':props.get('uf_id'),
-            'source':'SIGEF/INCRA — espelho público IBAMA/PAMGIA',
-            'display_kind':'REFERENCE','validation_status':'UNVALIDATED','panel_name_eligible':False,
-            'reference_kind':'SIGEF_CADASTRAL','map_anchor':'CADASTRAL_REFERENCE',
-            'origin_label':'SIGEF/INCRA — referência cadastral ainda não vinculada ao CAR'
-        })
-    items.sort(key=lambda x:x['score'],reverse=True)
-    relevant=truncated
-    if truncated and ordered and areas and len(areas)==len(features):
-        # Sorted by Shape__Area DESC, every parcel left out is no larger than the smallest one returned, and a
-        # parcel cannot cover more of the CAR than its own area. Below 0.9x the threshold (margin for the
-        # SIRGAS/WGS84 degree areas) no parcel left out can reach it, so the cut does not change the answer.
-        relevant=not (min(areas)<0.9*SIGEF_REFERENCE_MIN_OVERLAP*car_area)
-    # A parcel whose geometry could not be measured makes the answer partial, never a complete "none".
-    return {'ok':True,'items':items,'count':len(items),'truncated':truncated,'truncated_relevant':relevant,'partial':failed>0,'failed':failed}
+def _sigef_candidates(car_geom:dict[str,Any],bbox:list[float],cancel_event=None,uf:str|None=None):
+    """F2: the INCRA reference (SIGEF particular/público + SNCI privado/público) from the official Acervo Fundiário.
+
+    The PAMGIA mirror (public land only, frozen in April 2022) is no longer asked: it cannot say "none".
+    Contract kept for C2b: {'ok','items','count','truncated','truncated_relevant','partial'}; ok is False
+    when the official source did not answer (or RX_INCRA_ACERVO_ENABLED is off), so the card shows a quiet
+    pending state, never an absence.
+    """
+    out=incra_acervo_f2.identity_candidates(car_geom,bbox,uf,cancel_event=cancel_event)
+    for item in out.get('items') or []:
+        # Another registry's name is a cadastral reference, never the CAR's name: enforced here, whatever the source says.
+        item.update({'display_kind':'REFERENCE','validation_status':'UNVALIDATED','panel_name_eligible':False,'map_anchor':'CADASTRAL_REFERENCE'})
+        if item.get('reference_kind')!='SNCI_CADASTRAL':item.update({'reference_kind':'SIGEF_CADASTRAL'})
+    return out
 
 
 def _sigef_evidence(sig:dict[str,Any],items:list[dict[str,Any]])->dict[str,Any]:
@@ -325,7 +267,7 @@ def _resolve_identity_uncached(code:str,cancel_event,car:dict[str,Any]|None)->di
         out={'ok':True,'car_code':code,'name':direct,'source':'SICAR','confidence':'high','method':'explicit_sicar_field','display_kind':'VALIDATED_PROPERTY_NAME','validation_status':'VALIDATED','panel_name_eligible':True,'map_anchor':'CAR_POLYGON','validation_scope':'DIRECT_CAR_FIELD','origin_label':'SICAR — denominação explícita do próprio cadastro CAR','candidates':[],'candidate_count':0,'sigef_state':'not_queried','sigef_truncated':False}
         _CACHE.pop(_unanswered_key(code),None);_store(code,now,out);return out
 
-    sig=_sigef_candidates(car.get('geometry'),car.get('bbox') or [],cancel_event);items=sig.get('items') or []
+    sig=_sigef_candidates(car.get('geometry'),car.get('bbox') or [],cancel_event,uf=(props.get('uf') or code[:2]));items=sig.get('items') or []
     if cancel_event and cancel_event.is_set():return _cancelled(code)
 
     # A named SIGEF parcel intersecting a CAR is useful cadastral context, but

@@ -22,7 +22,9 @@ app = portal_v8.app
 install_shutdown_cleanup(app)
 _CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 _TTL_SECONDS = 600
-SIGEF_REFERENCE_ORIGIN = "SIGEF/INCRA · espelho público IBAMA/PAMGIA"
+# F2: the reference comes from the official INCRA Acervo Fundiário (SIGEF and SNCI), never the PAMGIA mirror.
+SIGEF_REFERENCE_ORIGIN = "Acervo Fundiário do INCRA (SIGEF)"
+INCRA_REFERENCE_KINDS = ("SIGEF_CADASTRAL", "SNCI_CADASTRAL")
 
 
 def _unanswered_key(code: str) -> str:
@@ -71,7 +73,7 @@ def _sigef_reference(identity: dict[str, Any]) -> tuple[dict[str, Any] | None, s
         pool = identity.get("candidates") or []
     strong = []
     for item in pool:
-        if str(item.get("reference_kind") or "SIGEF_CADASTRAL") != "SIGEF_CADASTRAL":
+        if str(item.get("reference_kind") or "SIGEF_CADASTRAL") not in INCRA_REFERENCE_KINDS:
             continue
         overlap = _num(item.get("overlap_ratio"))
         label = str(item.get("name") or "").strip()
@@ -83,10 +85,13 @@ def _sigef_reference(identity: dict[str, Any]) -> tuple[dict[str, Any] | None, s
     strong.sort(key=lambda x: sigef_reference_rank(x[2]), reverse=True)
     overlap, label, best = strong[0]
     total = max(len(strong), int(identity.get("sigef_reference_candidate_count") or 0))
+    kind = str(best.get("reference_kind") or "SIGEF_CADASTRAL")
     reference = {
         "label": label,
-        "kind": "SIGEF_CADASTRAL",
-        "origin": SIGEF_REFERENCE_ORIGIN,
+        "kind": kind,
+        "origin": str(best.get("origin") or "").strip() or SIGEF_REFERENCE_ORIGIN,
+        "detail": best.get("detail") or None,
+        "certification": best.get("certification") if kind == "SNCI_CADASTRAL" else None,
         "car_overlap_ratio": overlap,
         "parcel_overlap_ratio": _num(best.get("parcel_overlap_ratio")),
         "incra_property_code": best.get("property_code"),

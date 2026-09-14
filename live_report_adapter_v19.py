@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+import incra_acervo_f2
 import live_report_adapter_v18 as v18
 import live_report_adapter_v17 as v17
 import live_report_adapter_v13 as v13
@@ -100,8 +101,24 @@ v13._patch_car_details = _patch_car_integrity_v47
 v18.build_premium_property_report_v8 = build_premium_property_report_v9
 
 
+def with_incra_acervo(result: dict) -> dict:
+    """F2: every report asks the official INCRA base (SIGEF + SNCI) for this CAR before the payload is built.
+
+    A shallow copy carries the answer to the report chain; the truth guard (report_truth_guard_v16) reads
+    ``result['incra_acervo']``, and without it every line would be pending. Only a complete answer is written
+    back to the (cached) analysis, so the analysis summary shown next to the PDF says the same thing and the next
+    emission reuses it; an incomplete answer is never cached, so the next emission asks again.
+    """
+    working = dict(result or {})
+    acervo = incra_acervo_f2.acervo_for_report(result)
+    working["incra_acervo"] = acervo
+    if isinstance(result, dict) and incra_acervo_f2.is_complete(acervo):
+        result["incra_acervo"] = acervo
+    return working
+
+
 def generate_live_report(result: dict, car_code: str):
-    meta = v18.generate_live_report(result, car_code)
+    meta = v18.generate_live_report(with_incra_acervo(result), car_code)
     meta["report_version"] = "V47-BLOCK2-CANDIDATE"
     return meta
 
