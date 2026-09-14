@@ -195,7 +195,8 @@ UI = r'''
   if(openCar&&!t.closest('[data-rx-share-row]'))setMenu('')},true);
  document.addEventListener('keydown',e=>{if(e.key!=='Escape'||!openCar)return;const c=openCar;setMenu('');try{document.querySelector(`[data-rx-share-toggle="${c}"]`)?.focus({preventScroll:true})}catch(err){}},true);
 
- function ready(){return !document.getElementById('rxBootGuard')&&window.rxV46Installed===true&&typeof window.showProperty==='function'&&!!mapRef()}
+ // The boot page is its own document (W1a arranque), so the app document never carries an overlay: wait for the map runtime only.
+ function ready(){return window.rxV46Installed===true&&typeof window.showProperty==='function'&&!!mapRef()}
  function whenReady(fn,t0){if(ready()){fn();return}if(Date.now()-t0>120000)return;setTimeout(()=>whenReady(fn,t0),150)}
  function boot(){
   let params=null;try{params=new URLSearchParams(location.search)}catch(e){params=new URLSearchParams('')}

@@ -323,7 +323,8 @@ async function main() {
       fetch: async req => {
         const url = typeof req === 'string' ? new URL(req, ORIGIN).href : req.url;
         if (!state.online) throw new TypeError('offline');
-        return { ok: true, status: 200, type: 'basic', url, clone() { return this; } };
+        // A real Response always has headers; the ready app page says x-raiox-boot: ready (W1a arranque).
+        return { ok: true, status: 200, type: 'basic', url, headers: { get: n => (String(n).toLowerCase() === 'x-raiox-boot' ? 'ready' : null) }, clone() { return this; } };
       },
     };
     vm.createContext(ctx);
@@ -335,7 +336,7 @@ async function main() {
       try { const r = await ev.p; return { status: r && r.status }; } catch (e) { return { status: 'failed:' + e.message }; }
     };
     const life = async t => { let p = null; listeners[t]({ waitUntil(x) { p = x; } }); await p; };
-    const shellKeys = async () => { const names = await caches.keys(); const n = names.find(x => x.endsWith('-shell')); return n ? (await (await caches.open(n)).keys()).map(r => r.url) : []; };
+    const shellKeys = async () => { const names = await caches.keys(); const n = names.find(x => /-shell(-|$)/.test(x)); return n ? (await (await caches.open(n)).keys()).map(r => r.url) : []; };
     return { state, nav, life, shellKeys, caches };
   }
 
@@ -357,7 +358,7 @@ async function main() {
     const sw = swRealm(true);
     await sw.life('install');
     const names = await sw.caches.keys();
-    const shell = await sw.caches.open(names.find(x => x.endsWith('-shell')));
+    const shell = await sw.caches.open(names.find(x => /-shell(-|$)/.test(x)));
     await shell.put(`/?car=${VALID}`, { ok: true, status: 200, clone() { return this; } });
     await sw.life('activate');
     const keys = await sw.shellKeys();
