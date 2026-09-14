@@ -191,3 +191,10 @@ def portal_root():
 @app.get('/v1/portal/status')
 def portal_status():
     return {'ok':True,'portal_version':APP_PORTAL_VERSION,'mode':'live','cost_mode':'zero-cost-public-sources'}
+
+
+# W1a: boot page while the deferred modules load, then the final HTML with hashed,
+# immutable JS/CSS and local Leaflet. Must be installed here, before the app starts.
+import portal_boot_assets_w1a  # noqa: E402
+
+portal_boot_assets_w1a.install(app)

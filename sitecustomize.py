@@ -187,6 +187,9 @@ def _load_portal_deferred():
     print('RX_PORTAL_V46_EXTENSION=timeout_waiting_portal_api', flush=True)
 
 
+# W1a: read by portal_boot_assets_w1a - GET / serves the boot page until the deferred load is ready.
+PORTAL_DEFERRED_BOOT = bool(CORE_RUNTIME_READY and IS_PORTAL)
+
 if CORE_RUNTIME_READY:
     if IS_PORTAL:
         threading.Thread(target=_load_portal_deferred, daemon=True).start()
