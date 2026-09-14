@@ -18,6 +18,7 @@ from report_engine_v6 import build_premium_property_report_v6
 from satellite_real import build_satellite_property_image
 from groundwater_siagas import query_groundwater
 from climate_nasa import query_climatology_nasa, build_drought_screening
+from climate_normal_f2 import climatology_pdf_rows, rain_vs_normal_pdf_row
 from safras_ibge import query_safras
 from sicar_detail_sources import query_sicar_details
 from aerodromes_anac import query_aerodromes_anac
@@ -158,10 +159,10 @@ def _patch_climate_full(payload:dict,result:dict,clim:dict):
             ['Dias com chuva forte (≥ 20 mm)',recent.get('heavy_rain_days_ge_20mm')],
             ['Último dado climático disponível',recent.get('latest_data_date') or '—'],
         ])
-    for m in (clim.get('months') or [])[:12]:
-        rows.append([f"Climatologia {m.get('month')}",f"chuva {m.get('rain_mm') if m.get('rain_mm') is not None else '—'} mm/dia • média {m.get('t_avg_c') if m.get('t_avg_c') is not None else '—'} °C • máx {m.get('t_max_c') if m.get('t_max_c') is not None else '—'} °C • mín {m.get('t_min_c') if m.get('t_min_c') is not None else '—'} °C"])
-    drought=build_drought_screening(recent,clim);water['drought_screening']=drought
-    if drought.get('ok'):rows.append(['Triagem de seca recente',f"{drought.get('state')} • dias secos {drought.get('dry_day_share_pct')}%"])
+    rows.extend(climatology_pdf_rows(clim))  # F2: mm/mês + mm/dia; máx/mín rotulados como recorde 2001–2020
+    drought=build_drought_screening(recent,clim,result.get('climate_rain_history'));water['drought_screening']=drought
+    drought_row=rain_vs_normal_pdf_row(drought)  # F2: comparação com o normal da época; pendente não aparece
+    if drought_row:rows.append(drought_row)
     _append_source(payload,'NASA POWER — climatologia mensal',clim.get('note') or 'Climatologia mensal no centróide da propriedade.','CONSULTADA' if clim.get('ok') else 'INDISPONÍVEL','ok' if clim.get('ok') else 'attention')
     return payload
 

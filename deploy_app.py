@@ -315,7 +315,7 @@ def _safe_summary(result):
     p=result.get('prodes') or {};summary['prodes']={'ok':p.get('ok'),'feature_count_bbox':p.get('feature_count'),'exact':_exact_summary(p),'candidate_layers':p.get('candidate_layers'),'hit_layers':[{'layer':h.get('layer'),'count':h.get('count')} for h in p.get('hits',[]) if h.get('count')]}
     ex=(p.get('exact') or {}).get('occurrences') or []
     if ex:
-        summary['prodes']['exact_occurrences']=[{'area_intersection_ha':x.get('area_intersection_ha'),'year':(x.get('properties') or {}).get('year'),'class_name':(x.get('properties') or {}).get('class_name'),'image_date':(x.get('properties') or {}).get('image_date'),'satellite':(x.get('properties') or {}).get('satellite'),'sensor':(x.get('properties') or {}).get('sensor')} for x in ex]
+        summary['prodes']['exact_occurrences']=[{'area_intersection_ha':x.get('area_intersection_ha'),'year':(x.get('properties') or {}).get('year'),'class_name':(x.get('properties') or {}).get('class_name'),'image_date':(x.get('properties') or {}).get('image_date')} for x in ex]
     return summary
 
 @app.on_event('startup')

@@ -36,19 +36,41 @@ def _source_row(name: str, ok: bool | None, description: str):
     return {'name': name, 'description': description, 'status': 'NÃO CONSULTADA', 'level': 'neutral'}
 
 
+def _prodes_raw_orbits(prodes: dict[str, Any]) -> dict[Any, tuple[Any, Any]]:
+    """WFS feature id -> (image_date, path_row) from the raw exact calculation, when a reading kept only a summary."""
+    raw = (prodes.get('exact_raw') or {}).get('occurrences') or []
+    out = {}
+    for item in raw:
+        p = item.get('properties') or {}
+        if item.get('id') is not None and p.get('path_row'):
+            out[item.get('id')] = (p.get('image_date'), p.get('path_row'))
+    return out
+
+
 def _extract_prodes_occurrences(result: dict[str, Any]) -> list[dict[str, Any]]:
-    ex = ((result.get('prodes') or {}).get('exact') or {}).get('occurrences') or []
+    from prodes_image_platform_f2 import image_day, lookup_key as prodes_lookup_key
+
+    prodes = result.get('prodes') or {}
+    ex = (prodes.get('exact') or {}).get('occurrences') or []
+    lookups = result.get('prodes_image_lookups') or {}
+    raw_orbits = _prodes_raw_orbits(prodes)
     rows = []
     for item in ex:
         p = item.get('properties') or {}
+        path_row = p.get('path_row')
+        if not path_row and item.get('id') in raw_orbits:
+            raw_date, raw_path_row = raw_orbits[item.get('id')]
+            same_image = image_day(raw_date) is not None and image_day(raw_date) == image_day(p.get('image_date'))
+            path_row = raw_path_row if same_image else None  # same feature, same image only
         rows.append({
             'area_ha': round(float(item.get('area_intersection_ha') or 0), 6),
             'year': p.get('year'),
             'class_name': p.get('class_name'),
             'image_date': p.get('image_date'),
-            'satellite': p.get('satellite'),
-            'sensor': p.get('sensor'),
+            # WFS satellite/sensor is wrong (Landsat8/OLI in 2004); only the date and the scene orbit are kept.
+            'path_row': path_row,
         })
+        rows[-1]['image_lookup'] = lookups.get(prodes_lookup_key(rows[-1]) or '')
     rows.sort(key=lambda x: (x.get('year') or 0, x.get('area_ha') or 0))
     return rows
 
@@ -211,13 +233,14 @@ def build_live_payload(result: dict[str, Any], report_id: str, generated_at: str
     overall = 'ALTO' if emb_count else ('MODERADO' if prodes_count else ('PENDENTE' if not (emb_ok and prodes_ok) else 'BAIXO'))
     overall_level = 'attention' if overall == 'MODERADO' else ('critical' if overall == 'ALTO' else ('neutral' if overall == 'PENDENTE' else 'ok'))
 
+    from prodes_image_platform_f2 import image_row as prodes_image_row
+
     exact_rows = []
-    for r in prodes_rows[:8]:
+    for r in prodes_rows[:3]:  # whole occurrences only: a year is never printed without its area
         exact_rows.extend([
             ('Ano', r.get('year')),
             ('Área intersectada', f"{r.get('area_ha')} ha"),
-            ('Imagem', f"{_s(r.get('satellite'))}/{_s(r.get('sensor'))} • {_s(r.get('image_date'))}"),
-        ])
+        ] + [row for row in [prodes_image_row(r, r.get('image_lookup'))] if row])
 
     payload = {
         'report_id': report_id,
@@ -283,7 +306,7 @@ def build_live_payload(result: dict[str, Any], report_id: str, generated_at: str
                     ('Percentual do CAR', f'{_pct(prodes_area, area_ha)}%'),
                     ('Anos identificados', ', '.join(str(x.get('year')) for x in prodes_rows if x.get('year')) or '-'),
                     ('Fonte', 'INPE / TerraBrasilis / PRODES'),
-                ] + exact_rows[:9],
+                ] + exact_rows,
                 'meaning': 'PRODES mapeia desmatamento. A interseção não prova, isoladamente, infração ambiental; é necessário considerar data, autorizações, área consolidada e demais regras aplicáveis.',
             },
             'unique_problem_area_ha': 0,

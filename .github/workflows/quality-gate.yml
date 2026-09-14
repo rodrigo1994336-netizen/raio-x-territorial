@@ -307,3 +307,7 @@ jobs:
           assert post['area_unique_ha'] < area(r1)+area(r2), (post,area(r1),area(r2))
           print('RX_CI_REPORT_V41_READY PRODES_TWO_LENSES_EXACT_UNION_OK')
           PY
+      - name: F2 clima e satélite PRODES gate (regras e controles positivos)
+        env:
+          RX_RELEASE: OFF
+        run: PYTHONPATH=. python scripts/f2_clima_landsat_gate.py
