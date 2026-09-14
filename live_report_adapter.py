@@ -36,19 +36,41 @@ def _source_row(name: str, ok: bool | None, description: str):
     return {'name': name, 'description': description, 'status': 'NÃO CONSULTADA', 'level': 'neutral'}
 
 
+def _prodes_raw_orbits(prodes: dict[str, Any]) -> dict[Any, tuple[Any, Any]]:
+    """WFS feature id -> (image_date, path_row) from the raw exact calculation, when a reading kept only a summary."""
+    raw = (prodes.get('exact_raw') or {}).get('occurrences') or []
+    out = {}
+    for item in raw:
+        p = item.get('properties') or {}
+        if item.get('id') is not None and p.get('path_row'):
+            out[item.get('id')] = (p.get('image_date'), p.get('path_row'))
+    return out
+
+
 def _extract_prodes_occurrences(result: dict[str, Any]) -> list[dict[str, Any]]:
-    ex = ((result.get('prodes') or {}).get('exact') or {}).get('occurrences') or []
+    from prodes_image_platform_f2 import image_day, lookup_key as prodes_lookup_key
+
+    prodes = result.get('prodes') or {}
+    ex = (prodes.get('exact') or {}).get('occurrences') or []
+    lookups = result.get('prodes_image_lookups') or {}
+    raw_orbits = _prodes_raw_orbits(prodes)
     rows = []
     for item in ex:
         p = item.get('properties') or {}
+        path_row = p.get('path_row')
+        if not path_row and item.get('id') in raw_orbits:
+            raw_date, raw_path_row = raw_orbits[item.get('id')]
+            same_image = image_day(raw_date) is not None and image_day(raw_date) == image_day(p.get('image_date'))
+            path_row = raw_path_row if same_image else None  # same feature, same image only
         rows.append({
             'area_ha': round(float(item.get('area_intersection_ha') or 0), 6),
             'year': p.get('year'),
             'class_name': p.get('class_name'),
             'image_date': p.get('image_date'),
-            'satellite': p.get('satellite'),
-            'sensor': p.get('sensor'),
+            # WFS satellite/sensor is wrong (Landsat8/OLI in 2004); only the date and the scene orbit are kept.
+            'path_row': path_row,
         })
+        rows[-1]['image_lookup'] = lookups.get(prodes_lookup_key(rows[-1]) or '')
     rows.sort(key=lambda x: (x.get('year') or 0, x.get('area_ha') or 0))
     return rows
 
@@ -138,7 +160,6 @@ def build_live_payload(result: dict[str, Any], report_id: str, generated_at: str
     car = result.get('car') or {}
     props = car.get('properties') or {}
     area_ha = float(props.get('area') or 0)
-    sigef = result.get('sigef') or {}
     emb = result.get('embargos_ibama') or {}
     anm = result.get('anm') or {}
     prodes = result.get('prodes') or {}
@@ -162,9 +183,6 @@ def build_live_payload(result: dict[str, Any], report_id: str, generated_at: str
 
     car_status = _s(props.get('status_imovel'))
     condition = _s(props.get('condicao'))
-    sigef_ok = sigef.get('ok') is True
-    sigef_count = int(sigef.get('feature_count') or 0) if sigef_ok else 0
-    sigef_text = f'{sigef_count} parcela(s)' if sigef_ok else 'CONSULTA PENDENTE'
 
     # PRODES is evidence of mapped deforestation, not automatic evidence of an environmental offense.
     if not prodes_ok:
@@ -211,13 +229,14 @@ def build_live_payload(result: dict[str, Any], report_id: str, generated_at: str
     overall = 'ALTO' if emb_count else ('MODERADO' if prodes_count else ('PENDENTE' if not (emb_ok and prodes_ok) else 'BAIXO'))
     overall_level = 'attention' if overall == 'MODERADO' else ('critical' if overall == 'ALTO' else ('neutral' if overall == 'PENDENTE' else 'ok'))
 
+    from prodes_image_platform_f2 import image_row as prodes_image_row
+
     exact_rows = []
-    for r in prodes_rows[:8]:
+    for r in prodes_rows[:3]:  # whole occurrences only: a year is never printed without its area
         exact_rows.extend([
             ('Ano', r.get('year')),
             ('Área intersectada', f"{r.get('area_ha')} ha"),
-            ('Imagem', f"{_s(r.get('satellite'))}/{_s(r.get('sensor'))} • {_s(r.get('image_date'))}"),
-        ])
+        ] + [row for row in [prodes_image_row(r, r.get('image_lookup'))] if row])
 
     payload = {
         'report_id': report_id,
@@ -255,15 +274,17 @@ def build_live_payload(result: dict[str, Any], report_id: str, generated_at: str
             'areas': [],
         },
         'land': {
-            'summary': (f'SIGEF público: {sigef_count} parcela(s) candidata(s) no envelope do imóvel. ' if sigef_ok else 'SIGEF público: consulta pendente nesta emissão. ') + 'SNCI e matrícula ainda não consultados neste ciclo.',
+            # F2: SIGEF/SNCI lines come from the official INCRA answer (incra_acervo_f2) at the end;
+            # the PAMGIA mirror envelope count is never shown as the property's certification.
+            'summary': 'Certificação SIGEF e SNCI (INCRA): consulta pendente.',
             'risk': 'ATENÇÃO',
             'certifications': [
-                ['SIGEF', 'CONSULTADO' if sigef_ok else 'CONSULTA PENDENTE', sigef_count if sigef_ok else '-', 'Espelho público SIGEF/INCRA disponibilizado no PAMGIA/IBAMA'],
-                ['SNCI', 'NÃO CONSULTADO', '-', 'Conector específico ainda não ativado neste ciclo'],
+                ['SIGEF', 'CONSULTA PENDENTE', '—', 'Consulta ao INCRA pendente nesta emissão.'],
+                ['SNCI', 'CONSULTA PENDENTE', '—', 'Consulta ao INCRA pendente nesta emissão.'],
             ],
             'matrix': [
                 ['CAR', car_status, f'{round(area_ha,3)} ha', 'Cadastro ambiental consultado'],
-                ['SIGEF', sigef_text, '-', 'Não equivale a matrícula imobiliária'],
+                ['SIGEF', 'CONSULTA PENDENTE', '-', 'Não equivale a matrícula imobiliária'],
                 ['Matrícula', 'NÃO CONSULTADA', '-', 'Exige fonte registral adequada'],
                 ['Detentor/titular', 'NÃO CONSULTADO', '-', 'Não inferido a partir do CAR'],
             ],
@@ -283,7 +304,7 @@ def build_live_payload(result: dict[str, Any], report_id: str, generated_at: str
                     ('Percentual do CAR', f'{_pct(prodes_area, area_ha)}%'),
                     ('Anos identificados', ', '.join(str(x.get('year')) for x in prodes_rows if x.get('year')) or '-'),
                     ('Fonte', 'INPE / TerraBrasilis / PRODES'),
-                ] + exact_rows[:9],
+                ] + exact_rows,
                 'meaning': 'PRODES mapeia desmatamento. A interseção não prova, isoladamente, infração ambiental; é necessário considerar data, autorizações, área consolidada e demais regras aplicáveis.',
             },
             'unique_problem_area_ha': 0,
@@ -351,7 +372,7 @@ def build_live_payload(result: dict[str, Any], report_id: str, generated_at: str
         ],
         'executive_summary_rows': [
             ['CAR', f'{round(area_ha,3)} ha • {_s(condition)}', car_status, 'ok'],
-            ['Fundiário', f'SIGEF: {sigef_text if sigef_ok else "consulta pendente"}; matrícula não consultada', 'ATENÇÃO', 'attention'],
+            ['Fundiário', 'Certificação SIGEF/SNCI: consulta pendente; matrícula não consultada', 'ATENÇÃO', 'attention'],
             ['Ambiental / PRODES', f'{prodes_count} ocorrência(s) • {round(prodes_area,6)} ha' if prodes_ok else 'Consulta pendente', env_risk, env_level],
             ['Embargos IBAMA', enforcement_text, enforcement_risk, enforcement_level],
             ['Mineração ANM', mining_text, mining_risk, mining_level],
@@ -363,7 +384,7 @@ def build_live_payload(result: dict[str, Any], report_id: str, generated_at: str
         ],
         'compliance': [
             {'label':'CAR','text':f'Cadastro localizado • {round(area_ha,3)} ha','badge':'CONSULTADO','level':'ok'},
-            ({'label':'SIGEF','text':f'{sigef_count} parcela(s) candidata(s) no envelope do imóvel','badge':'CONSULTADO','level':'ok'} if sigef_ok else {'label':'SIGEF','text':'Consulta pendente.','badge':'CONSULTA PENDENTE','level':'neutral'}),
+            {'label':'SIGEF','text':'Certificação SIGEF: consulta pendente.','badge':'CONSULTA PENDENTE','level':'neutral'},
             ({'label':'PRODES','text':f'{prodes_count} ocorrência(s) exatas • {round(prodes_area,6)} ha','badge':env_risk,'level':env_level} if prodes_ok else {'label':'PRODES','text':'Consulta pendente.','badge':'CONSULTA PENDENTE','level':'neutral'}),
             {'label':'Embargos IBAMA','text':enforcement_text,'badge':enforcement_risk,'level':enforcement_level},
             {'label':'ANM','text':mining_text,'badge':mining_risk,'level':mining_level},
@@ -392,11 +413,9 @@ def build_live_payload(result: dict[str, Any], report_id: str, generated_at: str
         },
         'sources': [
             _source_row('SICAR', car.get('ok'), 'Cadastro Ambiental Rural consultado via WFS público.'),
-            _source_row('SIGEF / INCRA (espelho PAMGIA)', sigef.get('ok'), 'Consulta pública de parcelas SIGEF disponibilizada em serviço do IBAMA/PAMGIA.'),
             _source_row('IBAMA / PAMGIA', emb_ok, 'Base oficial de áreas embargadas do IBAMA, com cruzamento exato pela geometria do CAR.'),
             _source_row('INPE / TerraBrasilis / PRODES', prodes.get('ok'), 'Camadas PRODES consultadas por WFS e intersectadas geometricamente com o CAR.'),
             _source_row('ANM / SIGMINE', anm.get('ok'), 'Processos minerários consultados e intersectados geometricamente.'),
-            _source_row('SNCI', None, 'Conector ainda não ativado nesta emissão.'),
             _source_row('Registro de imóveis', None, 'Matrícula e titularidade não consultadas nesta emissão.'),
         ],
         'interpretation_rules': [
@@ -407,7 +426,9 @@ def build_live_payload(result: dict[str, Any], report_id: str, generated_at: str
             'Interseções espaciais exatas são recalculadas localmente sobre a geometria do CAR.',
         ],
     }
-    return payload
+    import incra_acervo_f2  # local import: keeps the shared import block of this module untouched
+
+    return incra_acervo_f2.apply_to_report_payload(payload, result.get('incra_acervo'))
 
 
 def generate_live_report(result: dict[str, Any], car_code: str) -> dict[str, Any]:

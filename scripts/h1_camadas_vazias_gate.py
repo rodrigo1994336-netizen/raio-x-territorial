@@ -28,6 +28,7 @@ import inspect
 import json
 import re
 import subprocess
+import types
 import sys
 import traceback
 from pathlib import Path
@@ -410,10 +411,16 @@ def s8_sync_sources():
 
     reset_routes()
     route(lambda u, p: "SIGMINE" in u and IS_COUNT(p), json_response({"count": 0}))
-    anm_fast_v29.subprocess.run = lambda *a, **k: subprocess.CompletedProcess(a, 0, stdout=b'{"type":"FeatureCollection","features":[]}', stderr=b"")
-    r = anm_fast_v29._curl_anm_bbox(CURVELO["bbox"])
+    # Só o nome dentro do anm_fast_v29: trocar subprocess.run no módulo global atingia a thread de arranque do
+    # sitecustomize (platform.win32_ver recebia bytes e o gate caía de vez em quando com TypeError).
+    fake_subprocess = types.SimpleNamespace(**{k: getattr(subprocess, k) for k in dir(subprocess) if not k.startswith("__")})
+    fake_subprocess.run = lambda *a, **k: subprocess.CompletedProcess(a, 0, stdout=b'{"type":"FeatureCollection","features":[]}', stderr=b"")
+    anm_fast_v29.subprocess = fake_subprocess
+    try:
+        r = anm_fast_v29._curl_anm_bbox(CURVELO["bbox"])
+    finally:
+        anm_fast_v29.subprocess = subprocess
     check("ANM com camada vazia = pendente", r.get("ok") is False and (r.get("layer_guard") or {}).get("reason") == "layer_empty", str(r.get("layer_guard")))
-    anm_fast_v29.subprocess.run = subprocess.run
 
     def wfs_curl(features):
         return lambda url, expect_json=False, max_time=40: {"ok": True, "json": {"type": "FeatureCollection", "features": features}}
@@ -458,7 +465,9 @@ PRODES_CAPS = ("<wfs:WFS_Capabilities xmlns:wfs='http://www.opengis.net/wfs/2.0'
                + "".join(f"<FeatureType><Name>{n}</Name><Title>{n}</Title></FeatureType>" for n in PRODES_NAMES)
                + "</FeatureTypeList></wfs:WFS_Capabilities>")
 # Texts that state "no PRODES / 0 parcels / 0 mining processes". Each has a negative control below.
-PRODES_ZERO = re.compile(r'Nenhuma interseção PRODES|PRODES: nenhuma|"PRODES", "0 ocorrência|PRODES completo", "0 ocorrência|PRODES: 0 ocorrência|"label": "PRODES", "text": "0 ')
+# F2 (prodes_reading_f2) escreve a ausência como "nenhum desmatamento ... dentro do imóvel": os dois vocabulários contam.
+PRODES_ZERO = re.compile(r'Nenhuma interseção PRODES|PRODES: nenhuma|"PRODES", "0 ocorrência|PRODES completo", "0 ocorrência|PRODES: 0 ocorrência|"label": "PRODES", "text": "0 '
+                         r'|nenhum desmatamento mapeado pelo PRODES|PRODES: nenhum desmatamento|Nenhum desmatamento dentro do imóvel|Nenhum desmatamento PRODES dentro do imóvel')
 SIGEF_ZERO = re.compile(r"\b0 parcela")
 ANM_ZERO = re.compile(r'minerais críticos", 0\]|Terras raras - processos ANM", 0\]|não identificou sinal classificado|"process_count": 0\b')
 
@@ -587,7 +596,8 @@ def s10_report_chain():
           (cp.get("conclusion") or {}).get("overall_risk") == "MODERADO" and compliance(cp, "PRODES").get("badge") == "ATENÇÃO",
           json.dumps({"overall": (cp.get("conclusion") or {}).get("overall_risk"), "prodes": compliance(cp, "PRODES")}, ensure_ascii=False))
     check("cadeia: leitura parcial do PRODES não se apresenta como contagem fechada",
-          "pode aumentar" in str(((cp.get("environment") or {}).get("prodes") or {}).get("summary")), str(((cp.get("environment") or {}).get("prodes") or {}).get("summary")))
+          any(x in str(((cp.get("environment") or {}).get("prodes") or {}).get("summary")) for x in ("pode aumentar", "não veio completa nesta emissão; pode haver mais")),
+          str(((cp.get("environment") or {}).get("prodes") or {}).get("summary")))
 
     # B. PRODES without an answer never becomes "nenhuma" / 0 / BAIXO
     for mode in ("failed", "truncated", "empty_layer", "outside_and_failed"):

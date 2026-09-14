@@ -22,7 +22,9 @@ app = portal_v8.app
 install_shutdown_cleanup(app)
 _CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 _TTL_SECONDS = 600
-SIGEF_REFERENCE_ORIGIN = "SIGEF/INCRA · espelho público IBAMA/PAMGIA"
+# F2: the reference comes from the official INCRA Acervo Fundiário (SIGEF and SNCI), never the PAMGIA mirror.
+SIGEF_REFERENCE_ORIGIN = "Acervo Fundiário do INCRA (SIGEF)"
+INCRA_REFERENCE_KINDS = ("SIGEF_CADASTRAL", "SNCI_CADASTRAL")
 
 
 def _unanswered_key(code: str) -> str:
@@ -71,7 +73,7 @@ def _sigef_reference(identity: dict[str, Any]) -> tuple[dict[str, Any] | None, s
         pool = identity.get("candidates") or []
     strong = []
     for item in pool:
-        if str(item.get("reference_kind") or "SIGEF_CADASTRAL") != "SIGEF_CADASTRAL":
+        if str(item.get("reference_kind") or "SIGEF_CADASTRAL") not in INCRA_REFERENCE_KINDS:
             continue
         overlap = _num(item.get("overlap_ratio"))
         label = str(item.get("name") or "").strip()
@@ -83,10 +85,13 @@ def _sigef_reference(identity: dict[str, Any]) -> tuple[dict[str, Any] | None, s
     strong.sort(key=lambda x: sigef_reference_rank(x[2]), reverse=True)
     overlap, label, best = strong[0]
     total = max(len(strong), int(identity.get("sigef_reference_candidate_count") or 0))
+    kind = str(best.get("reference_kind") or "SIGEF_CADASTRAL")
     reference = {
         "label": label,
-        "kind": "SIGEF_CADASTRAL",
-        "origin": SIGEF_REFERENCE_ORIGIN,
+        "kind": kind,
+        "origin": str(best.get("origin") or "").strip() or SIGEF_REFERENCE_ORIGIN,
+        "detail": best.get("detail") or None,
+        "certification": best.get("certification") if kind == "SNCI_CADASTRAL" else None,
         "car_overlap_ratio": overlap,
         "parcel_overlap_ratio": _num(best.get("parcel_overlap_ratio")),
         "incra_property_code": best.get("property_code"),
@@ -320,7 +325,7 @@ body.rx43-dossier-open #panel{background:transparent!important;pointer-events:no
  function downloadPng(){const g=geometry(),pts=flatten(g);if(!pts.length)return;const W=1200,H=800,pad=70,x=pts.map(p=>+p[0]),y=pts.map(p=>+p[1]),minX=Math.min(...x),maxX=Math.max(...x),minY=Math.min(...y),maxY=Math.max(...y),sx=(W-2*pad)/Math.max(maxX-minX,1e-9),sy=(H-2*pad)/Math.max(maxY-minY,1e-9),s=Math.min(sx,sy);const cv=document.createElement('canvas');cv.width=W;cv.height=H;const c=cv.getContext('2d');c.fillStyle='#07150f';c.fillRect(0,0,W,H);c.strokeStyle='#63e6a5';c.fillStyle='rgba(99,230,165,.16)';c.lineWidth=5;const drawRing=r=>{c.beginPath();r.forEach((p,i)=>{const px=(p[0]-minX)*s+pad,py=H-pad-(p[1]-minY)*s;i?c.lineTo(px,py):c.moveTo(px,py)});c.closePath();c.fill();c.stroke()};if(g.type==='Polygon')g.coordinates.forEach(drawRing);else if(g.type==='MultiPolygon')g.coordinates.forEach(poly=>poly.forEach(drawRing));c.fillStyle='#eef8f2';c.font='700 28px system-ui';const pid=ident(activeData);c.fillText(pid.title||'',pad,38);c.fillStyle='#9fb5aa';c.font='18px ui-monospace';c.fillText(pid.named?pid.code:(pid.place||''),pad,64);const a=document.createElement('a');a.href=cv.toDataURL('image/png');a.download=`${activeData?.car_code||'imovel'}.png`;a.click()}
  function runFull(){try{if(typeof window.rxProgressiveAnalyze==='function')window.rxProgressiveAnalyze();else if(typeof analyze==='function')analyze()}catch(e){}}
  function bind(){q('#rx45Close')?.addEventListener('click',()=>window.rx43CloseDossier?.());q('#rx45Full')?.addEventListener('click',runFull);q('#rx45Audit')?.addEventListener('click',runFull);q('#rx45Kml')?.addEventListener('click',downloadKml);q('#rx45Png')?.addEventListener('click',downloadPng);q('#rx45Pdf')?.addEventListener('click',()=>{try{window.downloadPDF?.()}catch(e){}})}
- function render(p){const h=q('#rx43SnapshotHost');if(!h||!p)return;h.innerHTML=panelHtml(p);const card=h.querySelector('.rx45-panel-card');if(card)card.__rxSourceAudit=(p.source_audit&&Array.isArray(p.source_audit.registry))?JSON.parse(JSON.stringify(p.source_audit)):null;bind()}
+ function render(p){const h=q('#rx43SnapshotHost');if(!h||!p)return;h.innerHTML=panelHtml(p);const card=h.querySelector('.rx45-panel-card');if(card)card.__rxSourceAudit=(p.source_audit&&Array.isArray(p.source_audit.registry))?JSON.parse(JSON.stringify(p.source_audit)):null;bind();if(card)document.dispatchEvent(new CustomEvent('rx45:panel-rendered',{detail:{car:card.dataset.car||''}}))}
  async function load(car){if(!car||busy)return;if(car===activeCar&&activeData){activeData=fresher(car,activeData);render(activeData);sigefFollowUp(car,activeData);return}busy=true;try{const r=await fetch(`/v1/live/map-panel/${encodeURIComponent(car)}`),d=await r.json();if(r.ok&&d?.ok&&currentCar()===car){window.rxC3PanelFail?.(car,true);activeCar=car;activeData=d;render(d);sigefFollowUp(car,d)}else window.rxC3PanelFail?.(car,false)}catch(e){window.rxC3PanelFail?.(car,false)}finally{busy=false}}
  // C2b: ONE automatic retry of an unanswered reference while this panel is open. Only the reference
  // slot is repainted, so the sections other modules add to the panel are never wiped.

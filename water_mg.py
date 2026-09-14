@@ -12,6 +12,7 @@ from shapely.geometry import shape
 from shapely.ops import transform
 
 import source_layer_guard as layer_guard
+from outorga_vazao import safe_grant_props
 
 WFS='https://geoserver.meioambiente.mg.gov.br/ows'
 
@@ -57,17 +58,22 @@ def _metric(car):
 
 
 def _safe_props(p:dict[str,Any]):
-    deny=('cpf','cnpj','nome','titular','requerente','usuario','usuário','email','telefone','fone','endereco','endereço')
+    deny=('cpf','cnpj','nome','titular','requerente','usuario','usuário','email','telefone','fone','endereco','endereço','empto','empreend','respons')
     allow=('objectid','numpa','process','proc','port','status','uso','tipo','final','vaz','volume','data','dtpub','venc','bacia','curso','capt','ch_','bcfed','cocurso','cod_','mun','geocod','moduso','unvaz')
-    out={}
+    # F2: campos da outorga por lista explícita (vazão, horas/dia, dias, validade, base),
+    # fora do corte de 32; o corte antigo derrubava as horas por dia e a data da base.
+    out=safe_grant_props(p)
+    extra=0
     for k,v in p.items():
         lk=str(k).lower()
+        if str(k) in out: continue
         if any(d in lk for d in deny): continue
         if not any(a in lk for a in allow): continue
         if isinstance(v,(dict,list)): continue
         if v in (None,''): continue
         out[str(k)]=v
-        if len(out)>=32: break
+        extra+=1
+        if extra>=32: break
     return out
 
 

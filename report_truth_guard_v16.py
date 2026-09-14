@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import incra_acervo_f2
+
 
 def _ok(result:dict,key:str)->bool:
     return isinstance(result.get(key),dict) and result.get(key,{}).get('ok') is True
@@ -38,14 +40,12 @@ def comprehensive_truth_guard(payload:dict[str,Any],result:dict[str,Any],base_gu
 
     # Fundiário: keep the limitation, but stop presenting restricted connectors as forgotten work.
     land=payload.setdefault('land',{})
-    sigef_count=int(sigef.get('feature_count') or 0)
-    # H1: the SIGEF mirror stopped in 2022; a pending consultation has no parcel count.
-    land['summary']=((f'SIGEF público consultado nesta emissão: {sigef_count} parcela(s) candidata(s) no envelope do imóvel. ' if sigef.get('ok') is True else 'SIGEF público: consulta pendente nesta emissão. ')+
-                     'SNCI/CCIR, matrícula, ônus e titularidade são integrações registrais/cadastrais separadas e permanecem preparadas para ativação por fonte legalmente habilitada; não são inferidas do CAR.')
+    # F2: SIGEF and SNCI come from the official INCRA answer; the PAMGIA mirror never says "0 parcela".
+    acervo=result.get('incra_acervo')
     cert=[]
     for row in land.get('certifications') or []:
         r=list(row)
-        if r and _contains_any(r[0],'SNCI','CCIR'):
+        if r and _contains_any(r[0],'CCIR'):
             while len(r)<4:r.append('')
             r[1]='INTEGRAÇÃO PREPARADA — OFF';r[2]='—';r[3]='Ativação depende de fonte/credencial legalmente habilitada.'
         cert.append(r)
@@ -58,6 +58,7 @@ def comprehensive_truth_guard(payload:dict[str,Any],result:dict[str,Any],base_gu
             r[1]='INTEGRAÇÃO RESTRITA — OFF';r[2]='—';r[3]='Não inferido do CAR; conector preparado para provedor/fonte autorizada.'
         matrix.append(r)
     land['matrix']=matrix
+    payload=incra_acervo_f2.apply_to_report_payload(payload,acervo)
 
     # Monitoring values must reflect the real Sentinel and fire engines.
     mon=payload.setdefault('monitoring',{})
@@ -116,7 +117,7 @@ def comprehensive_truth_guard(payload:dict[str,Any],result:dict[str,Any],base_gu
 
     # Build an objective coverage statement from real engines, instead of keeping the old "Raio-X parcial" wording.
     checks={
-        'CAR/SICAR':car.get('ok') is True,'SIGEF':sigef.get('ok') is True,'IBAMA embargos':emb.get('ok') is True,
+        'CAR/SICAR':car.get('ok') is True,'SIGEF':incra_acervo_f2.family_answered(acervo,'sigef'),'IBAMA embargos':emb.get('ok') is True,
         'IBAMA autos':autos.get('ok') is True,'PRODES':prodes.get('ok') is True,'ANM':anm.get('ok') is True,
         'restrições territoriais':cons.get('ok') is True,'outorgas':water.get('ok') is True,'pivôs':piv.get('ok') is True,
         'clima':cl.get('ok') is True,'solo':(ide.get('soil') or {}).get('ok') is True,
