@@ -199,12 +199,12 @@ class PlainPinned(http.client.HTTPConnection):
 
 
 class PonteEnv:
-    def __init__(self, resolver=None, **svc_kwargs):
+    def __init__(self, resolver=None, connector=None, **svc_kwargs):
         self.log = io.StringIO()
         self.connects: list[tuple[str, str]] = []
         self.resolves: list[str] = []
         token = svc_kwargs.pop("token", TOKEN)
-        self.svc = ponte.Service(token=token, resolver=resolver or self._resolver, connector=self._connector,
+        self.svc = ponte.Service(token=token, resolver=resolver or self._resolver, connector=connector or self._connector,
                                  log_stream=self.log, **svc_kwargs)
         self.server = ponte.make_server(("127.0.0.1", 0), self.svc)
         self.port = self.server.server_address[1]
@@ -429,6 +429,19 @@ def s_request_body():
     assert ponte.Service().max_request_bytes == ponte.MAX_REQUEST_BYTES == 1024 * 1024
 
 
+class _SlowConnect(PlainPinned):
+    """Conexão que só desiste quando o prazo recebido acaba (no máximo 5 s)."""
+
+    def connect(self):
+        time.sleep(min(float(self.timeout), 5.0))
+        raise socket.timeout("connect")
+
+
+def _slow_resolver(host, timeout):
+    time.sleep(min(float(timeout), 5.0))
+    raise ponte.Refused(504, "dns_timeout")
+
+
 def s_timeout():
     with PonteEnv(upstream_timeout_s=1.0) as e:
         for path in ("/slow", "/drip", "/drip-headers"):
@@ -436,6 +449,16 @@ def s_timeout():
             refused(e.call(url="https://geoserver.car.gov.br" + path), 504, "upstream_timeout")
             took = time.monotonic() - t0
             assert took < 2.5, (path, took)
+    # DNS e conexão acontecem ANTES da vigia do prazo: só o prazo que sobra (passado a cada fase) os limita.
+    # No Linux a vigia sozinha já corta a leitura da fonte; sem estes dois casos, ignorar o prazo passava.
+    for label, kwargs, code in (("DNS lento", {"resolver": _slow_resolver}, "dns_timeout"),
+                                ("conexão lenta", {"connector": lambda host, ip, timeout: _SlowConnect(host, ip, timeout)},
+                                 "upstream_timeout")):
+        with PonteEnv(upstream_timeout_s=1.0, **kwargs) as e:
+            t0 = time.monotonic()
+            refused(e.call(), 504, code)
+            took = time.monotonic() - t0
+            assert took < 2.5, (label, "passou do prazo total", round(took, 2))
     with PonteEnv() as e:  # o cliente pede menos que os 25 s
         t0 = time.monotonic()
         refused(e.call(url="https://geoserver.car.gov.br/slow", headers={"X-Ponte-Timeout": "1"}), 504, "upstream_timeout")
