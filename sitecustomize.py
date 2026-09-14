@@ -23,6 +23,7 @@ def _load_report_after_report_api():
                 import report_perf_v24  # noqa: F401
                 import core_retry_fast_v29  # noqa: F401
                 import report_v19_patch  # noqa: F401
+                import report_v20_patch  # noqa: F401
                 import report_visual_identity_v28  # noqa: F401
                 import report_extras_perf_v30  # noqa: F401
                 import landuse_profile_v39  # noqa: F401
@@ -83,6 +84,7 @@ def _load_portal_deferred():
                 import portal_experience_v43  # noqa: F401
                 import portal_map_panel_v45  # noqa: F401
                 import portal_conformity_mte_v48  # noqa: F401
+                import portal_prodes_card_f2  # noqa: F401  (F2: linha PRODES do cartão = leitura do relatório)
                 import portal_car_integrity_v47  # noqa: F401
                 import portal_car_integrity_ui_v47  # noqa: F401
                 import portal_map_stability_v43  # noqa: F401
