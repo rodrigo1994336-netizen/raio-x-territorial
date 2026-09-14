@@ -610,7 +610,8 @@ def _rows(reading: dict[str, Any], texts: dict[str, Any]) -> list[list[str]]:
         if rest > 0:
             rows.append(["Demais ocorrências", f"mais {rest} dentro do imóvel, já somadas no total acima"])
         if post["count"]:
-            rows.append(["Depois de 31/07/2019", f"{post['count']} • {format_ha(post['area_ha'])} • {_years_text(post['years'])}"])
+            pc = post["count"]
+            rows.append(["Depois de 31/07/2019", f"{pc} {_plural(pc, 'desmatamento', 'desmatamentos')} • {format_ha(post['area_ha'])} • PRODES {_years_text(post['years'])}"])
         else:
             rows.append(["Depois de 31/07/2019", "Nenhum dentro do imóvel nas camadas consultadas"])
     if texts["boundary_core"]:
