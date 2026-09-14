@@ -29,6 +29,10 @@ jobs:
         run: PYTHONPATH=. python scripts/d0_source_registry_gate.py
       - name: D1a CAR title provenance gate
         run: PYTHONPATH=. python scripts/d1a_identity_title_gate.py
+      - name: F2 CONAB warehouses and DETER alerts gate (rules and positive controls)
+        env:
+          RX_RELEASE: OFF
+        run: PYTHONPATH=. python scripts/f2_conab_deter_gate.py
       - name: R1 report pt-BR presentation gate
         env:
           RX_RELEASE: OFF
@@ -43,6 +47,7 @@ jobs:
           import highres_reference, street_level_access, visual_hybrid, terrain_srtm, property_visual_plate_v25
           import prodes_fast_v24, anm_fast_v29, core_retry_fast_v29, territorial_production, landuse_profile_v39
           import report_truth_guard_v16, report_book_style, report_engine_v6, report_engine_v7, report_engine_v8
+          import conab_armazens, deter_alertas
           import live_report_adapter_v18, report_visual_identity_v28, report_extras_perf_v30, heavy_live_api_v20, report_pdf_cache_v21, report_quick_v22, github_oidc_auth, monitoring_store, monitoring_routes, alerts_routes
           sample={'ok':True,'source':'MapBiomas','year':2025,'native_vegetation_share_pct':20,'classes':[{'code':15,'share_pct':55},{'code':39,'share_pct':25}]}
           p=landuse_profile_v39.classify_landuse_profile(sample)

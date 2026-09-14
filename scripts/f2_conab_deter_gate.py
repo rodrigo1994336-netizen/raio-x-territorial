@@ -9,6 +9,10 @@ scripts/f2_conab_deter_fixtures.py (sem dado pessoal). Cada regra tem controle
 positivo: o gate injeta o defeito antigo (distância ao centro, ETag com "-gzip",
 CQL sem SRID, falha virando zero, soma entre fontes, nome de pessoa física, sem
 corte do PRODES, "15.930 t" no PDF, polígono grande no CSV) e exige que a checagem reprove.
+Pós-revisão, também: envoltória decidindo a divisa do bioma, corte de cada sistema
+com o texto usando o mais antigo, degradação contada como desmatamento, "mais próximo"
+com armazém sem conferência, falha não guardada, trava que faz fila e o contrato do
+combinador MapBiomas × DETER × PRODES.
 """
 from __future__ import annotations
 
@@ -28,7 +32,7 @@ sys.path.insert(0, str(ROOT))
 FIX = ROOT / "tests" / "fixtures" / "f2_conab_deter"
 
 from shapely import wkt as shapely_wkt  # noqa: E402
-from shapely.geometry import box, shape  # noqa: E402
+from shapely.geometry import box, mapping, shape  # noqa: E402
 
 import conab_armazens as ca  # noqa: E402
 import deter_alertas as da  # noqa: E402
@@ -52,6 +56,8 @@ CAIXAS = {
     "controle_alerta_18km_cerrado": box(-44.36, -18.92, -44.34, -18.90),
     "controle_alerta_amazonia": box(-55.36, -12.05, -55.33, -12.035),
     "controle_fora_cobertura": box(-46.64, -23.56, -46.62, -23.54),
+    # alerta real deter_amz.11108_curr (DEGRADACAO, 09/01/2026, Juara/MT)
+    "controle_degradacao_amazonia": box(-57.562, -10.371, -57.549, -10.360),
 }
 PROIBIDO = re.compile(r"sem alerta|sem desmatamento|área regular|sem pendência|SEM ALERTA|Traceback|Error\b", re.I)
 PII = ("removido@example.invalid", "ENDERECO REMOVIDO", "PESSOA FISICA FICTICIA", "EMPRESARIO FICTICIO")
@@ -148,10 +154,12 @@ class Servidor:
 def cache_temporario():
     d = Path(tempfile.mkdtemp(prefix="f2gate-"))
     ca._MEMORIA.clear()
+    ca._FALHAS.clear()
     try:
         yield d
     finally:
         ca._MEMORIA.clear()
+        ca._FALHAS.clear()
         shutil.rmtree(d, ignore_errors=True)
 
 
@@ -204,7 +212,8 @@ def conab(geom, servidor=None, base=None):
 
 def deter(geom, servidor=None, prodes=None):
     da._CACHE.clear()
-    return da.deter_alerts_payload(geom, prodes, http_get=servidor or Servidor())
+    da._COB_FALHA.clear()
+    return da.deter_alerts_payload(geom, prodes, http_get=servidor or Servidor(), base_dir=_BASE_DETER)
 
 
 def alerta_csv(cenario: str) -> list[dict]:
@@ -412,7 +421,8 @@ def _prodes_18km() -> dict:
 
 def _respostas(geom, corte: str | None = None) -> dict:
     da._CACHE.clear()
-    resp = da.query_deter_live(geom, http_get=Servidor())
+    da._COB_FALHA.clear()
+    resp = da.query_deter_live(geom, http_get=Servidor(), base_dir=_BASE_DETER)
     if corte:
         for s in resp.values():
             if s.get("corte"):
@@ -501,6 +511,343 @@ def check_deter_corte_discordante() -> None:
     assert corte["data"] == "2025-06-30" and corte["discordancia"], corte  # vale a mais antiga, e registra
 
 
+# ---------------------------------------------------------------- pós-revisão (divisa, corte único, classes, trava, combinador)
+
+class ServidorBioma:
+    """Servidor sintético que avalia o CQL de cobertura contra uma área monitorada inventada.
+
+    Serve só para a divisa do bioma: a geometria real (14–19 MB) não vira fixture. Alertas: CSV
+    vazio; corte e última imagem: datas fixas. ``falhar_geometria`` derruba o download da área.
+    """
+
+    def __init__(self, areas: dict, falhar_geometria: bool = False):
+        self.areas = areas  # sistema -> geometria (ou None = não monitora)
+        self.falhar_geometria = falhar_geometria
+        self.pedidos: list[tuple[str, dict]] = []
+
+    def _sistema(self, params: dict) -> str | None:
+        nome = str(params.get("typeNames") or "")
+        for k, cfg in da.SISTEMAS.items():
+            if nome in (cfg["cobertura_camada"], cfg["camada"]):
+                return k
+        return None
+
+    def __call__(self, url, *, params=None, headers=None):
+        params = dict(params or {})
+        self.pedidos.append((url, params))
+        nome = str(params.get("typeNames") or "")
+        k = self._sistema(params)
+        area = self.areas.get(k) if k else None
+        if params.get("resultType") == "hits":
+            m = re.match(r"^(INTERSECTS|CONTAINS)\(geom,SRID=4674;(.+)\)$", params["CQL_FILTER"])
+            env = shapely_wkt.loads(m.group(2))
+            ok = area is not None and (area.intersects(env) if m.group(1) == "INTERSECTS" else area.contains(env))
+            return Resposta(200, f'<wfs:FeatureCollection numberMatched="{int(ok)}" numberReturned="0"/>'.encode())
+        if k and nome == da.SISTEMAS[k]["cobertura_camada"] and params.get("outputFormat") == "csv":
+            if self.falhar_geometria:
+                raise ConnectionError("simulado")
+            return Resposta(200, f'FID,geom\r\nb.1,"{area.wkt}"\r\n'.encode())
+        if k and params.get("outputFormat") == "csv":
+            col = da.SISTEMAS[k]["coluna_geom"]
+            return Resposta(200, f"FID,gid,classname,view_date,sensor,satellite,{col}\r\n".encode())
+        campo = {"deter-amz:prodes_reference": ("end_date", "2025-07-31"), "deter-amz:updated_date": ("updated_date", "2026-09-04"),
+                 "prodes-cerrado-nb:yearly_deforestation": ("year", "2025")}.get(nome)
+        if campo is None and "deter_cerrado" in nome:
+            campo = ("view_date", "2025-07-31" if "_hist" in str(params.get("CQL_FILTER")) else "2026-09-04")
+        if campo:
+            return Resposta(200, json.dumps({"features": [{"properties": {campo[0]: campo[1]}}]}).encode())
+        raise LookupError(f"pedido inesperado: {url} {params}")
+
+
+def _imovel_redondo():
+    from shapely.geometry import Point
+    car = Point(-47.0, -12.0).buffer(0.02, quad_segs=64)  # ~4,4 km: envoltória com 257 vértices vira retângulo mínimo
+    env = shapely_wkt.loads(da.envelope_wkt(car))
+    assert env.buffer(1e-9).covers(car) and da.area_ha(env) > 1.2 * da.area_ha(car), "cenário não reproduz a envoltória folgada"
+    return car, env
+
+
+def _deter_bioma(car, areas: dict, falhar_geometria: bool = False, agora: float | None = None) -> dict:
+    da._CACHE.clear()
+    da._COB_FALHA.clear()
+    base = Path(tempfile.mkdtemp(prefix="f2gate-deter-"))
+    try:
+        s = ServidorBioma(areas, falhar_geometria=falhar_geometria)
+        p = da.deter_alerts_payload(car, http_get=s, base_dir=base, agora=agora)
+        return {**p, "_pedidos": s.pedidos}
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+
+def check_deter_divisa_dentro_do_imovel_total() -> None:
+    car, env = _imovel_redondo()
+    # (A) área monitorada contém o imóvel mas não a envoltória: cobertura total, sem nota de parte fora
+    dentro = car.buffer(0.002)
+    assert dentro.contains(car) and not dentro.contains(env) and dentro.intersects(env)
+    p = _deter_bioma(car, {"cerrado": dentro, "amazonia": None})
+    cer = p["systems"]["cerrado"]
+    assert cer["coverage"] == "total" and cer["coverage_detail"]["metodo"] == "poligono_real", cer
+    assert p["state"] == "not_found" and da.NOTA_COBERTURA_PARCIAL not in p["notes"], p
+    conferir_textos(p)
+
+
+def check_deter_divisa_fora_do_imovel_nao_coberto() -> None:
+    from shapely.geometry import Point
+    car, env = _imovel_redondo()
+    # (B) área monitorada toca a envoltória mas não o imóvel: não coberto, nunca "nenhum alerta"
+    canto = Point(env.exterior.coords[0]).buffer(0.003)
+    assert canto.intersects(env) and not canto.intersects(car)
+    p = _deter_bioma(car, {"cerrado": canto, "amazonia": None})
+    assert p["state"] == "not_covered" and p["systems"]["cerrado"]["state"] == "not_covered", p
+    assert "não cobre" in p["text"] and "Nenhum" not in p["text"], p["text"]
+    assert not any(pr.get("bbox") for _, pr in p["_pedidos"]), "alertas consultados fora da área monitorada"
+    conferir_textos(p)
+
+
+def check_deter_divisa_no_meio_do_imovel_parcial() -> None:
+    car, env = _imovel_redondo()
+    # (C) divisa passa pelo meio do imóvel: parcial, com a nota
+    minx, miny, maxx, maxy = car.bounds
+    metade = box(minx - 1, miny - 1, (minx + maxx) / 2, maxy + 1)
+    p = _deter_bioma(car, {"cerrado": metade, "amazonia": None})
+    assert p["systems"]["cerrado"]["coverage"] == "parcial" and da.NOTA_COBERTURA_PARCIAL in p["notes"], p
+    # "nenhum alerta" vale só para a parte monitorada, e o texto diz isso
+    assert p["state"] == "not_found" and "sobre a parte monitorada do imóvel" in p["text"], p["text"]
+    conferir_textos(p)
+    # outro sistema cobre o imóvel inteiro: o imóvel todo foi olhado, sem ressalva
+    p = _deter_bioma(car, {"cerrado": metade, "amazonia": box(minx - 1, miny - 1, maxx + 1, maxy + 1)})
+    assert p["systems"]["amazonia"]["coverage"] == "total" and p["systems"]["cerrado"]["coverage"] == "parcial", p["systems"]
+    assert "sobre o imóvel" in p["text"] and da.NOTA_COBERTURA_PARCIAL not in p["notes"], p
+    conferir_textos(p)
+
+
+def check_deter_divisa_sem_geometria_pendente() -> None:
+    car, env = _imovel_redondo()
+    dentro = car.buffer(0.002)
+    p = _deter_bioma(car, {"cerrado": dentro, "amazonia": None}, falhar_geometria=True, agora=1_000_000.0)
+    assert p["state"] == "pending" and p["text"] == "Consulta pendente." and p["complete"] is False, p
+    # falha guardada: o relatório seguinte (1 min depois) não espera o mesmo download que caiu
+    da._CACHE.clear()
+    base = Path(tempfile.mkdtemp(prefix="f2gate-deter-"))
+    try:
+        s = ServidorBioma({"cerrado": dentro, "amazonia": None}, falhar_geometria=True)
+        da._COB_FALHA.clear()
+        da.deter_alerts_payload(car, http_get=s, base_dir=base, agora=1_000_000.0)
+        n1 = sum(1 for _, pr in s.pedidos if pr.get("outputFormat") == "csv" and "biome_border" in str(pr.get("typeNames")))
+        da.deter_alerts_payload(car, http_get=s, base_dir=base, agora=1_000_060.0)
+        n2 = sum(1 for _, pr in s.pedidos if pr.get("outputFormat") == "csv" and "biome_border" in str(pr.get("typeNames")))
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+    assert n1 == 1 and n2 == 1, (n1, n2)
+
+
+def _alerta_com_data(resp: dict, sistema: str, data_iso: str) -> None:
+    resp[sistema]["alertas"] = [{**a, "data_imagem": data_iso} for a in resp[sistema]["alertas"]]
+
+
+def _desde_coerente(p: dict, resp: dict, geom) -> None:
+    """O "desde" do texto é o filtro: nenhum alerta dentro do imóvel depois dele ficou de fora."""
+    m = re.search(r"desde (\d{2})/(\d{2})/(\d{4})", p["text"])
+    if not m or p["state"] != "not_found":
+        return
+    desde = date(int(m.group(3)), int(m.group(2)), int(m.group(1)))
+    for s in resp.values():
+        for a in s.get("alertas") or []:
+            if da.area_ha(geom.intersection(a["geometria"])) >= da.AREA_MINIMA_LEITURA_HA:
+                assert da._data(a["data_imagem"]) < desde, ("alerta dentro do imóvel depois do 'desde'", a["id"], p["text"])
+
+
+def check_deter_corte_unico_entre_sistemas() -> None:
+    geom = CAIXAS["controle_alerta_recente_cerrado"]
+    amz = {"cobertura": "total", "cobertura_detalhe": {}, "alertas": [], "truncado": False, "corte": "2024-07-31",
+           "ultima_imagem": "2026-09-04", "erros": []}
+    # Cerrado com corte 31/07/2025, Amazônia Legal com 31/07/2024; alerta real do Cerrado com a data entre os dois
+    resp = _respostas(geom)
+    resp["cerrado"]["corte"] = "2025-07-31"
+    _alerta_com_data(resp, "cerrado", "2025-03-10")
+    resp["amazonia"] = dict(amz)
+    p = da.deter_alerts_in_property(geom, resp)
+    assert p["cutoff"] == "2024-07-31" and p["audit"]["cutoff_by_system"] == {"cerrado": "2025-07-31", "amazonia": "2024-07-31"}, p
+    assert p["state"] == "found" and [e["first_seen"] for e in p["events"]] == ["2025-03-10"], p
+    assert p["systems"]["cerrado"]["state"] == "found", p["systems"]
+    conferir_textos(p)
+    # mesmo alerta antes dos dois cortes: não é recente, e o "desde" do texto continua sendo o filtro
+    resp = _respostas(geom)
+    resp["cerrado"]["corte"] = "2025-07-31"
+    _alerta_com_data(resp, "cerrado", "2024-07-15")
+    resp["amazonia"] = dict(amz)
+    p = da.deter_alerts_in_property(geom, resp)
+    assert p["state"] == "not_found" and "desde 01/08/2024" in p["text"], p["text"]
+    _desde_coerente(p, resp, geom)
+
+
+def check_deter_classe_que_nao_e_desmatamento() -> None:
+    geom = CAIXAS["controle_degradacao_amazonia"]
+    da._CACHE.clear()
+    b = da.deter_alerts_bundle(geom, http_get=Servidor(), base_dir=_BASE_DETER)
+    p, comb = b["payload"], b["combiner"]
+    assert p["systems"]["amazonia"]["coverage"] == "total" and p["state"] == "found", p
+    assert not p["events"], ("degradação contada como desmatamento", p["events"])
+    assert len(p["other_events"]) == 1 and p["other_events"][0]["classes"] == ["Degradação"], p["other_events"]
+    assert p["other_events"][0]["alert_ids"] == ["deter_amz.11108_curr"], p["other_events"]
+    assert da.NOTA_CREDITO not in p["notes"] and da.FRASE_PRODES not in p["notes"], p["notes"]
+    assert any("não é multa nem auto de infração" in n for n in p["notes"]), p["notes"]
+    assert "Nenhum alerta recente de desmatamento" in p["text"] and "outra mudança na vegetação (degradação)" in p["text"], p["text"]
+    assert "prodes_overlap_ha" not in p["other_events"][0], p["other_events"][0]
+    # o combinador (MapBiomas × DETER × PRODES) trata toda feição como desmatamento: degradação não entra
+    assert comb["state"] == "answered" and comb["features"] == [] and comb["other_classes_excluded"] >= 1, comb
+    conferir_textos(p)
+
+
+def check_deter_contrato_combinador() -> None:
+    geom = CAIXAS["controle_alerta_recente_cerrado"]
+    da._CACHE.clear()
+    b = da.deter_alerts_bundle(geom, http_get=Servidor(), base_dir=_BASE_DETER)
+    comb = b["combiner"]
+    assert comb["state"] == "answered" and len(comb["features"]) == 1, comb
+    f = comb["features"][0]
+    assert f["type"] == "Feature" and f["geometry"]["type"] in ("Polygon", "MultiPolygon"), f
+    assert f["properties"]["gid"] == b["payload"]["events"][0]["alert_ids"][0] and da._data(f["properties"]["view_date"]), f
+    assert comb["cutoff"] == b["payload"]["cutoff"] and comb["min_area_ha"] == 3.0 and comb["latest_image_date"], comb
+    assert "_geom" not in json.dumps(b["payload"], default=str), "geometria interna vazou para o payload do relatório"
+    json.dumps(b["payload"], ensure_ascii=False)  # payload.json do relatório tem de ser serializável
+    fora = da.deter_alerts_bundle(CAIXAS["controle_fora_cobertura"], http_get=Servidor(), base_dir=_BASE_DETER)["combiner"]
+    assert fora["state"] == "not_covered" and fora["features"] == [], fora
+    for falha in ("outputFormat\": \"csv", "biome_border"):
+        da._CACHE.clear()
+        c = da.deter_alerts_bundle(geom, http_get=Servidor(falhar=(falha,)), base_dir=_BASE_DETER)["combiner"]
+        assert c["state"] == "pending" and c["features"] == [], (falha, c)  # lista vazia só é resposta com "answered"
+    # Com a frente MapBiomas presente, o combinador real tem de ler o DETER como respondido
+    if importlib.util.find_spec("mapbiomas_alerta") is not None:
+        import mapbiomas_alerta
+        out = mapbiomas_alerta.combine_deforestation_alerts(mapping(geom), None, comb, None, comb["cutoff"])
+        assert out["sources"]["inpe_deter"] == "answered", out
+        print("INFO check_deter_contrato_combinador: combine_deforestation_alerts real conferido")
+
+
+def check_conab_malha_falha_em_um_municipio() -> None:
+    # O armazém de 31,1 km passa a declarar Belo Horizonte, e a malha de BH não responde:
+    # sobra conferido só o de 47,1 km, que NÃO é o mais próximo.
+    bruto = _bruto_fixture()
+    col = ca.COLUNAS.index("cod_ibge")
+    linhas = []
+    for linha in bruto.split(b"\r\n"):
+        campos = linha.split(b";")
+        if len(campos) > col and campos[0].strip() == PROVA[0][0].encode():
+            campos[col] = b"3106200"
+        linhas.append(b";".join(campos))
+    trocado = b"\r\n".join(linhas)
+    with cache_temporario() as base, recorte_pequeno():
+        p = conab(CAR_GEOM, Servidor(falhar=("3106200",), trocar={ca.URL_ARMAZENS: trocado}), base=base)
+    assert p["state"] == "found" and p["complete"] is False and p["audit"]["location_unverified"] == 1, p
+    assert [i["cda"] for i in p["items"]] == [PROVA[1][0]], p["items"]
+    assert p["text"] == "Pelo menos 1 armazém cadastrado na CONAB em até 50 km do imóvel.", p["text"]
+    assert "km do imóvel," not in p["text"] and "mais próximo" not in p["text"], p["text"]
+    conferir_textos(p)
+
+
+def check_conab_sincronizacao_nao_trava_relatorio() -> None:
+    import threading
+
+    t0 = 1_000_000.0
+    vencido = t0 + ca.SYNC_TTL_S + 1
+    with cache_temporario() as base, recorte_pequeno():
+        assert ca.sync_conab_warehouses(base, http_get=Servidor(), agora=t0)["estado"] == "baixado"
+        # (1) com cópia boa e fonte fora: uma tentativa, e a falha fica guardada por 15 min
+        fora = Servidor(falhar=("portaldeinformacoes",))
+        assert ca.sync_conab_warehouses(base, http_get=fora, agora=vencido)["estado"] == "falhou"
+        p = ca.conab_warehouses_payload(CAR_GEOM, base_dir=base, http_get=fora, agora=vencido + 60)
+        assert p["state"] == "found" and len(p["items"]) == 2 and p["audit"]["sync"] == "falhou_recentemente", p
+        conab_pedidos = [x for x in fora.pedidos if x[0] == ca.URL_ARMAZENS]
+        assert len(conab_pedidos) == 1, f"fonte fora consultada {len(conab_pedidos)} vezes em 1 min"
+        assert ca.sync_conab_warehouses(base, http_get=fora, agora=vencido + ca.SYNC_NOVA_TENTATIVA_S + 1)["estado"] == "falhou"
+        assert len([x for x in fora.pedidos if x[0] == ca.URL_ARMAZENS]) == 2, "nova tentativa depois do intervalo não aconteceu"
+        # (2) outra linha de execução baixando: quem chega responde com a cópia boa, sem fila
+        entrou, liberar = threading.Event(), threading.Event()
+
+        def lento(url, *, params=None, headers=None):
+            entrou.set()
+            liberar.wait(10)
+            raise ConnectionError("simulado")
+
+        quando = vencido + 3 * ca.SYNC_NOVA_TENTATIVA_S
+        ta = threading.Thread(target=lambda: ca.sync_conab_warehouses(base, http_get=lento, agora=quando), daemon=True)
+        ta.start()
+        try:
+            assert entrou.wait(5), "download lento não começou"
+            saida: dict = {}
+            tb = threading.Thread(target=lambda: saida.update(r=ca.sync_conab_warehouses(base, http_get=lento, agora=quando)), daemon=True)
+            tb.start()
+            tb.join(2)
+            assert not tb.is_alive() and saida["r"]["estado"] == "em_andamento" and saida["r"]["tem_base"], "relatório ficou na fila do download"
+        finally:
+            liberar.set()
+            ta.join(10)
+    # (3) sem cópia nenhuma e fonte fora: pendente, e a falha também é guardada (1 min)
+    with cache_temporario() as base, recorte_pequeno():
+        fora = Servidor(falhar=("portaldeinformacoes",))
+        for dt in (0, 30):
+            p = ca.conab_warehouses_payload(CAR_GEOM, base_dir=base, http_get=fora, agora=t0 + dt)
+            assert p["state"] == "pending" and p["text"] == "Consulta pendente.", p
+        assert len([x for x in fora.pedidos if x[0] == ca.URL_ARMAZENS]) == 1, fora.pedidos
+
+
+def check_conab_malha_ibge_fora_nao_repete() -> None:
+    t0 = 1_000_000.0
+    # malha do IBGE fora: um relatório seguido não espera de novo o mesmo tempo limite
+    with cache_temporario() as base, recorte_pequeno():
+        s = Servidor(falhar=("servicodados.ibge.gov.br",))
+        for dt in (0, 60):
+            p = ca.conab_warehouses_payload(CAR_GEOM, base_dir=base, http_get=s, agora=t0 + dt)
+            assert p["state"] == "pending" and p["text"] == "Consulta pendente.", p
+        malhas = [x for x in s.pedidos if "servicodados.ibge.gov.br" in x[0]]
+        assert len(malhas) == 1, f"malha que caiu pedida {len(malhas)} vezes"
+
+
+def check_deter_geometria_da_area_monitorada_enxuta() -> None:
+    """Leitor anel por anel (pico de memória 127 MB contra 429 MB) dá a MESMA geometria do GEOS."""
+    import shapely
+
+    casos = [
+        "MULTIPOLYGON (((0 0, 10 0, 10 10, 0 10, 0 0), (2 2, 2 4, 4 4, 4 2, 2 2), (6 6, 6 8, 8 8, 8 6, 6 6)), "
+        "((20 20, 30 20, 30 30, 20 20)), ((-47.123456789012345 -12.5, -47.1 -12.5, -47.1 -12.4, -47.123456789012345 -12.5)))",
+        "MULTIPOLYGON(((0 0,1 0,1 1,0 0)),((5 5,6 5,6 6,5 5),(5.2 5.1,5.8 5.1,5.8 5.7,5.2 5.1)))",
+        "POLYGON ((0 0, 10 0, 10 10, 0 10, 0 0), (1 1, 1 2, 2 2, 1 1))",
+        "POLYGON Z ((0 0 1, 1 0 1, 1 1 1, 0 0 1))",  # forma não prevista: cai no leitor do GEOS
+    ]
+    def _csv(*linhas: str, fim: str = "\r\n") -> bytes:
+        return ("\r\n".join(linhas) + fim).encode("utf-8")
+
+    for wkt in casos:
+        g = da.parse_coverage_csv(_csv("FID,nome,geom", f'b.1,"Amazônia Legal, teste","{wkt}"'))
+        ref = shapely.from_wkt(wkt)
+        ref = ref if ref.is_valid else shapely.make_valid(ref)
+        assert g.equals_exact(ref, 0) and g.geom_type == ref.geom_type, (wkt, g.wkt, ref.wkt)
+    duas = _csv("FID,geom", 'b.1,"POLYGON ((0 0, 1 0, 1 1, 0 0))"', 'b.2,"POLYGON ((1 0, 2 0, 2 1, 1 0))"')
+    assert abs(da.parse_coverage_csv(duas).area - 1.0) < 1e-12
+    for ruim in (_csv("FID,geom", 'b.1,"MULTIPOLYGON (((0 0, 1 0, 1 1', fim=""), _csv("FID,geom", "b.1,"),
+                 _csv("FID,nome", "b.1,x"), _csv("FID,geom", 'b.1,"POLYGON ((0 0, 1 0, 1 1, 0 0))"', "b.2,")):
+        try:
+            da.parse_coverage_csv(ruim)
+        except ValueError:
+            continue
+        raise AssertionError(f"CSV incompleto aceito como área monitorada: {ruim!r}")
+
+
+def _aneis_viram_poligonos(wkt, ini=0, fim=None):
+    """Defeito plausível do leitor enxuto: buraco lido como polígono à parte."""
+    import numpy as np
+    import shapely
+
+    fim = len(wkt) if fim is None else fim
+    polys = []
+    for m in da._ANEL_WKT.finditer(wkt, ini, fim):
+        c = np.fromstring(m.group(1).replace(b",", b" ").decode("ascii"), dtype=np.float64, sep=" ")
+        polys.append(shapely.polygons(shapely.linearrings(c.reshape(-1, 2))))
+    return shapely.multipolygons(polys)
+
+
+_BASE_DETER = Path(tempfile.mkdtemp(prefix="f2gate-deter-base-"))
 CHECKS = [v for k, v in dict(globals()).items() if k.startswith("check_")]
 
 
@@ -554,7 +901,79 @@ def _csv_sem_limite(texto, sistema):
     return [dict(r) for r in csv.DictReader(io.StringIO(texto))], 1
 
 
-ORIGINAIS = {"params_coverage": da.params_coverage, "deter_alerts_in_property": da.deter_alerts_in_property}
+def _cobertura_so_envoltoria(sistema, geom, http_get, *, base_dir=None, agora=None, detalhe=None):
+    """Defeito revisado: a envoltória decidia sozinha (cruzou a divisa = parcial)."""
+    url = da.URL_TB.format(ws=da.SISTEMAS[sistema]["cobertura_ws"])
+    if da._number_matched(da._get_ok(http_get, url, da.params_coverage(sistema, geom, "INTERSECTS")).text) == 0:
+        return "nenhuma"
+    if da._number_matched(da._get_ok(http_get, url, da.params_coverage(sistema, geom, "CONTAINS")).text) > 0:
+        return "total"
+    return "parcial"
+
+
+def _cobertura_falha_vira_nenhuma(*a, **k):
+    try:
+        return ORIGINAIS["query_coverage"](*a, **k)
+    except Exception:
+        return "nenhuma"
+
+
+def _corte_por_sistema(geom, respostas, prodes=None):
+    """Defeito revisado: cada sistema descartava alertas pelo próprio corte, e o texto usava o mais antigo."""
+    r = {}
+    for k, v in respostas.items():
+        v = dict(v)
+        c = da._data(v.get("corte"))
+        if c and v.get("alertas"):
+            v["alertas"] = [a for a in v["alertas"] if (da._data(a["data_imagem"]) or date.max) > c]
+        r[k] = v
+    return ORIGINAIS["deter_alerts_in_property"](geom, r, prodes)
+
+
+def _parcial_sem_ressalva(geom, respostas, prodes=None):
+    """Defeito revisado: imóvel só em parte monitorado lia 'nenhum alerta sobre o imóvel'."""
+    p = ORIGINAIS["deter_alerts_in_property"](geom, respostas, prodes)
+    p["text"] = p["text"].replace("sobre a parte monitorada do imóvel", "sobre o imóvel")
+    return p
+
+
+def _combinador_falha_vira_vazio(geom, respostas):
+    out = ORIGINAIS["deter_combiner_input"](geom, respostas)
+    if out["state"] == "pending":
+        out["state"] = "answered"
+    return out
+
+
+def _mais_proximo_sem_conferencia(resultado, meta, *, pendente=False):
+    """Defeito revisado: com armazém sem conferência, o texto ainda afirmava o mais próximo."""
+    if resultado and resultado.get("sem_conferencia") and resultado.get("itens"):
+        r = {**resultado, "excluidos_localizacao": [*resultado["excluidos_localizacao"], *resultado["sem_conferencia"]],
+             "sem_conferencia": []}
+        out = ORIGINAIS["build_warehouses_payload"](r, meta, pendente=pendente)
+        out["audit"].update(location_unverified=len(resultado["sem_conferencia"]),
+                            location_mismatch=len(resultado["excluidos_localizacao"]))
+        return out
+    return ORIGINAIS["build_warehouses_payload"](resultado, meta, pendente=pendente)
+
+
+class _TravaQueEspera:
+    """Defeito revisado: lock global segurado durante a rede; quem chega espera na fila."""
+
+    def __init__(self):
+        import threading
+
+        self._l = threading.Lock()
+
+    def acquire(self, blocking=True, timeout=-1):
+        return self._l.acquire()
+
+    def release(self):
+        self._l.release()
+
+
+ORIGINAIS = {"params_coverage": da.params_coverage, "deter_alerts_in_property": da.deter_alerts_in_property,
+             "query_coverage": da.query_coverage, "deter_combiner_input": da.deter_combiner_input,
+             "build_warehouses_payload": ca.build_warehouses_payload}
 MUTANTES = [
     ("distância ao centro do imóvel", ca, "candidates_in_radius", _centro, check_conab_curvelo_prova),
     ("If-None-Match com o ETag '-gzip' e sem If-Modified-Since", ca, "cabecalhos_condicionais",
@@ -567,6 +986,25 @@ MUTANTES = [
     ("área somada entre fontes", da, "deter_alerts_in_property", _soma_entre_fontes, check_deter_uniao_entre_sistemas),
     ("sem corte do PRODES", da, "deter_alerts_in_property", _sem_corte, check_deter_controle_alerta_18km),
     ("polígono grande estoura o limite do csv", da, "parse_alerts_csv", _csv_sem_limite, check_deter_csv_poligono_grande),
+    # pós-revisão
+    ("envoltória decide a cobertura na divisa (imóvel dentro)", da, "query_coverage", _cobertura_so_envoltoria,
+     check_deter_divisa_dentro_do_imovel_total),
+    ("envoltória decide a cobertura na divisa (imóvel fora)", da, "query_coverage", _cobertura_so_envoltoria,
+     check_deter_divisa_fora_do_imovel_nao_coberto),
+    ("'nenhum alerta sobre o imóvel' com o imóvel só em parte monitorado", da, "deter_alerts_in_property", _parcial_sem_ressalva,
+     check_deter_divisa_no_meio_do_imovel_parcial),
+    ("geometria da área monitorada que falhou vira 'não coberto'", da, "query_coverage", _cobertura_falha_vira_nenhuma,
+     check_deter_divisa_sem_geometria_pendente),
+    ("falha da geometria da área monitorada não guardada", da, "COBERTURA_NOVA_TENTATIVA_S", 0, check_deter_divisa_sem_geometria_pendente),
+    ("corte de cada sistema e texto com o mais antigo", da, "deter_alerts_in_property", _corte_por_sistema, check_deter_corte_unico_entre_sistemas),
+    ("degradação contada como desmatamento", da, "_e_desmatamento", lambda classe: True, check_deter_classe_que_nao_e_desmatamento),
+    ("combinador recebe falha como lista vazia respondida", da, "deter_combiner_input", _combinador_falha_vira_vazio, check_deter_contrato_combinador),
+    ("texto afirma o mais próximo com armazém sem conferência", ca, "build_warehouses_payload", _mais_proximo_sem_conferencia,
+     check_conab_malha_falha_em_um_municipio),
+    ("falha da CONAB não guardada", ca, "falha_recente", lambda *a, **k: False, check_conab_sincronizacao_nao_trava_relatorio),
+    ("falha da malha do IBGE não guardada", ca, "falha_recente", lambda *a, **k: False, check_conab_malha_ibge_fora_nao_repete),
+    ("trava da sincronização espera o download", ca, "_SYNC_LOCK", _TravaQueEspera(), check_conab_sincronizacao_nao_trava_relatorio),
+    ("leitor enxuto lê buraco como polígono", da, "poligonal_de_wkt", _aneis_viram_poligonos, check_deter_geometria_da_area_monitorada_enxuta),
 ]
 
 
@@ -591,6 +1029,7 @@ def main() -> int:
             print(f"CONTROLE_POSITIVO_FALHOU {check.__name__} não viu o defeito: {nome}")
     if "--ao-vivo" in sys.argv:
         falhas += ao_vivo()
+    shutil.rmtree(_BASE_DETER, ignore_errors=True)
     if falhas:
         print(f"F2_CONAB_DETER_GATE=FAIL falhas={falhas}")
         return 1

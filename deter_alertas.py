@@ -11,8 +11,18 @@ Como a consulta é feita (provado ao vivo em 13/09/2026):
   na borda do bioma (``prodes-cerrado-nb:biome_border``) e no limite da Amazônia
   Legal (``prodes-legal-amz:brazilian_legal_amazon``), com ``resultType=hits``.
   Sem o prefixo ``SRID=4674;`` o servidor devolve 0 sem erro (armadilha medida:
-  Curvelo × Cerrado = 0 sem SRID, 1 com SRID). Fora da cobertura o estado é
-  ``not_covered`` — "não coberto por este sistema", nunca "sem alerta".
+  Curvelo × Cerrado = 0 sem SRID, 1 com SRID). A envoltória só decide os dois
+  casos em que ela é prova: não toca a área monitorada (``nenhuma``) ou está toda
+  dentro dela (``total``). Se a envoltória cruza a divisa, a decisão é tomada com o
+  polígono REAL do CAR contra a geometria da área monitorada, baixada uma vez
+  (CSV, precisão total; medido em 14/09/2026: Cerrado 14 MB e 350 mil vértices,
+  Amazônia Legal 18,7 MB e 479 mil vértices, 3 a 10 s cada um conforme a carga da
+  máquina) e guardada em disco como WKB (5,6 e 7,7 MB; leitura 0,02–0,16 s). Parte
+  dentro abaixo de um pixel = ``nenhuma``; parte fora abaixo de um pixel =
+  ``total``. Fora da cobertura o estado é ``not_covered`` — "não coberto por este
+  sistema", nunca "sem alerta". Sem a geometria, a cobertura fica sem resposta.
+  Imóvel só em parte monitorado (e nenhum sistema cobrindo tudo): "nenhum alerta"
+  vale só "sobre a parte monitorada do imóvel", com a nota de cobertura parcial.
 * Alertas: ``bbox=minx,miny,maxx,maxy,EPSG:4674`` em lon/lat, saída ``csv`` (que
   traz a geometria em WKT com precisão total; o JSON do servidor arredonda para
   4 casas) e interseção exata com o polígono do CAR feita aqui.
@@ -27,9 +37,16 @@ Regra para não contar a mesma área duas vezes com o PRODES (relatório de font
    Cerrado: 31/07 do último ano de ``prodes-cerrado-nb:yearly_deforestation``,
    conferido com a maior data dos alertas ``_hist``; se discordarem, vale a mais
    antiga e a discordância é registrada. O corte anda sozinho quando sai o PRODES.
-2. Agrupar por lugar, não por fonte: alertas recentes que se tocam dentro do imóvel
+   UM corte só para o imóvel: com os dois sistemas respondendo (MT/TO/MA), vale o
+   mais antigo entre eles e ele é aplicado a TODOS os alertas, para que o "desde"
+   do texto seja exatamente o filtro usado.
+2. Só DESMATAMENTO_CR e DESMATAMENTO_VEG são desmatamento: recebem as regras 3 a
+   5. Degradação, cicatriz de incêndio, corte seletivo e mineração (só existem na
+   Amazônia Legal) ficam à parte, como "outra mudança na vegetação", sem a frase de
+   confirmação pelo PRODES e sem a nota de crédito rural.
+3. Agrupar por lugar, não por fonte: alertas recentes que se tocam dentro do imóvel
    (inclusive Cerrado × Amazônia Legal, que se sobrepõem em MT/TO/MA) viram um evento.
-3. Área = união das interseções dentro do CAR, medida por nós (GRS80). Nunca soma
+   Área = união das interseções dentro do CAR, medida por nós (GRS80). Nunca soma
    de áreas entre fontes.
 4. Evento recente sobre área que o PRODES já marcou: diz quantos hectares já
    constavam no mapa anual, em vez de somar.
@@ -37,23 +54,34 @@ Regra para não contar a mesma área duas vezes com o PRODES (relatório de font
    do PRODES; vira linha à parte ("ainda não confirmado pelo mapa anual").
 
 Texto fixo sempre que houver alerta: alerta não é multa nem auto de infração.
+
+Combinação com outras testemunhas (MapBiomas Alerta, frente ``f2/mapbiomas_alerta``):
+``deter_combiner_input`` entrega os alertas de desmatamento com geometria no contrato
+de ``combine_deforestation_alerts`` a partir das MESMAS respostas (uma consulta só).
 """
 from __future__ import annotations
 
 import csv
 import io
+import json
+import os
 import re
+import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
+from pathlib import Path
 from typing import Any, Callable, Iterable
 
+import numpy as np
+import shapely
 from pyproj import Geod
 from shapely import wkt as shapely_wkt
-from shapely.geometry import shape
+from shapely.geometry import mapping, shape
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
+from shapely.errors import GEOSException
 from shapely.validation import make_valid
 
 from report_ptbr_v50 import format_decimal
@@ -67,12 +95,18 @@ PAGINA = 2000
 AREA_MINIMA_LEITURA_HA = 0.09
 CORTE_TTL_S = 24 * 3600
 ULTIMA_IMAGEM_TTL_S = 6 * 3600
+# Limite do bioma (IBGE) e da Amazônia Legal: camadas estáticas; a cópia em disco vale 30 dias
+# e, vencida, continua valendo se a fonte não responder. Falha sem cópia: nova tentativa só
+# depois de 15 min, para relatórios seguidos não esperarem o mesmo download que caiu.
+COBERTURA_TTL_S = 30 * 86400
+COBERTURA_NOVA_TENTATIVA_S = 15 * 60
 USER_AGENT = "Raio-X-Territorial/F2 deter-alertas"
 FRASE_ALERTA = (
     "Alerta não é multa nem auto de infração. É um aviso de satélite de mudança na vegetação, "
-    "que pode ter autorização. O mapa oficial anual (PRODES) confirma ou não."
+    "que pode ter autorização."
 )
-NOTA_CREDITO = "Há alerta recente ainda não confirmado pelo mapa anual do PRODES."
+FRASE_PRODES = "O mapa oficial anual (PRODES) confirma ou não o desmatamento."
+NOTA_CREDITO = "Há alerta recente de desmatamento ainda não confirmado pelo mapa anual do PRODES."
 NOTA_COBERTURA_PARCIAL = "Parte do imóvel fica fora da área monitorada por este sistema do INPE."
 FONTE_TEXTO = "INPE/TerraBrasilis — DETER (licença CC-BY-SA-4.0)"
 TEXTO_PENDENTE = "Consulta pendente."
@@ -99,9 +133,16 @@ CLASSES = {
     "CS_DESORDENADO": "Corte seletivo desordenado",
     "CS_GEOMETRICO": "Corte seletivo geométrico",
 }
+# Só estas são desmatamento (as que o PRODES pode confirmar). Medido em 14/09/2026: o DETER
+# Cerrado só tem DESMATAMENTO_CR (133.097); o da Amazônia tem também degradação, cicatriz de
+# incêndio, corte seletivo e mineração. Classe desconhecida nunca vira desmatamento.
+CLASSES_DESMATAMENTO = frozenset({"DESMATAMENTO_CR", "DESMATAMENTO_VEG"})
 _GEOD = Geod(ellps="GRS80")
 _CACHE: dict[str, tuple[float, Any]] = {}
 _CACHE_LOCK = threading.Lock()
+_COB_LOCKS = {k: threading.Lock() for k in SISTEMAS}
+_COB_FALHA: dict[str, float] = {}
+_COB_MEMORIA: dict[str, BaseGeometry] = {}  # só quando o disco não aceita gravação
 
 HttpGet = Callable[..., Any]
 
@@ -227,12 +268,180 @@ def _get_ok(http_get: HttpGet, url: str, params: dict):
     return resp
 
 
-def query_coverage(sistema: str, geom: BaseGeometry, http_get: HttpGet) -> str:
-    """'total' | 'parcial' | 'nenhuma' (levanta exceção se o servidor não respondeu)."""
+def cache_dir(base: str | os.PathLike | None = None) -> Path:
+    return Path(base or os.environ.get("RX_DATA_CACHE_DIR") or Path(tempfile.gettempdir()) / "raio-x-data")
+
+
+def params_coverage_geometry(sistema: str) -> dict:
+    return {"service": "WFS", "version": "2.0.0", "request": "GetFeature", "typeNames": SISTEMAS[sistema]["cobertura_camada"],
+            "srsName": "EPSG:4674", "outputFormat": "csv"}
+
+
+_ANEL_WKT = re.compile(rb"\(([^()]*)\)")
+
+
+def poligonal_de_wkt(wkt: bytes, ini: int = 0, fim: int | None = None) -> BaseGeometry:
+    """POLYGON/MULTIPOLYGON 2D em WKT → geometria, anel por anel (sem o pico do leitor WKT do GEOS).
+
+    Cada grupo de parênteses mais interno é um anel; entre dois anéis, um ")" no intervalo
+    quer dizer polígono novo. Qualquer forma diferente (Z, EMPTY, número ímpar) levanta
+    ValueError, e quem chama usa o leitor do GEOS. ``ini``/``fim`` delimitam o WKT dentro de
+    ``wkt`` sem copiar o trecho.
+    """
+    fim = len(wkt) if fim is None else fim
+    cab = wkt[ini:min(fim, ini + 32)].lstrip().upper()
+    if not cab.startswith((b"MULTIPOLYGON", b"POLYGON")) or re.match(rb"^\w+\s*(Z|M|ZM|EMPTY)\b", cab):
+        raise ValueError("wkt_nao_poligonal_2d")
+    poligonos, aneis, fim_anterior = [], [], None
+    for m in _ANEL_WKT.finditer(wkt, ini, fim):
+        if fim_anterior is not None and b")" in wkt[fim_anterior:m.start()]:
+            poligonos.append(shapely.polygons(aneis[0], holes=aneis[1:] or None))
+            aneis = []
+        texto = m.group(1).replace(b",", b" ").decode("ascii")
+        coords = np.fromstring(texto, dtype=np.float64, sep=" ")
+        del texto
+        if coords.size < 8 or coords.size % 2 or not np.isfinite(coords).all():
+            raise ValueError("wkt_anel_invalido")
+        aneis.append(shapely.linearrings(coords.reshape(-1, 2)))
+        fim_anterior = m.end()
+    if aneis:
+        poligonos.append(shapely.polygons(aneis[0], holes=aneis[1:] or None))
+    if not poligonos or (cab.startswith(b"POLYGON") and len(poligonos) != 1):
+        raise ValueError("wkt_sem_poligono")
+    return poligonos[0] if cab.startswith(b"POLYGON") else shapely.multipolygons(poligonos)
+
+
+def parse_coverage_csv(corpo: bytes) -> BaseGeometry:
+    """Geometria da área monitorada no CSV do GeoServer (última coluna ``geom``, WKT com precisão total).
+
+    Lê direto dos bytes, sem decodificar o arquivo inteiro nem passar pelo módulo csv, e
+    monta a geometria anel por anel. Medido em 14/09/2026 com o arquivo real da Amazônia
+    Legal (18,7 MB, 479 mil vértices), pico de memória do processo partindo de ~55–70 MB:
+    texto + csv + leitor WKT do GEOS = 429 MB; bytes + leitor do GEOS = 259 MB (o pico está
+    dentro do leitor do GEOS); anel por anel = 127 MB, geometria idêntica (equals_exact 0).
+    Cerrado: 334 → 109 MB. WKT não tem aspas nem quebra de linha: cada geometria é o
+    trecho entre aspas que começa com POLYGON/MULTIPOLYGON.
+    """
+    corpo = bytes(corpo or b"")
+    fim_cab = corpo.find(b"\n")
+    if fim_cab < 0 or corpo[:fim_cab].decode("utf-8-sig", "replace").strip().split(",")[-1] != "geom":
+        raise ValueError("csv_cobertura_sem_geom")
+    partes = []
+    pos = fim_cab + 1
+    while True:
+        achados = [i for i in (corpo.find(b'"MULTIPOLYGON', pos), corpo.find(b'"POLYGON', pos)) if i >= 0]
+        if not achados:
+            break
+        i = min(achados)
+        j = corpo.find(b'"', i + 1)
+        if j < 0:
+            raise ValueError("csv_cobertura_truncado")
+        try:
+            partes.append(poligonal_de_wkt(corpo, i + 1, j))
+        except ValueError:
+            partes.append(shapely.from_wkt(corpo[i + 1:j].decode("ascii")))
+        pos = j + 1
+    linhas = corpo.count(b"\n", fim_cab + 1) + (0 if corpo.endswith(b"\n") else 1)
+    if not partes:
+        raise ValueError("csv_cobertura_vazio")
+    if linhas != len(partes):
+        raise ValueError("csv_cobertura_linha_sem_geometria")
+    geom = partes[0] if len(partes) == 1 else unary_union(partes)
+    geom = geom if geom.is_valid else make_valid(geom)
+    if geom.is_empty or area_ha(geom) <= 0:
+        raise ValueError("csv_cobertura_sem_area")
+    return geom
+
+
+def _gravar_atomico(path: Path, data: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def coverage_geometry(sistema: str, http_get: HttpGet, *, base_dir: str | os.PathLike | None = None,
+                      agora: float | None = None) -> BaseGeometry:
+    """Área monitorada pelo sistema (cópia em disco). Levanta exceção se não houver geometria confiável."""
+    now = time.time() if agora is None else agora
+    arq = cache_dir(base_dir) / "deter" / f"cobertura_{sistema}.wkb"
+    arq_meta = arq.with_suffix(".meta.json")
+    chave = str(arq)
+    with _COB_LOCKS[sistema]:  # relatórios simultâneos esperam o mesmo download em vez de repeti-lo
+        try:
+            meta = json.loads(arq_meta.read_text(encoding="utf-8"))
+            salvo = shapely.from_wkb(arq.read_bytes())
+        except (OSError, ValueError, GEOSException):
+            meta, salvo = {}, _COB_MEMORIA.get(chave)
+        if salvo is not None and (not meta or now - float(meta.get("baixado_em") or 0) < COBERTURA_TTL_S):
+            return salvo
+        falhou = _COB_FALHA.get(chave)
+        if falhou is not None and 0 <= now - falhou < COBERTURA_NOVA_TENTATIVA_S:
+            if salvo is not None:
+                return salvo  # vencida, mas a camada é estática
+            raise ValueError("cobertura_falhou_recentemente")
+        try:
+            resp = _get_ok(http_get, URL_TB.format(ws=SISTEMAS[sistema]["cobertura_ws"]), params_coverage_geometry(sistema))
+            geom = parse_coverage_csv(resp.content)
+            del resp
+        except Exception:
+            _COB_FALHA[chave] = now
+            if salvo is not None:
+                return salvo
+            raise
+        _COB_FALHA.pop(chave, None)
+        try:
+            _gravar_atomico(arq, shapely.to_wkb(geom))
+            _gravar_atomico(arq_meta, json.dumps({"baixado_em": now, "camada": SISTEMAS[sistema]["cobertura_camada"]}).encode("utf-8"))
+        except OSError:
+            _COB_MEMORIA[chave] = geom
+        return geom
+
+
+def classify_coverage(geom: BaseGeometry, area_monitorada: BaseGeometry, detalhe: dict | None = None) -> str:
+    """Cobertura pelo polígono real: parte dentro/fora abaixo de um pixel não conta."""
+    minx, miny, maxx, maxy = geom.bounds
+    folga = 0.01
+    local = shapely.clip_by_rect(area_monitorada, minx - folga, miny - folga, maxx + folga, maxy + folga)
+    if not local.is_valid:
+        local = make_valid(local)
+    dentro = area_ha(geom.intersection(local)) if not local.is_empty else 0.0
+    fora = area_ha(geom.difference(local)) if not local.is_empty else area_ha(geom)
+    if detalhe is not None:
+        detalhe.update(metodo="poligono_real", dentro_ha=round(dentro, 4), fora_ha=round(fora, 4))
+    if dentro < AREA_MINIMA_LEITURA_HA:
+        return "nenhuma"
+    if fora < AREA_MINIMA_LEITURA_HA:
+        return "total"
+    return "parcial"
+
+
+def query_coverage(sistema: str, geom: BaseGeometry, http_get: HttpGet, *, base_dir: str | os.PathLike | None = None,
+                   agora: float | None = None, detalhe: dict | None = None) -> str:
+    """'total' | 'parcial' | 'nenhuma' (levanta exceção se o servidor não respondeu).
+
+    A envoltória contém o CAR, então ela só prova dois casos: não tocar a área monitorada
+    (nenhuma) e estar toda dentro dela (total). Envoltória cruzando a divisa não diz nada
+    do imóvel: aí vale o polígono real contra a geometria da área monitorada.
+    """
     url = URL_TB.format(ws=SISTEMAS[sistema]["cobertura_ws"])
     if _number_matched(_get_ok(http_get, url, params_coverage(sistema, geom, "INTERSECTS")).text) == 0:
+        if detalhe is not None:
+            detalhe.update(metodo="envoltoria")
         return "nenhuma"
-    return "total" if _number_matched(_get_ok(http_get, url, params_coverage(sistema, geom, "CONTAINS")).text) > 0 else "parcial"
+    if _number_matched(_get_ok(http_get, url, params_coverage(sistema, geom, "CONTAINS")).text) > 0:
+        if detalhe is not None:
+            detalhe.update(metodo="envoltoria")
+        return "total"
+    return classify_coverage(geom, coverage_geometry(sistema, http_get, base_dir=base_dir, agora=agora), detalhe)
 
 
 def parse_alerts_csv(texto: str, sistema: str) -> tuple[list[dict], int]:
@@ -332,12 +541,13 @@ def query_latest_image(sistema: str, http_get: HttpGet, agora: float | None = No
     return valor
 
 
-def query_deter_live(geometria_car: Any, *, http_get: HttpGet | None = None, agora: float | None = None) -> dict:
+def query_deter_live(geometria_car: Any, *, http_get: HttpGet | None = None, agora: float | None = None,
+                     base_dir: str | os.PathLike | None = None) -> dict:
     """Consulta os dois sistemas e devolve as respostas cruas (falha fica registrada, nunca vira zero)."""
     get = http_get or _http_get
     geom = _geometria(geometria_car)
-    respostas: dict[str, dict] = {k: {"cobertura": None, "alertas": None, "truncado": False, "corte": None,
-                                      "ultima_imagem": None, "erros": []} for k in SISTEMAS}
+    respostas: dict[str, dict] = {k: {"cobertura": None, "cobertura_detalhe": {}, "alertas": None, "truncado": False,
+                                      "corte": None, "ultima_imagem": None, "erros": []} for k in SISTEMAS}
 
     def guarda(sistema: str, etapa: str, fn: Callable[[], Any]) -> Any:
         try:
@@ -347,7 +557,9 @@ def query_deter_live(geometria_car: Any, *, http_get: HttpGet | None = None, ago
             return None
 
     with ThreadPoolExecutor(max_workers=6) as pool:
-        cob = {k: pool.submit(guarda, k, "cobertura", lambda k=k: query_coverage(k, geom, get)) for k in SISTEMAS}
+        cob = {k: pool.submit(guarda, k, "cobertura", lambda k=k: query_coverage(k, geom, get, base_dir=base_dir, agora=agora,
+                                                                          detalhe=respostas[k]["cobertura_detalhe"]))
+               for k in SISTEMAS}
         for k in SISTEMAS:
             respostas[k]["cobertura"] = cob[k].result()
         tarefas = {}
@@ -409,12 +621,65 @@ def _grupos_que_se_tocam(geoms: list[BaseGeometry]) -> list[list[int]]:
     return list(grupos.values())
 
 
+def _e_desmatamento(classe: str | None) -> bool:
+    return (classe or "").strip().upper() in CLASSES_DESMATAMENTO
+
+
+def _eventos(recentes: list[dict], prodes: list[tuple[int | None, BaseGeometry]], com_prodes: bool) -> list[dict]:
+    """Agrupa por lugar (alertas que se tocam = um evento) e mede a união dentro do imóvel."""
+    eventos = []
+    for grupo in _grupos_que_se_tocam([a["intersecao"] for a in recentes]):
+        membros = [recentes[i] for i in grupo]
+        uniao = unary_union([m["intersecao"] for m in membros])
+        datas = sorted(d for d in (_data(m["data_imagem"]) for m in membros) if d)
+        sobre: dict[int | None, BaseGeometry] = {}
+        for ano, g in (prodes if com_prodes else []):
+            if g.intersects(uniao):
+                parte = g.intersection(uniao)
+                sobre[ano] = unary_union([sobre[ano], parte]) if ano in sobre else parte
+        sobre = {ano: g for ano, g in sobre.items() if area_ha(g) >= AREA_MINIMA_LEITURA_HA}
+        sobre_total = area_ha(unary_union(list(sobre.values()))) if sobre else 0.0
+        area = area_ha(uniao)
+        classes = list(dict.fromkeys(c for c in (_classe(m.get("classe")) for m in membros) if c))
+        satelites = list(dict.fromkeys(s for s in (_satelite(m.get("satelite"), m.get("sensor")) for m in membros) if s))
+        partes_linha = [_data_br(datas[0]) if datas else None, " / ".join(classes) or None,
+                        f"{_ha_texto(area)} dentro do imóvel", ("satélite " + ", ".join(satelites)) if satelites else None]
+        anos = sorted(a for a in sobre if a is not None)
+        if sobre_total >= AREA_MINIMA_LEITURA_HA:
+            ref = f"no mapa anual do PRODES de {', '.join(str(a) for a in anos)}" if anos else "no mapa do PRODES"
+            partes_linha.append(f"{_ha_texto(sobre_total)} já constavam {ref}")
+        evento = {
+            "first_seen": datas[0].isoformat() if datas else None, "first_seen_text": _data_br(datas[0]) if datas else None,
+            "last_seen": datas[-1].isoformat() if datas else None, "classes": classes, "satellites": satelites,
+            "systems": sorted({m["sistema"] for m in membros}), "alert_ids": [m["id"] for m in membros],
+            "area_in_property_ha": round(area, 4), "area_in_property_text": _ha_texto(area),
+            "line": " · ".join(p for p in partes_linha if p), "_geom": uniao,
+        }
+        if com_prodes:
+            evento.update(prodes_overlap_ha=round(sobre_total, 4), prodes_overlap_years=anos)
+        eventos.append(evento)
+    eventos.sort(key=lambda e: (e["first_seen"] or "", e["alert_ids"][0] or ""))
+    return eventos
+
+
+def _frase_eventos(eventos: list[dict], area_uniao: float, desmatamento: bool, prefixo: str) -> str:
+    n = len(eventos)
+    if desmatamento:
+        nome = "alerta recente de desmatamento" if n == 1 else "alertas recentes de desmatamento"
+    else:
+        classes = list(dict.fromkeys(c for e in eventos for c in e["classes"]))
+        tipo = f" ({', '.join(c[:1].lower() + c[1:] for c in classes)})" if classes else ""
+        nome = f"alerta recente de outra mudança na vegetação{tipo}" if n == 1 else f"alertas recentes de outras mudanças na vegetação{tipo}"
+    if n == 1:
+        return f"{prefixo}1 {nome} do INPE sobre o imóvel: {eventos[0]['area_in_property_text']}, visto em {eventos[0]['first_seen_text']}."
+    return f"{prefixo}{n} {nome} do INPE sobre o imóvel, somando {_ha_texto(area_uniao)} sem sobreposição."
+
+
 def deter_alerts_in_property(geometria_car: Any, respostas: dict[str, dict], prodes_features: Iterable[dict] | None = None) -> dict:
-    """Aplica cobertura, corte do PRODES, agrupamento e união. Não faz rede."""
+    """Aplica cobertura, corte único do PRODES, classes, agrupamento e união. Não faz rede."""
     geom = _geometria(geometria_car)
     sistemas_out: dict[str, dict] = {}
-    recentes: list[dict] = []
-    historicos = 0
+    lidos: dict[str, tuple[list[dict], date | None]] = {}
     encostados = 0
     for nome, cfg in SISTEMAS.items():
         r = respostas.get(nome) or {}
@@ -423,6 +688,8 @@ def deter_alerts_in_property(geometria_car: Any, respostas: dict[str, dict], pro
                 "cutoff": r.get("corte"), "latest_image": r.get("ultima_imagem"), "errors": list(r.get("erros") or [])}
         if (r.get("corte_detalhe") or {}).get("discordancia"):
             info["cutoff_disagreement"] = r["corte_detalhe"]["discordancia"]
+        if (r.get("cobertura_detalhe") or {}).get("metodo"):
+            info["coverage_detail"] = dict(r["cobertura_detalhe"])
         if cobertura == "nenhuma":
             sistemas_out[nome] = {**info, "state": "not_covered", "text": TEXTO_NAO_COBERTO}
             continue
@@ -441,15 +708,26 @@ def deter_alerts_in_property(geometria_car: Any, respostas: dict[str, dict], pro
         if not dentro and cobertura is None:
             sistemas_out[nome] = {**info, "state": "pending", "text": TEXTO_PENDENTE}
             continue
-        corte = _data(r.get("corte"))
-        if dentro and corte is None:
+        proprio = _data(r.get("corte"))
+        # alerta sem data ou sistema sem corte: não dá para dizer se é recente
+        if dentro and (proprio is None or any(_data(a["data_imagem"]) is None for a in dentro)):
             sistemas_out[nome] = {**info, "state": "pending", "text": TEXTO_PENDENTE}
             continue
-        rec = [a for a in dentro if (_data(a["data_imagem"]) or date.min) > corte] if dentro else []
+        sistemas_out[nome] = info
+        lidos[nome] = (dentro, proprio)
+
+    # Um corte só para o imóvel: o mais antigo entre os sistemas que responderam, aplicado a
+    # TODOS os alertas. Assim o "desde" do texto é exatamente o filtro usado.
+    cortes_por_sistema = {nome: proprio for nome, (_, proprio) in lidos.items() if proprio}
+    corte = min(cortes_por_sistema.values()) if cortes_por_sistema else None
+    recentes: list[dict] = []
+    historicos = 0
+    for nome, (dentro, _) in lidos.items():
+        rec = [a for a in dentro if _data(a["data_imagem"]) > corte] if dentro else []
         historicos += len(dentro) - len(rec)
         recentes.extend(rec)
-        sistemas_out[nome] = {**info, "state": "found" if rec else "not_found", "recent_alerts": len(rec),
-                              "alerts_up_to_cutoff": len(dentro) - len(rec)}
+        sistemas_out[nome].update(state="found" if rec else "not_found", recent_alerts=len(rec),
+                                  alerts_up_to_cutoff=len(dentro) - len(rec))
 
     prodes = []
     for f in prodes_features or []:
@@ -459,38 +737,13 @@ def deter_alerts_in_property(geometria_car: Any, respostas: dict[str, dict], pro
         except Exception:
             continue
 
-    eventos = []
-    for grupo in _grupos_que_se_tocam([a["intersecao"] for a in recentes]):
-        membros = [recentes[i] for i in grupo]
-        uniao = unary_union([m["intersecao"] for m in membros])
-        datas = sorted(d for d in (_data(m["data_imagem"]) for m in membros) if d)
-        sobre: dict[int | None, BaseGeometry] = {}
-        for ano, g in prodes:
-            if g.intersects(uniao):
-                parte = g.intersection(uniao)
-                sobre[ano] = unary_union([sobre[ano], parte]) if ano in sobre else parte
-        sobre = {ano: g for ano, g in sobre.items() if area_ha(g) >= AREA_MINIMA_LEITURA_HA}
-        sobre_total = area_ha(unary_union(list(sobre.values()))) if sobre else 0.0
-        area = area_ha(uniao)
-        classes = list(dict.fromkeys(c for c in (_classe(m.get("classe")) for m in membros) if c))
-        satelites = list(dict.fromkeys(s for s in (_satelite(m.get("satelite"), m.get("sensor")) for m in membros) if s))
-        partes_linha = [_data_br(datas[0]) if datas else None, " / ".join(classes) or None,
-                        f"{_ha_texto(area)} dentro do imóvel", ("satélite " + ", ".join(satelites)) if satelites else None]
-        anos = sorted(a for a in sobre if a is not None)
-        if sobre_total >= AREA_MINIMA_LEITURA_HA:
-            ref = f"no mapa anual do PRODES de {', '.join(str(a) for a in anos)}" if anos else "no mapa do PRODES"
-            partes_linha.append(f"{_ha_texto(sobre_total)} já constavam {ref}")
-        eventos.append({
-            "first_seen": datas[0].isoformat() if datas else None, "first_seen_text": _data_br(datas[0]) if datas else None,
-            "last_seen": datas[-1].isoformat() if datas else None, "classes": classes, "satellites": satelites,
-            "systems": sorted({m["sistema"] for m in membros}), "alert_ids": [m["id"] for m in membros],
-            "area_in_property_ha": round(area, 4), "area_in_property_text": _ha_texto(area),
-            "prodes_overlap_ha": round(sobre_total, 4), "prodes_overlap_years": anos,
-            "line": " · ".join(p for p in partes_linha if p), "_geom": uniao,
-        })
-    eventos.sort(key=lambda e: (e["first_seen"] or "", e["alert_ids"][0] or ""))
+    desmatamento = [a for a in recentes if _e_desmatamento(a.get("classe"))]
+    outros = [a for a in recentes if not _e_desmatamento(a.get("classe"))]
+    eventos = _eventos(desmatamento, prodes, True)
+    outros_eventos = _eventos(outros, prodes, False)
     area_uniao = area_ha(unary_union([e.pop("_geom") for e in eventos])) if eventos else 0.0
-    soma_por_fonte = sum(a["area_no_imovel_ha"] for a in recentes)
+    area_outros = area_ha(unary_union([e.pop("_geom") for e in outros_eventos])) if outros_eventos else 0.0
+    soma_por_fonte = sum(a["area_no_imovel_ha"] for a in desmatamento)
 
     estados = [s["state"] for s in sistemas_out.values()]
     if "found" in estados:
@@ -504,7 +757,6 @@ def deter_alerts_in_property(geometria_car: Any, respostas: dict[str, dict], pro
     completa = estado in ("found", "not_found", "not_covered") and "pending" not in estados
 
     ativos = {k: s for k, s in sistemas_out.items() if s["state"] in ("found", "not_found")}
-    cortes = sorted(d for d in (_data(s.get("cutoff")) for s in ativos.values()) if d)
     ultimas = sorted(d for d in (_data(s.get("latest_image")) for s in ativos.values()) if d)
     limites = sorted({s["min_area_ha"] for s in ativos.values()})
     limite_txt = " ou ".join(f"{format_decimal(v, 0 if float(v).is_integer() else 2)} ha" for v in limites)
@@ -512,43 +764,136 @@ def deter_alerts_in_property(geometria_car: Any, respostas: dict[str, dict], pro
     if ultimas:
         detalhes.append(f"imagens até {_data_br(ultimas[0])}")
     detalhe_txt = f" ({'; '.join(detalhes)})" if detalhes else ""
+    desde = f" desde {_data_br(corte + timedelta(days=1))}" if corte else ""
+    # Nenhum sistema cobre o imóvel inteiro e algum cobre só parte: "nenhum alerta" vale só para
+    # a parte monitorada (medido ao vivo em 14/09/2026: imóvel na divisa do Cerrado em MG com
+    # 427 de 1.457 ha dentro da área monitorada).
+    so_parte = (not any(s.get("coverage") == "total" for s in ativos.values())
+                and any(s.get("coverage") == "parcial" for s in ativos.values()))
+    alvo = "sobre a parte monitorada do imóvel" if so_parte else "sobre o imóvel"
 
     notas = []
     if estado == "found":
-        n = len(eventos)
-        palavra = "alerta recente de satélite" if n == 1 else "alertas recentes de satélite"
         prefixo = "" if completa else "Pelo menos "
-        if n == 1:
-            texto = f"{prefixo}1 {palavra} do INPE sobre o imóvel: {eventos[0]['area_in_property_text']}, visto em {eventos[0]['first_seen_text']}."
-        else:
-            texto = f"{prefixo}{n} {palavra} do INPE sobre o imóvel, somando {_ha_texto(area_uniao)} sem sobreposição."
-        texto = texto[:1].upper() + texto[1:]
-        notas = [FRASE_ALERTA, NOTA_CREDITO]
+        frases = []
+        if eventos:
+            frases.append(_frase_eventos(eventos, area_uniao, True, prefixo))
+        elif completa:
+            frases.append(f"Nenhum alerta recente de desmatamento do INPE {alvo}{desde}{detalhe_txt}.")
+        if outros_eventos:
+            if eventos:
+                frases.append("Há também " + _frase_eventos(outros_eventos, area_outros, False, prefixo.lower()))
+            else:
+                frases.append(_frase_eventos(outros_eventos, area_outros, False, prefixo))
+        texto = " ".join(f[:1].upper() + f[1:] for f in frases)
+        notas = [FRASE_ALERTA] + ([FRASE_PRODES, NOTA_CREDITO] if eventos else [])
     elif estado == "not_found":
-        desde = f" desde {_data_br(cortes[0] + timedelta(days=1))}" if cortes else ""
-        recente = "recente " if cortes else ""
-        texto = f"Nenhum alerta {recente}de satélite do INPE sobre o imóvel{desde}{detalhe_txt}."
+        recente = "recente " if corte else ""
+        texto = f"Nenhum alerta {recente}de satélite do INPE {alvo}{desde}{detalhe_txt}."
     elif estado == "not_covered":
         texto = "O sistema de alertas de satélite do INPE não cobre a região deste imóvel."
     else:
         texto = TEXTO_PENDENTE
-    if any(s.get("coverage") == "parcial" for s in ativos.values()):
+    if so_parte and estado in ("found", "not_found"):
         notas.append(NOTA_COBERTURA_PARCIAL)
 
-    return {
-        "source": "inpe_deter", "state": estado, "complete": completa, "title": "Alertas recentes de desmatamento",
+    titulo = "Alertas recentes de desmatamento" + (" e de outras mudanças na vegetação" if outros_eventos else "")
+    out = {
+        "source": "inpe_deter", "state": estado, "complete": completa, "title": titulo,
         "text": texto, "notes": notas, "events": eventos, "area_union_ha": round(area_uniao, 4),
-        "cutoff": cortes[0].isoformat() if cortes else None, "systems": sistemas_out, "source_text": FONTE_TEXTO,
+        "other_events": outros_eventos, "other_area_union_ha": round(area_outros, 4),
+        "cutoff": corte.isoformat() if corte else None, "systems": sistemas_out, "source_text": FONTE_TEXTO,
         "audit": {"alerts_up_to_cutoff_in_property": historicos, "alerts_below_one_pixel": encostados,
                   "sum_by_source_ha": round(soma_por_fonte, 4)},
     }
+    if len(set(cortes_por_sistema.values())) > 1:
+        out["audit"]["cutoff_by_system"] = {k: v.isoformat() for k, v in cortes_por_sistema.items()}
+    return out
+
+
+def deter_combiner_input(geometria_car: Any, respostas: dict[str, dict]) -> dict:
+    """Entrada de ``mapbiomas_alerta.combine_deforestation_alerts`` a partir das mesmas respostas.
+
+    Contrato daquela frente: ``{"state": "answered"|"pending"|"not_covered", "features": [GeoJSON],
+    "min_area_ha", "latest_image_date"}``, com ``properties.view_date`` e ``properties.gid``. Só entram
+    alertas de DESMATAMENTO (o combinador trata toda feição como desmatamento). Qualquer sistema
+    que cobre o imóvel sem resposta completa deixa tudo ``pending`` (lista vazia só é resposta
+    quando o estado diz ``answered``). ``cutoff`` é o corte único a passar em ``prodes_cutoff``.
+    """
+    geom = _geometria(geometria_car)
+    estados: list[str] = []
+    feicoes: list[dict] = []
+    cortes: list[date] = []
+    ultimas: list[date] = []
+    minimos: list[float] = []
+    outras = 0
+    for nome, cfg in SISTEMAS.items():
+        r = respostas.get(nome) or {}
+        cobertura = r.get("cobertura")
+        if cobertura == "nenhuma":
+            estados.append("not_covered")
+            continue
+        if cobertura is None or r.get("alertas") is None or r.get("truncado"):
+            estados.append("pending")
+            continue
+        proprio = _data(r.get("corte"))
+        tocam = [a for a in r["alertas"] if a["geometria"].intersects(geom)]
+        if tocam and (proprio is None or any(_data(a["data_imagem"]) is None for a in tocam)):
+            estados.append("pending")
+            continue
+        estados.append("answered")
+        minimos.append(cfg["area_minima_ha"])
+        if proprio:
+            cortes.append(proprio)
+        if _data(r.get("ultima_imagem")):
+            ultimas.append(_data(r.get("ultima_imagem")))
+        for a in tocam:
+            if not _e_desmatamento(a.get("classe")):
+                outras += 1
+                continue
+            feicoes.append({"type": "Feature", "geometry": mapping(a["geometria"]),
+                            "properties": {"gid": a["id"], "view_date": a["data_imagem"], "classname": a.get("classe"),
+                                           "system": nome}})
+    if "pending" in estados:
+        estado = "pending"
+    elif "answered" in estados:
+        estado = "answered"
+    else:
+        estado = "not_covered"
+    return {
+        "state": estado, "features": feicoes if estado == "answered" else [],
+        "min_area_ha": min(minimos) if minimos else None,
+        "latest_image_date": min(ultimas).isoformat() if ultimas else None,
+        "cutoff": min(cortes).isoformat() if cortes else None,
+        "other_classes_excluded": outras,
+    }
+
+
+def _respostas_ou_falha(geometria_car: Any, http_get: HttpGet | None, agora: float | None,
+                        base_dir: str | os.PathLike | None) -> dict:
+    try:
+        return query_deter_live(geometria_car, http_get=http_get, agora=agora, base_dir=base_dir)
+    except Exception as exc:
+        return {k: {"erros": [f"geral:{type(exc).__name__}"]} for k in SISTEMAS}
 
 
 def deter_alerts_payload(geometria_car: Any, prodes_result: dict | None = None, *, http_get: HttpGet | None = None,
-                         agora: float | None = None) -> dict:
+                         agora: float | None = None, base_dir: str | os.PathLike | None = None) -> dict:
     """Payload do relatório (rede + regra)."""
-    try:
-        respostas = query_deter_live(geometria_car, http_get=http_get, agora=agora)
-    except Exception as exc:
-        respostas = {k: {"erros": [f"geral:{type(exc).__name__}"]} for k in SISTEMAS}
+    respostas = _respostas_ou_falha(geometria_car, http_get, agora, base_dir)
     return deter_alerts_in_property(geometria_car, respostas, prodes_features_from_result(prodes_result))
+
+
+def deter_alerts_bundle(geometria_car: Any, prodes_result: dict | None = None, *, http_get: HttpGet | None = None,
+                        agora: float | None = None, base_dir: str | os.PathLike | None = None) -> dict:
+    """Uma consulta só para as duas saídas: ``payload`` (seção do relatório) e ``combiner``.
+
+    ``combiner`` traz geometria (GeoJSON): não gravar no payload.json do relatório.
+    """
+    respostas = _respostas_ou_falha(geometria_car, http_get, agora, base_dir)
+    payload = deter_alerts_in_property(geometria_car, respostas, prodes_features_from_result(prodes_result))
+    try:
+        combinador = deter_combiner_input(geometria_car, respostas)
+    except Exception as exc:
+        combinador = {"state": "pending", "features": [], "error_type": type(exc).__name__}
+    return {"payload": payload, "combiner": combinador}

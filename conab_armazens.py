@@ -27,7 +27,12 @@ Regras que este módulo garante (conferidas por ``scripts/f2_conab_deter_gate.py
   que ele mesmo declara (tolerância de 2 km). Ponto fora não é listado; malha que
   não respondeu deixa o armazém sem conferência e a lista vira "pelo menos N".
 * Estados: ``found`` / ``not_found`` / ``pending``. Base nunca baixada e download
-  falhou = ``pending`` (nunca "nenhum armazém").
+  falhou = ``pending`` (nunca "nenhum armazém"). Com armazém sem conferência de
+  localização, o texto não afirma qual é o mais próximo.
+* Sincronização não trava o relatório: falha fica guardada e só se tenta de novo
+  depois de um intervalo; se outra linha de execução já está baixando e existe
+  cópia boa, responde com a cópia. ``aquecer_em_segundo_plano`` baixa no arranque.
+  A malha do IBGE que falhou também fica guardada (15 min) para não repetir a espera.
 """
 from __future__ import annotations
 
@@ -67,6 +72,11 @@ COLUNAS = (
 RAIO_PADRAO_KM = 50.0
 TOLERANCIA_MUNICIPIO_KM = 2.0
 SYNC_TTL_S = 6 * 3600
+# Depois de uma falha (rede, HTTP ou arquivo recusado), nova tentativa só depois deste intervalo:
+# relatórios seguidos não esperam de novo o mesmo tempo limite. Com cópia boa, 15 min; sem cópia
+# nenhuma a consulta já é "pendente", então a nova tentativa vem em 1 min.
+SYNC_NOVA_TENTATIVA_S = 15 * 60
+SYNC_NOVA_TENTATIVA_SEM_BASE_S = 60
 MALHA_TTL_S = 180 * 86400
 MIN_LINHAS = 5000  # o arquivo nacional tinha 18.847 linhas em 11/09/2026
 FORMATO_CACHE = 1
@@ -75,6 +85,7 @@ USER_AGENT = "Raio-X-Territorial/F2 conab-armazens"
 BRT = timezone(timedelta(hours=-3))
 _GEOD = Geod(ellps="GRS80")
 _SYNC_LOCK = threading.Lock()
+_FALHAS: dict[str, float] = {}
 _MEM_LOCK = threading.Lock()
 _MEMORIA: dict[str, Any] = {}
 
@@ -331,41 +342,83 @@ def sync_conab_warehouses(base_dir: str | os.PathLike | None = None, *, http_get
     min_linhas = MIN_LINHAS if min_linhas is None else min_linhas
     arq_base, arq_meta = _caminhos(base_dir)
     now = time.time() if agora is None else agora
-    with _SYNC_LOCK:
+    if not _SYNC_LOCK.acquire(blocking=False):
         meta = _ler_json(arq_meta) or {}
-        tem_base = arq_base.is_file() and bool(meta)
-        if tem_base and not forcar and now - float(meta.get("conferido_em") or 0) < SYNC_TTL_S:
-            return {"estado": "fresco", "tem_base": True, "meta": meta}
+        if arq_base.is_file() and meta:
+            # outra linha de execução já está baixando: responde com a cópia boa, sem fila
+            return {"estado": "em_andamento", "tem_base": True, "meta": meta}
+        _SYNC_LOCK.acquire()  # sem cópia nenhuma: esperar o download em curso é melhor que pendente
+    try:
+        return _sincronizar(arq_base, arq_meta, now, http_get, forcar, min_linhas)
+    finally:
+        _SYNC_LOCK.release()
+
+
+def falha_recente(chave: str, now: float, tem_base: bool) -> bool:
+    falhou = _FALHAS.get(chave)
+    espera = SYNC_NOVA_TENTATIVA_S if tem_base else SYNC_NOVA_TENTATIVA_SEM_BASE_S
+    return falhou is not None and 0 <= now - falhou < espera
+
+
+def _sincronizar(arq_base: Path, arq_meta: Path, now: float, http_get: HttpGet | None, forcar: bool, min_linhas: int) -> dict:
+    chave = str(arq_base)
+    meta = _ler_json(arq_meta) or {}
+    tem_base = arq_base.is_file() and bool(meta)
+    if tem_base and not forcar and now - float(meta.get("conferido_em") or 0) < SYNC_TTL_S:
+        return {"estado": "fresco", "tem_base": True, "meta": meta}
+    if not forcar and falha_recente(chave, now, tem_base):
+        return {"estado": "falhou_recentemente", "tem_base": tem_base, "meta": meta}
+
+    def falhou(estado: str, erro: str) -> dict:
+        _FALHAS[chave] = now
+        return {"estado": estado, "tem_base": tem_base, "meta": meta, "erro": erro}
+
+    try:
+        resp = (http_get or _http_get)(URL_ARMAZENS, headers=cabecalhos_condicionais(meta if tem_base else None))
+    except Exception as exc:  # rede: mantém a cópia anterior
+        return falhou("falhou", type(exc).__name__)
+    status = int(getattr(resp, "status_code", 0) or 0)
+    if status == 304 and tem_base:
+        _FALHAS.pop(chave, None)
+        meta["conferido_em"] = now
+        _escrever_atomico(arq_meta, json.dumps(meta, ensure_ascii=False).encode("utf-8"))
+        return {"estado": "sem_mudanca", "tem_base": True, "meta": meta}
+    if status != 200:
+        return falhou("falhou", f"http_{status}")
+    try:
+        linhas, stats = ler_arquivo_armazens(resp.content)
+    except ValueError as exc:
+        return falhou("invalido", str(exc))
+    anterior = int(meta.get("linhas") or 0) if tem_base else 0
+    if len(linhas) < min_linhas or (anterior and len(linhas) < anterior / 2):
+        return falhou("invalido", "linhas_insuficientes")
+    headers = getattr(resp, "headers", {}) or {}
+    novo = {
+        "etag": headers.get("etag"),
+        "last_modified": headers.get("last-modified"),
+        "data_base": _data_base(headers.get("last-modified")),
+        "baixado_em": now,
+        "conferido_em": now,
+        **stats,
+    }
+    _escrever_atomico(arq_base, _serializar_base(linhas, novo))
+    _escrever_atomico(arq_meta, json.dumps(novo, ensure_ascii=False).encode("utf-8"))
+    _FALHAS.pop(chave, None)
+    return {"estado": "baixado", "tem_base": True, "meta": novo}
+
+
+def aquecer_em_segundo_plano(base_dir: str | os.PathLike | None = None, *, http_get: HttpGet | None = None) -> threading.Thread:
+    """Baixa e lê a base numa linha de execução própria (chamar no arranque do serviço)."""
+    def trabalho() -> None:
         try:
-            resp = (http_get or _http_get)(URL_ARMAZENS, headers=cabecalhos_condicionais(meta if tem_base else None))
-        except Exception as exc:  # rede: mantém a cópia anterior
-            return {"estado": "falhou", "tem_base": tem_base, "meta": meta, "erro": type(exc).__name__}
-        status = int(getattr(resp, "status_code", 0) or 0)
-        if status == 304 and tem_base:
-            meta["conferido_em"] = now
-            _escrever_atomico(arq_meta, json.dumps(meta, ensure_ascii=False).encode("utf-8"))
-            return {"estado": "sem_mudanca", "tem_base": True, "meta": meta}
-        if status != 200:
-            return {"estado": "falhou", "tem_base": tem_base, "meta": meta, "erro": f"http_{status}"}
-        try:
-            linhas, stats = ler_arquivo_armazens(resp.content)
-        except ValueError as exc:
-            return {"estado": "invalido", "tem_base": tem_base, "meta": meta, "erro": str(exc)}
-        anterior = int(meta.get("linhas") or 0) if tem_base else 0
-        if len(linhas) < min_linhas or (anterior and len(linhas) < anterior / 2):
-            return {"estado": "invalido", "tem_base": tem_base, "meta": meta, "erro": "linhas_insuficientes"}
-        headers = getattr(resp, "headers", {}) or {}
-        novo = {
-            "etag": headers.get("etag"),
-            "last_modified": headers.get("last-modified"),
-            "data_base": _data_base(headers.get("last-modified")),
-            "baixado_em": now,
-            "conferido_em": now,
-            **stats,
-        }
-        _escrever_atomico(arq_base, _serializar_base(linhas, novo))
-        _escrever_atomico(arq_meta, json.dumps(novo, ensure_ascii=False).encode("utf-8"))
-        return {"estado": "baixado", "tem_base": True, "meta": novo}
+            sync_conab_warehouses(base_dir, http_get=http_get)
+            load_conab_warehouses(base_dir)
+        except Exception:
+            pass  # o relatório tenta de novo; falha aqui nunca derruba o arranque
+
+    t = threading.Thread(target=trabalho, name="conab-aquecer", daemon=True)
+    t.start()
+    return t
 
 
 def load_conab_warehouses(base_dir: str | os.PathLike | None = None) -> tuple[list[dict] | None, dict]:
@@ -401,6 +454,10 @@ def fetch_municipality_mesh(codigo: str, base_dir: str | os.PathLike | None = No
     salvo = _ler_json(arq)
     if salvo and now - float(salvo.get("baixado_em") or 0) < MALHA_TTL_S:
         return salvo.get("geometry")
+    chave = f"malha:{arq}"
+    if falha_recente(chave, now, True):
+        # IBGE caiu há pouco: não espera de novo o tempo limite; sem cópia o armazém fica sem conferência
+        return salvo.get("geometry") if salvo else None
     try:
         resp = (http_get or _http_get)(URL_MALHA_IBGE.format(codigo=codigo), params=dict(PARAMS_MALHA_IBGE))
         if int(getattr(resp, "status_code", 0) or 0) != 200:
@@ -412,8 +469,13 @@ def fetch_municipality_mesh(codigo: str, base_dir: str | os.PathLike | None = No
         geom = feats[0]["geometry"]
         shape(geom)  # valida
     except Exception:
+        _FALHAS[chave] = now
         return salvo.get("geometry") if salvo else None
-    _escrever_atomico(arq, json.dumps({"codigo": codigo, "baixado_em": now, "geometry": geom}).encode("utf-8"))
+    _FALHAS.pop(chave, None)
+    try:
+        _escrever_atomico(arq, json.dumps({"codigo": codigo, "baixado_em": now, "geometry": geom}).encode("utf-8"))
+    except OSError:
+        pass  # disco sem gravação: a malha vale para esta consulta e é baixada de novo na próxima
     return geom
 
 
@@ -561,7 +623,10 @@ def build_warehouses_payload(resultado: dict | None, meta: dict | None, *, pende
         estado = "found"
         palavra = "armazém cadastrado" if n == 1 else "armazéns cadastrados"
         prefixo = "" if completa else "Pelo menos "
-        if n == 1:
+        if sem:
+            # armazém sem localização conferida pode ser o mais próximo: o texto não afirma distância
+            texto = f"{prefixo}{n} {palavra} na CONAB em até {raio_txt} km do imóvel."
+        elif n == 1:
             texto = f"{prefixo}1 {palavra} na CONAB em até {raio_txt} km do imóvel, a {itens[0]['distance_text']}."
         else:
             texto = f"{prefixo}{n} {palavra} na CONAB em até {raio_txt} km do imóvel; o mais próximo fica a {itens[0]['distance_text']}."

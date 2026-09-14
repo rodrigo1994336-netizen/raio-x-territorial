@@ -2,6 +2,7 @@
 
 Uso (precisa de rede; o gate em si roda offline):
   PYTHONPATH=. python scripts/f2_conab_deter_fixtures.py
+  PYTHONPATH=. python scripts/f2_conab_deter_fixtures.py --acrescentar controle_degradacao_amazonia
 
 O que é gravado em tests/fixtures/f2_conab_deter/:
 * ``respostas.json``: cada requisição que os módulos ``conab_armazens`` e
@@ -44,6 +45,8 @@ CAIXAS = {
     "controle_alerta_amazonia": box(-55.36, -12.05, -55.33, -12.035),
     # São Paulo capital: fora do Cerrado e da Amazônia Legal
     "controle_fora_cobertura": box(-46.64, -23.56, -46.62, -23.54),
+    # quadrado sobre o alerta real deter_amz.11108_curr (DEGRADACAO, 09/01/2026, Juara/MT): classe que não é desmatamento
+    "controle_degradacao_amazonia": box(-57.562, -10.371, -57.549, -10.360),
 }
 HEADERS_UTEIS = ("etag", "last-modified", "content-type", "content-encoding")
 
@@ -132,7 +135,44 @@ def recorte_conab(url, params, resp, corpo):
     return ("\r\n".join([cabecalho, *saida]) + "\r\n").encode("latin-1")
 
 
+def gravar_deter(cenarios: dict, tmp: Path) -> None:
+    for nome, geom in cenarios.items():
+        da._CACHE.clear()
+        resp = da.query_deter_live(geom, http_get=gravador(f"deter_{nome}"), base_dir=tmp)
+        # a geometria inteira da área monitorada (14–19 MB) não vira fixture: cenário de controle
+        # tem de ser decidido pela envoltória; o gate cobre a divisa com geometria sintética.
+        assert all((r.get("cobertura_detalhe") or {}).get("metodo") == "envoltoria" for r in resp.values()), (nome, resp)
+
+
+def acrescentar(nomes: list[str]) -> None:
+    """Grava só os cenários DETER pedidos e os acrescenta ao índice, sem regravar o resto.
+
+    Regravar tudo trocaria a base da CONAB e os alertas dos cenários antigos pelos de hoje;
+    cenário novo entra ao lado dos antigos, com a data da captura dele.
+    """
+    alvo = OUT / "respostas.json"
+    prov = json.loads(alvo.read_text(encoding="utf-8"))
+    ja = {r["cenario"] for r in prov["respostas"]}
+    tmp = OUT / "_tmp"
+    novos = {n: CAIXAS[n] for n in nomes}
+    assert not ({f"deter_{n}" for n in novos} & ja), f"cenário já gravado: {sorted(novos)}"
+    gravar_deter(novos, tmp)
+    for nome, corpo in arquivos.items():
+        destino = OUT / nome
+        destino.parent.mkdir(parents=True, exist_ok=True)
+        destino.write_bytes(corpo)
+    capturado = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    prov["respostas"] += [{**r, "capturado_em_utc": capturado} for r in indice]
+    alvo.write_text(json.dumps(prov, ensure_ascii=False, indent=1), encoding="utf-8", newline="\n")
+    import shutil
+    shutil.rmtree(tmp, ignore_errors=True)
+    print(f"F2_FIXTURES_ACRESCENTADAS cenarios={sorted(novos)} respostas={len(indice)}")
+
+
 def main() -> None:
+    if "--acrescentar" in sys.argv:
+        acrescentar(sys.argv[sys.argv.index("--acrescentar") + 1:])
+        return
     OUT.mkdir(parents=True, exist_ok=True)
     capturado = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -169,9 +209,7 @@ def main() -> None:
 
     # DETER: cada cenário com cache limpo, para gravar todas as consultas
     cenarios = {"curvelo": car_geom, **{k: v for k, v in CAIXAS.items()}}
-    for nome, geom in cenarios.items():
-        da._CACHE.clear()
-        da.query_deter_live(geom, http_get=gravador(f"deter_{nome}"))
+    gravar_deter(cenarios, tmp)
     # PRODES Cerrado sobre o alerta de ~18 km, no mesmo formato do prodes_fast_v24 (JSON, bbox)
     g = CAIXAS["controle_alerta_18km_cerrado"]
     gravador("prodes_controle_18km")("https://terrabrasilis.dpi.inpe.br/geoserver/prodes-cerrado-nb/ows", params={

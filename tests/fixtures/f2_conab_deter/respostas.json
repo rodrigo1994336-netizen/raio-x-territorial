@@ -713,6 +713,132 @@
    },
    "arquivo": "respostas/prodes_controle_18km_57cb168bce.json",
    "ms": 2345
+  },
+  {
+   "cenario": "deter_controle_degradacao_amazonia",
+   "url": "https://terrabrasilis.dpi.inpe.br/geoserver/prodes-legal-amz/ows",
+   "params": {
+    "service": "WFS",
+    "version": "2.0.0",
+    "request": "GetFeature",
+    "typeNames": "prodes-legal-amz:brazilian_legal_amazon",
+    "resultType": "hits",
+    "CQL_FILTER": "INTERSECTS(geom,SRID=4674;POLYGON ((-57.562 -10.371, -57.562 -10.36, -57.549 -10.36, -57.549 -10.371, -57.562 -10.371)))"
+   },
+   "headers_enviados": {},
+   "status": 200,
+   "headers": {
+    "content-type": "text/xml",
+    "content-encoding": "gzip"
+   },
+   "arquivo": "respostas/deter_controle_degradacao_amazonia_675e0b57df.xml",
+   "ms": 1069,
+   "capturado_em_utc": "2026-09-14T13:06:35+00:00"
+  },
+  {
+   "cenario": "deter_controle_degradacao_amazonia",
+   "url": "https://terrabrasilis.dpi.inpe.br/geoserver/prodes-cerrado-nb/ows",
+   "params": {
+    "service": "WFS",
+    "version": "2.0.0",
+    "request": "GetFeature",
+    "typeNames": "prodes-cerrado-nb:biome_border",
+    "resultType": "hits",
+    "CQL_FILTER": "INTERSECTS(geom,SRID=4674;POLYGON ((-57.562 -10.371, -57.562 -10.36, -57.549 -10.36, -57.549 -10.371, -57.562 -10.371)))"
+   },
+   "headers_enviados": {},
+   "status": 200,
+   "headers": {
+    "content-type": "text/xml",
+    "content-encoding": "gzip"
+   },
+   "arquivo": "respostas/deter_controle_degradacao_amazonia_c76c18d251.xml",
+   "ms": 1163,
+   "capturado_em_utc": "2026-09-14T13:06:35+00:00"
+  },
+  {
+   "cenario": "deter_controle_degradacao_amazonia",
+   "url": "https://terrabrasilis.dpi.inpe.br/geoserver/prodes-legal-amz/ows",
+   "params": {
+    "service": "WFS",
+    "version": "2.0.0",
+    "request": "GetFeature",
+    "typeNames": "prodes-legal-amz:brazilian_legal_amazon",
+    "resultType": "hits",
+    "CQL_FILTER": "CONTAINS(geom,SRID=4674;POLYGON ((-57.562 -10.371, -57.562 -10.36, -57.549 -10.36, -57.549 -10.371, -57.562 -10.371)))"
+   },
+   "headers_enviados": {},
+   "status": 200,
+   "headers": {
+    "content-type": "text/xml",
+    "content-encoding": "gzip"
+   },
+   "arquivo": "respostas/deter_controle_degradacao_amazonia_b678abf782.xml",
+   "ms": 555,
+   "capturado_em_utc": "2026-09-14T13:06:35+00:00"
+  },
+  {
+   "cenario": "deter_controle_degradacao_amazonia",
+   "url": "https://terrabrasilis.dpi.inpe.br/geoserver/deter-amz/ows",
+   "params": {
+    "service": "WFS",
+    "version": "2.0.0",
+    "request": "GetFeature",
+    "outputFormat": "application/json",
+    "typeNames": "deter-amz:prodes_reference"
+   },
+   "headers_enviados": {},
+   "status": 200,
+   "headers": {
+    "content-type": "application/json;charset=UTF-8",
+    "content-encoding": "gzip"
+   },
+   "arquivo": "respostas/deter_controle_degradacao_amazonia_3c12420edb.json",
+   "ms": 206,
+   "capturado_em_utc": "2026-09-14T13:06:35+00:00"
+  },
+  {
+   "cenario": "deter_controle_degradacao_amazonia",
+   "url": "https://terrabrasilis.dpi.inpe.br/geoserver/deter-amz/ows",
+   "params": {
+    "service": "WFS",
+    "version": "2.0.0",
+    "request": "GetFeature",
+    "outputFormat": "application/json",
+    "typeNames": "deter-amz:updated_date"
+   },
+   "headers_enviados": {},
+   "status": 200,
+   "headers": {
+    "content-type": "application/json;charset=UTF-8",
+    "content-encoding": "gzip"
+   },
+   "arquivo": "respostas/deter_controle_degradacao_amazonia_03d557f271.json",
+   "ms": 234,
+   "capturado_em_utc": "2026-09-14T13:06:35+00:00"
+  },
+  {
+   "cenario": "deter_controle_degradacao_amazonia",
+   "url": "https://terrabrasilis.dpi.inpe.br/geoserver/deter-amz/ows",
+   "params": {
+    "service": "WFS",
+    "version": "2.0.0",
+    "request": "GetFeature",
+    "typeNames": "deter-amz:deter_amz",
+    "srsName": "EPSG:4674",
+    "bbox": "-57.562,-10.371,-57.549,-10.36,EPSG:4674",
+    "outputFormat": "csv",
+    "count": "2000"
+   },
+   "headers_enviados": {},
+   "status": 200,
+   "headers": {
+    "content-type": "text/csv;charset=UTF-8",
+    "content-encoding": "gzip"
+   },
+   "arquivo": "respostas/deter_controle_degradacao_amazonia_9e122349b7.csv",
+   "ms": 1521,
+   "capturado_em_utc": "2026-09-14T13:06:35+00:00"
   }
  ]
 }
