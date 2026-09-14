@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import os
 import subprocess
 import sys
@@ -426,6 +427,75 @@ def html_contract() -> None:
           "PMTiles preview wrapper forwards the abort init of rx46ViewportRequest")
 
 
+ABORT_SIM = r"""
+const vm=require('vm'),fs=require('fs');
+const src=fs.readFileSync(process.argv[2],'utf8');
+(async()=>{
+  const shown=[],reports=[];
+  const el={id:'',className:'',_t:'',set textContent(v){this._t=v;shown.push(v)},get textContent(){return this._t}};
+  const document={readyState:'complete',querySelector:s=>(s==='#rxUiStatus'&&el.id==='rxUiStatus')?el:null,createElement:()=>el,body:{appendChild(){}},addEventListener(){}};
+  const window={addEventListener(){},fetch:async(input,init)=>{const u=String(input);
+    if(u.includes('/v1/ui/client-error')){reports.push(JSON.parse(init.body).kind);return {ok:true,status:200}}
+    if(u.includes('/v1/ui/readiness'))return {ok:true,status:200,json:async()=>({ok:true})};
+    if(u.includes('abort')){const e=new Error('signal is aborted without reason');e.name='AbortError';throw e}
+    if(u.includes('net'))throw new TypeError('Failed to fetch');
+    return {ok:true,status:200}}};
+  // In a page window is the global object: a bare fetch() inside the script is the current window.fetch.
+  const ctx={window,document,location:{pathname:'/'},fetch:(i,init)=>window.fetch(i,init),setTimeout:()=>0,clearTimeout(){},String,JSON,Date,console};
+  vm.createContext(ctx);vm.runInContext(src,ctx);
+  const out={};
+  await window.fetch('/v1/live/sicar/viewport-v46?cell=0.08&abort=1',{signal:{aborted:true}}).catch(e=>{out.abort_rethrown=e.name});
+  await new Promise(r=>setImmediate(r));
+  out.abort_shown=[...shown];out.abort_reports=[...reports];
+  await window.fetch('/v1/live/car/X?net=1',{}).catch(e=>{out.net_rethrown=e.name});
+  await new Promise(r=>setImmediate(r));
+  out.net_shown=shown.slice(out.abort_shown.length);out.net_reports=reports.slice(out.abort_reports.length);
+  process.stdout.write(JSON.stringify(out));
+})().catch(e=>{process.stdout.write(JSON.stringify({crash:String(e&&e.stack||e)}))});
+"""
+
+
+def abort_toast_script(html: str) -> str:
+    start = html.find("if(window.__rxActionV25)return;")
+    begin = html.rfind("<script>", 0, start)
+    end = html.find("</script>", start)
+    return html[begin + len("<script>"):end] if start >= 0 and begin >= 0 and end > start else ""
+
+
+ABORT_SCRIPT_OVERRIDE: list[str] = []
+
+
+def abort_toast_contract() -> None:
+    """Rule: an aborted fetch (W1a cell eviction, a closed link lookup) never shows 'Falha de conexão';
+    a real network failure still does. Runs the V25 wrapper exactly as it sits in the final portal HTML."""
+    import shutil
+    import tempfile
+
+    import portal_v8
+
+    node = shutil.which("node")
+    check(bool(node), "node found (the abort/connection-toast rule runs the served JS)")
+    if not node:
+        return
+    js = ABORT_SCRIPT_OVERRIDE[-1] if ABORT_SCRIPT_OVERRIDE else abort_toast_script(portal_v8.PORTAL_HTML)
+    check(bool(js), "V25 action runtime script found in the final portal HTML")
+    with tempfile.TemporaryDirectory() as tmp:
+        src, sim = Path(tmp, "v25.js"), Path(tmp, "sim.js")
+        src.write_text(js, encoding="utf-8")
+        sim.write_text(ABORT_SIM, encoding="utf-8")
+        run = subprocess.run([node, str(sim), str(src)], capture_output=True, text=True, encoding="utf-8", timeout=60)
+    try:
+        r = json.loads(run.stdout or "{}")
+    except ValueError:
+        r = {"crash": (run.stdout + run.stderr)[:300]}
+    check("crash" not in r, f"abort/connection-toast simulation ran ({r.get('crash', '')[:160]})")
+    check(r.get("abort_rethrown") == "AbortError" and r.get("net_rethrown") == "TypeError", "the wrapper still rethrows both errors to the caller")
+    check(not any("Falha de conex" in t for t in r.get("abort_shown", [])) and "network-error" not in r.get("abort_reports", []),
+          f"aborted request shows no 'Falha de conexão' and logs no network-error (shown {r.get('abort_shown')}, reports {r.get('abort_reports')})")
+    check(any("Falha de conex" in t for t in r.get("net_shown", [])) and "network-error" in r.get("net_reports", []),
+          f"real network failure still shows 'Falha de conexão' and is logged (shown {r.get('net_shown')})")
+
+
 MUTATIONS: list[tuple[str, str]] = []
 
 
@@ -490,6 +560,13 @@ def mutation_controls() -> None:
             lambda: setattr(v46, "_merge_results", merge_hides_failures),
             lambda: setattr(v46, "_merge_results", saved_merge),
             endpoint_contract, "legacy partial is never served from cache")
+    import portal_v8
+
+    fixed = "catch(e){if(e?.name==='AbortError'||init?.signal?.aborted)throw e;report('network-error'"
+    control("aborted request shown as connection failure",
+            lambda: ABORT_SCRIPT_OVERRIDE.append(abort_toast_script(portal_v8.PORTAL_HTML).replace(fixed, "catch(e){report('network-error'")),
+            lambda: ABORT_SCRIPT_OVERRIDE.clear(),
+            abort_toast_contract, "aborted request shows no 'Falha de conexão'")
     saved_sha = v46._W1A_REGION_SHA256
     control("upstream edit inside the loader region",
             lambda: setattr(v46, "_W1A_REGION_SHA256", hashlib.sha256(b"upstream module changed the loader").hexdigest()),
@@ -506,6 +583,7 @@ if len(FAILURES) == booted:  # every contract below needs the real booted portal
     section("SICAR single-flight and concurrency limit", sicar_flight_contract)
     section("loader region drift", region_drift_contract)
     section("final portal HTML", html_contract)
+    section("aborted request is not a connection failure (V25 toast)", abort_toast_contract)
     if not FAILURES:  # controls only mean something on a green tree
         section("mutation controls (each must turn a named check red)", mutation_controls)
         print("W1A_MUTATIONS=" + ";".join(f"{n}:{r}" for n, r in MUTATIONS), flush=True)

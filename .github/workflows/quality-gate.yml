@@ -29,11 +29,6 @@ jobs:
         run: PYTHONPATH=. python scripts/d0_source_registry_gate.py
       - name: D1a CAR title provenance gate
         run: PYTHONPATH=. python scripts/d1a_identity_title_gate.py
-      - name: W1a fast CAR parcels gate (UF local, cell cache, canvas loader, single-flight; rules and positive controls)
-        env:
-          RX_RELEASE: V8_OPERATIONAL_ZERO_COST
-          RX_PORTAL_RSS_BUDGET_MB: '220'
-        run: PYTHONPATH=. python scripts/w1a_imoveis_rapidos_gate.py
       - name: F2 CONAB warehouses and DETER alerts gate (rules and positive controls)
         env:
           RX_RELEASE: OFF
@@ -57,6 +52,11 @@ jobs:
         env:
           RX_RELEASE: OFF
         run: PYTHONPATH=. python scripts/f2_prodes_leitura_gate.py
+      - name: W1a fast CAR parcels gate (UF local, cell cache, canvas loader, single-flight, aborted request is not a connection failure; rules and positive controls; needs Node)
+        env:
+          RX_RELEASE: V8_OPERATIONAL_ZERO_COST
+          RX_PORTAL_RSS_BUDGET_MB: '220'
+        run: PYTHONPATH=. python scripts/w1a_imoveis_rapidos_gate.py
       - name: W1a property link, share menu and offline shell gate (rules and positive controls)
         env:
           RX_RELEASE: V8_OPERATIONAL_ZERO_COST
