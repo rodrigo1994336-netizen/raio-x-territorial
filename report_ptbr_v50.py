@@ -144,6 +144,9 @@ def _iso_d(m: re.Match) -> str:
 
 
 _TAG = re.compile(r"(<[^>]*>)")
+# F2: a license version is a name, not a quantity: "CC BY-SA 4.0" never becomes "CC BY-SA 4".
+_LICENSE_VERSION = re.compile(r"\bCC[ -]BY(?:[ -](?:SA|NC|ND))*[ -]\d+\.\d+")
+_KEPT = re.compile(r"(\d+)")
 
 
 def _normalize_segment(out: str) -> str:
@@ -159,8 +162,11 @@ def _normalize_segment(out: str) -> str:
     out = _ISO_DT.sub(_iso_dt, out)
     out = _ISO_D.sub(_iso_d, out)
     out = _COMPACT_D.sub(lambda m: _iso_d(m) if 1 <= int(m.group(2)) <= 12 and 1 <= int(m.group(3)) <= 31 else m.group(0), out)
+    kept: list[str] = []
+    out = _LICENSE_VERSION.sub(lambda m: kept.append(m.group(0)) or f"{len(kept) - 1}", out)
     out = _DEC_UNIT.sub(_dec_unit, out)
-    return _BARE_DEC.sub(_bare_dec, out)
+    out = _BARE_DEC.sub(_bare_dec, out)
+    return _KEPT.sub(lambda m: kept[int(m.group(1))], out) if kept else out
 
 
 def _drop_tail(text: str, start: int, replacement: str) -> str:

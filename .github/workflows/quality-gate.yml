@@ -63,6 +63,8 @@ jobs:
           import prodes_fast_v24, anm_fast_v29, core_retry_fast_v29, territorial_production, landuse_profile_v39
           import report_truth_guard_v16, report_book_style, report_engine_v6, report_engine_v7, report_engine_v8
           import conab_armazens, deter_alertas
+          import incra_acervo_f2, prodes_reading_f2, climate_normal_f2, prodes_image_platform_f2, iphan_sicg, outorga_vazao, mapbiomas_alerta
+          import report_engine_v10, live_report_adapter_v20
           import live_report_adapter_v18, report_visual_identity_v28, report_extras_perf_v30, heavy_live_api_v20, report_pdf_cache_v21, report_quick_v22, github_oidc_auth, monitoring_store, monitoring_routes, alerts_routes
           sample={'ok':True,'source':'MapBiomas','year':2025,'native_vegetation_share_pct':20,'classes':[{'code':15,'share_pct':55},{'code':39,'share_pct':25}]}
           p=landuse_profile_v39.classify_landuse_profile(sample)
@@ -328,3 +330,19 @@ jobs:
         env:
           RX_RELEASE: OFF
         run: PYTHONPATH=. python scripts/f2_clima_landsat_gate.py
+      - name: F2 IPHAN oficial e vazão da outorga
+        env:
+          RX_RELEASE: OFF
+        run: PYTHONPATH=. python scripts/f2_iphan_outorga_gate.py
+      - name: F2 alertas de desmatamento validados gate
+        env:
+          RX_RELEASE: OFF
+        run: PYTHONPATH=. python scripts/f2_mapbiomas_alerta_gate.py
+      - name: F2 painel MTE e SINAFLOR gate (estático e funções puras; navegador nos smokes V48)
+        env:
+          RX_RELEASE: OFF
+        run: PYTHONPATH=. python scripts/f2_painel_mte_sinaflor_gate.py --skip-browser
+      - name: F2 relatório V20 ligação gate (PDF real, crédito na página final, pendência e controles positivos)
+        env:
+          RX_RELEASE: OFF
+        run: PYTHONPATH=. python scripts/f2_relatorio_v20_gate.py

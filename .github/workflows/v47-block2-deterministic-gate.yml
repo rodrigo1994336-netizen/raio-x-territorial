@@ -47,10 +47,13 @@ jobs:
           import sitecustomize
           import report_api
           deadline=time.time()+15
-          while time.time()<deadline and str(getattr(report_api,'APP_VERSION',''))!='0.47.0-v47-block2-candidate':
+          while time.time()<deadline and str(getattr(report_api,'APP_VERSION',''))!='0.50.0-f2-verdade-e-lacunas':
               time.sleep(.1)
-          assert str(report_api.APP_VERSION)=='0.47.0-v47-block2-candidate', report_api.APP_VERSION
-          assert report_api.generate_live_report.__module__=='live_report_adapter_v19'
+          assert str(report_api.APP_VERSION)=='0.50.0-f2-verdade-e-lacunas', report_api.APP_VERSION
+          # F2: o V20 encadeia o V19, que continua usando o motor de integridade V47.
+          import live_report_adapter_v20, live_report_adapter_v19
+          assert report_api.generate_live_report.__module__=='live_report_adapter_v20'
+          assert live_report_adapter_v20.v19 is live_report_adapter_v19
           print('RX_V47_BLOCK2_REPORT_RUNTIME=PASS')
           PY
       - name: Preserve frozen V46/Block-1 portal guard
