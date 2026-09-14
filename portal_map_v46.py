@@ -1,26 +1,56 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import math
 import time
+from collections import OrderedDict
 from typing import Any
 
 from fastapi import HTTPException, Request
+from fastapi.responses import Response
 
 import portal_v8
 import portal_sicar_resilient
 
 app = portal_v8.app
 
-# V46 viewport cache. The cache key is a snapped geographic envelope so a small
-# back-and-forth pan reuses the same CAR payload instead of creating a new WFS
-# request for every pixel movement.
-_V46_VIEWPORT_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
-_V46_VIEWPORT_TTL = 300
-_V46_VIEWPORT_MAX = 180
-# Cache schema bump for V48-T. Old V46 entries without limit/zoom must never
-# collide with post-fix entries, even during overlapping process lifetimes.
-_V46_VIEWPORT_CACHE_SCHEMA = "V48T1"
+# V46 viewport cache. The cache key is a snapped geographic envelope (legacy bbox mode) or a
+# fixed grid cell (W1a cell mode), so panning back and forth reuses the same CAR payload
+# instead of creating a new WFS request for every pixel movement.
+#
+# W1a: entries are the final JSON bytes (no re-encoding on a hit) and live 6 h instead of 5 min.
+# Why 6 h is safe: the map only DRAWS and IDENTIFIES outlines; the SICAR public base changes by
+# publication cycles (the panel declares a monthly snapshot), and the card replaces area,
+# status, condition and dates with the live /v1/live/map-panel answer on click. 6 h bounds the
+# outline staleness to one work shift. Invalidation stays safe because: (1) only COMPLETE
+# answers are stored — any failed quadrant/UF is never cached and is answered with no-store;
+# (2) the schema tag below changes the key space on every contract change; (3) the cache is
+# per process memory, so deploy/restart/sleep clears it; (4) a byte budget with LRU eviction
+# keeps memory bounded.
+_V46_VIEWPORT_CACHE: "OrderedDict[str, tuple[float, bytes]]" = OrderedDict()
+_V46_VIEWPORT_TTL = 6 * 3600
+_V46_VIEWPORT_MAX = 900
+_V46_VIEWPORT_BUDGET_BYTES = 32 * 1024 * 1024  # ~500 dense cells; keeps the 220 MB portal RSS budget
+_V46_VIEWPORT_CACHE_BYTES = 0
+# Cache schema bump for W1a (bytes + cell mode). Old entries must never collide with new ones.
+_V46_VIEWPORT_CACHE_SCHEMA = "W1A1"
+# W1a cell grid (degrees). The browser picks one step per zoom/screen and asks one cell per request.
+_V46_CELL_STEPS = (0.01, 0.02, 0.04, 0.08, 0.16, 0.32)
+# Browser/CDN reuse for a complete answer: short, so a correction reaches users within minutes
+# of the server entry expiring. Incomplete answers and errors are never stored anywhere.
+_V46_PUBLIC_CACHE = "public, max-age=600"
+_V46_NO_STORE = "no-store"
+_CACHED_FALSE_TAIL = b',"cached":false}'
+_CACHED_TRUE_TAIL = b',"cached":true}'
+
+try:  # warm the embedded UF mesh in the deferred boot thread, never inside a request
+    import uf_locator_br
+
+    uf_locator_br._load()
+except Exception as exc:  # the legacy resolver remains available
+    uf_locator_br = None  # type: ignore[assignment]
+    print(f"RX_W1A_UF_LOCAL=unavailable:{type(exc).__name__}", flush=True)
 
 
 def _snap_bounds(west: float, south: float, east: float, north: float) -> tuple[float, float, float, float, float]:
@@ -40,23 +70,145 @@ def _snap_bounds(west: float, south: float, east: float, north: float) -> tuple[
     return round(w, 6), round(s, 6), round(e, 6), round(n, 6), step
 
 
-def _cache_get(key: str) -> dict[str, Any] | None:
+def _payload_bytes(payload: dict[str, Any]) -> bytes:
+    body = {k: v for k, v in payload.items() if k != "cached"}
+    body["cached"] = False
+    return json.dumps(body, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
+
+
+def _cache_drop(key: str) -> None:
+    global _V46_VIEWPORT_CACHE_BYTES
+    old = _V46_VIEWPORT_CACHE.pop(key, None)
+    if old is not None:
+        _V46_VIEWPORT_CACHE_BYTES -= len(old[1])
+
+
+def _cache_get(key: str) -> bytes | None:
     cached = _V46_VIEWPORT_CACHE.get(key)
     if not cached:
         return None
     if time.monotonic() - cached[0] >= _V46_VIEWPORT_TTL:
-        _V46_VIEWPORT_CACHE.pop(key, None)
+        _cache_drop(key)
         return None
-    out = dict(cached[1])
-    out["cached"] = True
-    return out
+    _V46_VIEWPORT_CACHE.move_to_end(key)
+    return cached[1][: -len(_CACHED_FALSE_TAIL)] + _CACHED_TRUE_TAIL
 
 
-def _cache_put(key: str, value: dict[str, Any]) -> None:
-    _V46_VIEWPORT_CACHE[key] = (time.monotonic(), value)
-    if len(_V46_VIEWPORT_CACHE) > _V46_VIEWPORT_MAX:
-        for old_key, _ in sorted(_V46_VIEWPORT_CACHE.items(), key=lambda kv: kv[1][0])[:30]:
-            _V46_VIEWPORT_CACHE.pop(old_key, None)
+def _cache_put(key: str, body: bytes) -> None:
+    global _V46_VIEWPORT_CACHE_BYTES
+    if not body.endswith(_CACHED_FALSE_TAIL):
+        return
+    _cache_drop(key)
+    _V46_VIEWPORT_CACHE[key] = (time.monotonic(), body)
+    _V46_VIEWPORT_CACHE_BYTES += len(body)
+    while _V46_VIEWPORT_CACHE and (
+        _V46_VIEWPORT_CACHE_BYTES > _V46_VIEWPORT_BUDGET_BYTES or len(_V46_VIEWPORT_CACHE) > _V46_VIEWPORT_MAX
+    ):
+        _, (_, old_body) = _V46_VIEWPORT_CACHE.popitem(last=False)
+        _V46_VIEWPORT_CACHE_BYTES -= len(old_body)
+
+
+def _json_response(body: bytes, *, complete: bool) -> Response:
+    return Response(
+        content=body,
+        media_type="application/json",
+        headers={"Cache-Control": _V46_PUBLIC_CACHE if complete else _V46_NO_STORE},
+    )
+
+
+def _merge_results(results: list[Any]) -> tuple[list[dict[str, Any]], int, bool, int]:
+    features: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    partial_failures = 0
+    truncated = False
+    source_bytes = 0
+    for result in results:
+        if isinstance(result, BaseException):
+            partial_failures += 1
+            continue
+        truncated = truncated or bool(result.get("truncated"))
+        source_bytes += int(result.get("source_bytes") or 0)
+        for feature in result.get("features") or []:
+            props = feature.get("properties") or {}
+            code = str(props.get("cod_imovel") or "").strip().upper()
+            dedupe = code or repr(feature.get("geometry"))
+            if dedupe in seen:
+                continue
+            seen.add(dedupe)
+            features.append(feature)
+    return features, partial_failures, truncated, source_bytes
+
+
+def _cell_ufs(west: float, south: float, east: float, north: float) -> list[str] | None:
+    if uf_locator_br is None:
+        return None
+    try:
+        return uf_locator_br.ufs_for_bbox(west, south, east, north)
+    except Exception:
+        return None
+
+
+async def _viewport_cell(
+    request: Request, west: float, south: float, east: float, north: float, cell: float, uf: str | None
+) -> Response:
+    steps = [x for x in _V46_CELL_STEPS if abs(x - float(cell)) < 1e-9]
+    if not steps:
+        raise HTTPException(status_code=422, detail="Célula do mapa inválida.")
+    step = steps[0]
+    ix = math.floor(west / step + 0.5)
+    iy = math.floor(south / step + 0.5)
+    tol = 1e-6
+    if (
+        abs(ix * step - west) > tol
+        or abs(iy * step - south) > tol
+        or abs((ix + 1) * step - east) > tol
+        or abs((iy + 1) * step - north) > tol
+    ):
+        raise HTTPException(status_code=422, detail="Célula do mapa inválida.")
+    cw, cs, ce, cn = (round(ix * step, 6), round(iy * step, 6), round((ix + 1) * step, 6), round((iy + 1) * step, 6))
+    forced = str(uf or "").strip().upper()
+    if forced and (len(forced) != 2 or not forced.isalpha()):
+        raise HTTPException(status_code=422, detail="UF inválida para consulta SICAR.")
+    key = f"{_V46_VIEWPORT_CACHE_SCHEMA}:CELL:{step:g}:{ix}:{iy}:{forced or 'AUTO'}"
+    hit = _cache_get(key)
+    if hit is not None:
+        return _json_response(hit, complete=True)
+    if forced:
+        ufs = [forced]
+    else:
+        local = _cell_ufs(cw, cs, ce, cn)
+        ufs = local if local is not None else [str(await portal_v8.base._reverse_uf((cs + cn) / 2, (cw + ce) / 2)).upper()]
+
+    results: list[Any] = []
+    if ufs:
+        results = await asyncio.gather(
+            *(
+                portal_sicar_resilient.live_sicar_viewport_resilient(request, cw, cs, ce, cn, uf=u, limit=50)
+                for u in ufs
+            ),
+            return_exceptions=True,
+        )
+    features, partial_failures, truncated, source_bytes = _merge_results(results)
+    if results and partial_failures == len(results):
+        raise HTTPException(status_code=502, detail="SICAR indisponível nesta quadrícula.")
+    body = _payload_bytes(
+        {
+            "type": "FeatureCollection",
+            "features": features,
+            "uf": ufs[0] if ufs else None,
+            "ufs": ufs,
+            "source": "SICAR/WFS público · célula W1A com cache",
+            "truncated": truncated,
+            "source_bytes": source_bytes,
+            "grid": {"west": cw, "south": cs, "east": ce, "north": cn, "step": step, "cells": 1, "ix": ix, "iy": iy},
+            "partial_failures": partial_failures,
+            "zoom": None,
+        }
+    )
+    complete = partial_failures == 0
+    if complete:
+        _cache_put(key, body)
+    return _json_response(body, complete=complete)
 
 
 @app.get("/v1/live/sicar/viewport-v46")
@@ -69,12 +221,15 @@ async def live_sicar_viewport_v46(
     uf: str | None = None,
     limit: int = 200,
     zoom: int | None = None,
+    cell: float | None = None,
 ):
     if not (-180 <= west < east <= 180 and -90 <= south < north <= 90):
         raise HTTPException(status_code=422, detail="Área do mapa inválida.")
     span = max(east - west, north - south)
     if span > 1.5:
         raise HTTPException(status_code=422, detail="Área visível ampla demais para carregar limites CAR.")
+    if cell is not None:
+        return await _viewport_cell(request, west, south, east, north, cell, uf)
 
     w, s, e, n, step = _snap_bounds(west, south, east, north)
     cap = max(1, min(int(limit or 200), 240))
@@ -84,7 +239,7 @@ async def live_sicar_viewport_v46(
     if not uf:
         hit = _cache_get(auto_key)
         if hit is not None:
-            return hit
+            return _json_response(hit, complete=True)
         center_lat = (s + n) / 2
         center_lon = (w + e) / 2
         uf = await portal_v8.base._reverse_uf(center_lat, center_lon)
@@ -92,9 +247,7 @@ async def live_sicar_viewport_v46(
     key = f"{_V46_VIEWPORT_CACHE_SCHEMA}:{uf}:{w:.6f}:{s:.6f}:{e:.6f}:{n:.6f}:{step:.4f}{key_suffix}"
     hit = _cache_get(key)
     if hit is not None:
-        if auto_key != key:
-            _cache_put(auto_key, hit)
-        return hit
+        return _json_response(hit, complete=True)
 
     width = e - w
     height = n - s
@@ -111,54 +264,40 @@ async def live_sicar_viewport_v46(
             cn = s + height * (iy + 1) / parts
             cells.append((cw, cs, ce, cn))
 
-    async def fetch_cell(cell: tuple[float, float, float, float]):
-        cw, cs, ce, cn = cell
+    async def fetch_cell(cell_box: tuple[float, float, float, float]):
+        cw, cs, ce, cn = cell_box
         return await portal_sicar_resilient.live_sicar_viewport_resilient(
             request, cw, cs, ce, cn, uf=uf, limit=50
         )
 
-    results = await asyncio.gather(*(fetch_cell(cell) for cell in cells), return_exceptions=True)
-    features: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    partial_failures = 0
-    truncated = False
-    source_bytes = 0
-    for result in results:
-        if isinstance(result, Exception):
-            partial_failures += 1
-            continue
-        truncated = truncated or bool(result.get("truncated"))
-        source_bytes += int(result.get("source_bytes") or 0)
-        for feature in result.get("features") or []:
-            props = feature.get("properties") or {}
-            code = str(props.get("cod_imovel") or "").strip().upper()
-            dedupe = code or repr(feature.get("geometry"))
-            if dedupe in seen:
-                continue
-            seen.add(dedupe)
-            features.append(feature)
-
+    results = await asyncio.gather(*(fetch_cell(c) for c in cells), return_exceptions=True)
+    features, partial_failures, truncated, source_bytes = _merge_results(list(results))
     if len(features) > cap:
         truncated = True
         features = features[:cap]
     if not features and partial_failures == len(results):
         raise HTTPException(status_code=502, detail="SICAR indisponível nesta quadrícula.")
 
-    out = {
-        "type": "FeatureCollection",
-        "features": features,
-        "uf": uf,
-        "source": "SICAR/WFS público · quadrícula V46 com cache",
-        "truncated": truncated,
-        "source_bytes": source_bytes,
-        "grid": {"west": w, "south": s, "east": e, "north": n, "step": step, "cells": len(cells)},
-        "partial_failures": partial_failures,
-        "cached": False,
-        "zoom": zoom,
-    }
-    _cache_put(key, out)
-    _cache_put(auto_key, out)
-    return out
+    body = _payload_bytes(
+        {
+            "type": "FeatureCollection",
+            "features": features,
+            "uf": uf,
+            "source": "SICAR/WFS público · quadrícula V46 com cache",
+            "truncated": truncated,
+            "source_bytes": source_bytes,
+            "grid": {"west": w, "south": s, "east": e, "north": n, "step": step, "cells": len(cells)},
+            "partial_failures": partial_failures,
+            "zoom": zoom,
+        }
+    )
+    # A partial answer (some quadrant failed) is shown but never stored, so it cannot be
+    # replayed for hours as if it were the complete area.
+    complete = partial_failures == 0
+    if complete:
+        _cache_put(key, body)
+        _cache_put(auto_key, body)
+    return _json_response(body, complete=complete)
 
 
 html = portal_v8.PORTAL_HTML
@@ -180,39 +319,54 @@ once(
     "v46_map_state_patch_missing",
 )
 
-# Below the normal CAR-density zoom the ordinary parcels may leave the map, but
-# V46 keeps the selected property in its own layer. Do not display a limitation banner.
-once(
-    "if(z<11){if(rxParcelLayer){m.removeLayer(rxParcelLayer);rxParcelLayer=null}rxParcelIndex.clear();setMapState('Aproxime o mapa para visualizar os limites dos imóveis rurais do CAR.');return}",
-    "if(z<11){if(rxParcelLayer){m.removeLayer(rxParcelLayer);rxParcelLayer=null}rxParcelIndex.clear();setMapState('');return}",
-    "v46_low_zoom_branch_missing",
-)
-
-# Use the snapped/cached V46 viewport endpoint and a browser memory cache. The
-# existing V43 reconciler already adds the next set before removing stale parcels.
-once(
-    "const u=new URL('/v1/live/sicar/viewport',location.origin);",
-    "const u=new URL('/v1/live/sicar/viewport-v46',location.origin);",
-    "v46_viewport_url_missing",
-)
-once(
-    "u.searchParams.set('limit',window.rxFieldMode?'35':'80');const r=await (window.rxFieldFetch?window.rxFieldFetch(u,window.rxFieldMode?6500:10000):fetch(u));const d=await r.json();",
-    "u.searchParams.set('limit',window.rxFieldMode?'120':'200');u.searchParams.set('zoom',String(z));const pack=window.rx46ViewportRequest?await window.rx46ViewportRequest(u):null;const r=pack?pack.response:await (window.rxFieldFetch?window.rxFieldFetch(u,window.rxFieldMode?6500:10000):fetch(u));const d=pack?pack.data:await r.json();",
-    "v46_viewport_fetch_patch_missing",
-)
-
-# A partial viewport must never look complete. Use the actual delivered feature
-# count, never the requested URL limit and never an estimated total.
-once(
-    "setMapState(`${d.features?.length||0} imóvel(is) CAR carregado(s) nesta área${d.truncated?' · aproxime para ver mais':''}. Clique em um polígono.`)",
-    "setMapState(d.truncated?`Mostrando ${d.features?.length||0} imóveis. Há mais nesta área.`:'',!!d.truncated)",
-    "v48_t_truncation_notice_patch_missing",
-)
-
-# Polygon clicks no longer call V45/V43 directly. They select the V46 anchor card.
+# W1a: the effective CAR viewport loader is written HERE (it replaces the V21/V43 loader and
+# scheduleParcels in one piece). Instead of one 4-quadrant request per settled view it keeps a
+# fixed grid of cells:
+#   * one request per cell (/viewport-v46?...&cell=STEP), each drawn as soon as it arrives;
+#   * visible cells first (center outwards), then a ~50% margin (25% per side);
+#   * hysteresis: nothing is requested while the view stays inside the planned margin;
+#   * parcels are drawn by one L.canvas renderer (padding .5) in a pane under the SVG overlays,
+#     so the selected outline stays on top and a drag does not expose blank edges;
+#   * cells of the previous zoom stay on the map until the new visible cells settle (no blink);
+#   * "Há mais nesta área" only when a visible cell reached the SICAR 50-feature cap, with the
+#     count of parcels actually drawn in view; a cell that failed twice becomes a quiet
+#     pending line and is asked again on the next move.
+# portal_map_v46_anchor_state.py anchors on the parcel click below (kept verbatim).
+_W1A_REGION_START = "async function loadVisibleParcels(force){"
+_W1A_REGION_END = "  function locateUser(){"
 _old_click = "l.bindTooltip('',{sticky:true});l.on('click',e=>{if(e.originalEvent)L.DomEvent.stopPropagation(e.originalEvent);const live=l.feature||ff,p=propertyFromFeature(live);if(typeof showProperty==='function')showProperty(p,live.geometry)})"
 _new_click = "l.bindTooltip('',{sticky:true});l.on('mouseover',()=>{try{l.setStyle(window.rxParcelHoverStyle?.()||{weight:2,fillOpacity:.23})}catch(e){}});l.on('mouseout',()=>{try{l.setStyle(rxParcelStyleFor(l.feature||ff))}catch(e){}});l.on('click',e=>{if(e.originalEvent)L.DomEvent.stopPropagation(e.originalEvent);const live=l.feature||ff,p=propertyFromFeature(live);if(typeof window.rxV46SelectProperty==='function')window.rxV46SelectProperty(p,live.geometry,e.latlng);else if(typeof showProperty==='function')showProperty(p,live.geometry)})"
-once(_old_click, _new_click, "v46_polygon_click_patch_missing")
+_W1A_LOADER = r"""const RX_W1A_STEPS=[0.01,0.02,0.04,0.08,0.16,0.32];
+  const rxW1a={step:0,box:null,cells:new Map(),parcelCells:new Map(),queue:[],active:0,epoch:0,canvas:null,drawMs:0,draws:0,noticeMs:0};
+  window.rxW1aGridState=()=>{const by={};for(const c of rxW1a.cells.values())by[c.state]=(by[c.state]||0)+1;return {step:rxW1a.step,box:rxW1a.box,cells:rxW1a.cells.size,by,active:rxW1a.active,queued:rxW1a.queue.length,parcels:rxParcelIndex.size,renderer:rxW1a.canvas?'canvas':null,draws:rxW1a.draws,drawMs:Math.round(rxW1a.drawMs),noticeMs:Math.round(rxW1a.noticeMs)}};
+  function rxW1aKey(step,ix,iy){return step+':'+ix+':'+iy}
+  function rxW1aCells(step,w,s,e,n){const out=[],x0=Math.floor(w/step+1e-9),x1=Math.floor(e/step-1e-9),y0=Math.floor(s/step+1e-9),y1=Math.floor(n/step-1e-9);if((x1-x0+1)*(y1-y0+1)>400)return out;for(let iy=y0;iy<=y1;iy++)for(let ix=x0;ix<=x1;ix++)out.push(rxW1aKey(step,ix,iy));return out}
+  function rxW1aStep(w,s,e,n){const target=Math.sqrt(Math.max(1e-9,(e-w)*(n-s))/(window.rxFieldMode?4:6)),cur=rxW1a.step;if(cur&&Math.abs(Math.log(cur/target))<Math.log(2)*.75)return cur;let best=RX_W1A_STEPS[0];for(const x of RX_W1A_STEPS)if(Math.abs(Math.log(x/target))<Math.abs(Math.log(best/target)))best=x;return best}
+  function rxW1aRenderer(m){if(!m.getPane('rxParcelPane')){const pane=m.createPane('rxParcelPane');pane.style.zIndex='390'}if(!rxW1a.canvas)rxW1a.canvas=L.canvas({pane:'rxParcelPane',padding:.5,tolerance:matchMedia('(pointer:coarse)').matches?4:1});return rxW1a.canvas}
+  function rxW1aReset(){rxW1a.epoch+=1;for(const c of rxW1a.cells.values()){if(c.ctrl){try{c.ctrl.abort()}catch(e){}}}rxW1a.cells.clear();rxW1a.parcelCells.clear();rxW1a.queue=[];rxW1a.box=null;rxW1a.step=0}
+  function rxW1aDrop(k){const c=rxW1a.cells.get(k);if(!c)return;rxW1a.cells.delete(k);if(c.ctrl){try{c.ctrl.abort()}catch(e){}}for(const key of c.keys){const set=rxW1a.parcelCells.get(key);if(!set)continue;set.delete(k);if(!set.size){rxW1a.parcelCells.delete(key);const g=rxParcelIndex.get(key);if(g){try{rxParcelLayer&&rxParcelLayer.removeLayer(g)}catch(e){}rxParcelIndex.delete(key)}}}}
+  function rxW1aDraw(m,cell,features){if(!rxParcelLayer)rxParcelLayer=L.layerGroup().addTo(m);const renderer=rxW1aRenderer(m);const rxTipC2=p=>{const e=s=>String(s??'').replace(/[&<>"']/g,c=>'&#'+c.charCodeAt(0)+';'),city=String(p?.municipality||'').trim(),uf=String(p?.uf||'').trim(),area=window.rxNum?window.rxNum.ha(p?.area_ha):'';return [city?(uf?city+' / '+uf:city):'',area].filter(Boolean).map(e).join(' · ')};const rxParcelStyleFor=f=>(window.rxParcelStyle?window.rxParcelStyle(f):{color:'#48d995',weight:1.4,fillColor:'#48d995',fillOpacity:.075});const rxParcelKey=(f,i)=>{const p=propertyFromFeature(f);return String(p.car_code||f?.id||('anon:'+cell.key+':'+i+':'+(p.municipality||'')+':'+(p.area_ha??'')))};const rxGeomSig=f=>{try{return JSON.stringify(f?.geometry?.coordinates||[]).length}catch(e){return 0}};const rxBuildParcel=(f,key)=>{const group=L.geoJSON(f,{renderer,style:rxParcelStyleFor,onEachFeature:(ff,l)=>{__RX_W1A_CLICK__}});group.__rxGeomSig=rxGeomSig(f);group.eachLayer(l=>{const p=propertyFromFeature(f);l.feature=f;l.setTooltipContent?.(rxTipC2(p))});group.addTo(rxParcelLayer);rxParcelIndex.set(key,group);return group};(features||[]).forEach((f,i)=>{const key=rxParcelKey(f,i);cell.keys.add(key);let set=rxW1a.parcelCells.get(key);if(!set)rxW1a.parcelCells.set(key,set=new Set());set.add(cell.key);const group=rxParcelIndex.get(key),sig=rxGeomSig(f);if(!group){rxBuildParcel(f,key);return}if(group.__rxGeomSig!==sig){rxBuildParcel(f,key);try{rxParcelLayer.removeLayer(group)}catch(e){}return}group.eachLayer(l=>{l.feature=f;try{l.setTooltipContent?.(rxTipC2(propertyFromFeature(f)))}catch(e){}})})}
+  function rxW1aNotice(){const m=rxMap();if(!m||!rxW1a.step||m.getZoom()<11)return;const b=m.getBounds(),vis=rxW1aCells(rxW1a.step,b.getWest(),b.getSouth(),b.getEast(),b.getNorth()).map(k=>rxW1a.cells.get(k));let n=0;for(const g of rxParcelIndex.values()){try{if(b.intersects(g.getBounds()))n++}catch(e){}}window.rxVisibleCarCountV43=n;const trunc=vis.some(c=>c&&c.state==='ok'&&c.truncated),pending=vis.some(c=>!c||c.state==='queued'||c.state==='loading'),failed=vis.some(c=>c&&(c.state==='fail'||(c.state==='ok'&&c.partial)));const st=qs('#rxMapState'),confirmed=!!st&&st.dataset.rxTruncated==='1';if(trunc||(pending&&n&&confirmed)){setMapState(`Mostrando ${n} imóveis. Há mais nesta área.`,true);return}if(pending){if(!n)setMapState('Carregando imóveis do SICAR nesta área do Brasil…');return}if(failed){setMapState('Parte dos imóveis desta área ainda não carregou.',false);return}setMapState('',false)}
+  function rxW1aEvict(){const m=rxMap();if(!m||!rxW1a.step)return;const b=m.getBounds(),w=b.getWest(),s=b.getSouth(),e=b.getEast(),n=b.getNorth(),dw=e-w,dh=n-s,R=[w-dw,s-dh,e+dw,n+dh],step=rxW1a.step;const settled=rxW1aCells(step,w,s,e,n).every(k=>{const c=rxW1a.cells.get(k);return !!c&&(c.state==='ok'||c.state==='fail')});for(const [k,c] of [...rxW1a.cells]){const x0=c.ix*c.step,y0=c.iy*c.step,far=x0+c.step<R[0]||x0>R[2]||y0+c.step<R[1]||y0>R[3];if(far||(c.step!==step&&(settled||c.state!=='ok')))rxW1aDrop(k)}}
+  function rxW1aRetryLater(cell){setTimeout(()=>{if(rxW1a.cells.get(cell.key)!==cell||(cell.state==='ok'&&!cell.partial)||cell.state==='loading'||cell.state==='queued')return;cell.state='queued';rxW1a.queue.unshift(cell.key);rxW1aPump()},1500)}
+  async function rxW1aFetch(cell){const m=rxMap();if(!m)return;cell.state='loading';cell.tries+=1;rxW1a.active+=1;const ctrl=new AbortController(),epoch=rxW1a.epoch;cell.ctrl=ctrl;let ok=false,d=null;try{const s=cell.step,f=v=>v.toFixed(6),u=new URL('/v1/live/sicar/viewport-v46',location.origin);u.searchParams.set('west',f(cell.ix*s));u.searchParams.set('south',f(cell.iy*s));u.searchParams.set('east',f((cell.ix+1)*s));u.searchParams.set('north',f((cell.iy+1)*s));u.searchParams.set('cell',String(s));const pack=window.rx46ViewportRequest?await window.rx46ViewportRequest(u,{signal:ctrl.signal}):null;const r=pack?pack.response:await fetch(u,{signal:ctrl.signal});d=pack?pack.data:await r.json();ok=!!r.ok&&!!d&&Array.isArray(d.features)}catch(e){ok=false}finally{rxW1a.active=Math.max(0,rxW1a.active-1);cell.ctrl=null}rxW1aPump();if(epoch!==rxW1a.epoch||rxW1a.cells.get(cell.key)!==cell)return;if(ok){cell.state='ok';cell.truncated=!!d.truncated;cell.partial=Number(d.partial_failures||0)>0;rxLastUf=d.uf||rxLastUf;const t0=performance.now();try{rxW1aDraw(m,cell,d.features)}catch(e){cell.state='fail'}rxW1a.drawMs+=performance.now()-t0;rxW1a.draws+=1;if(cell.partial&&cell.tries<2)rxW1aRetryLater(cell)}else{cell.state='fail';if(cell.tries<2)rxW1aRetryLater(cell)}const t1=performance.now();rxW1aEvict();rxW1aNotice();rxW1a.noticeMs+=performance.now()-t1}
+  function rxW1aPump(){const max=window.rxFieldMode?2:6;while(rxW1a.active<max&&rxW1a.queue.length){const k=rxW1a.queue.shift(),c=rxW1a.cells.get(k);if(c&&c.state==='queued')rxW1aFetch(c)}}
+  function rxW1aPlan(keys){const want=new Set(keys);for(const [k,c] of [...rxW1a.cells]){if(c.state==='queued'&&!want.has(k))rxW1a.cells.delete(k)}rxW1a.queue=[];for(const k of keys){const c=rxW1a.cells.get(k);if(c&&c.state!=='fail'){if(c.state==='queued')rxW1a.queue.push(k);continue}const [s,ix,iy]=k.split(':').map(Number);rxW1a.cells.set(k,{key:k,step:s,ix,iy,state:'queued',tries:0,keys:c?c.keys:new Set(),truncated:false,partial:false,ctrl:null});rxW1a.queue.push(k)}rxW1aPump()}
+  async function loadVisibleParcels(force){const m=rxMap();if(!m||document.body.classList.contains('rx43-dossier-open'))return;const z=m.getZoom();if(z<11){rxW1aReset();if(rxParcelLayer){m.removeLayer(rxParcelLayer);rxParcelLayer=null}rxParcelIndex.clear();setMapState('');return}const b=m.getBounds(),west=b.getWest(),south=b.getSouth(),east=b.getEast(),north=b.getNorth();if(!(Number.isFinite(west)&&Number.isFinite(south)&&Number.isFinite(east)&&Number.isFinite(north)&&east>west&&north>south)){setMapState('Mapa ajustando…');return}const span=Math.max(east-west,north-south);if(span>1.2&&!force){setMapState('Aproxime um pouco mais para carregar os imóveis rurais.');return}const step=rxW1aStep(west,south,east,north),visible=rxW1aCells(step,west,south,east,north),box=rxW1a.box,inside=!!box&&rxW1a.step===step&&west>=box[0]&&south>=box[1]&&east<=box[2]&&north<=box[3],covered=visible.every(k=>{const c=rxW1a.cells.get(k);return !!c&&c.state!=='fail'});if(inside&&covered&&!force){rxW1aEvict();rxW1aNotice();return}rxW1a.step=step;const pw=(east-west)*.25,ph=(north-south)*.25,pad=[west-pw,south-ph,east+pw,north+ph];rxW1a.box=pad;const cx=(west+east)/2,cy=(south+north)/2,dist=k=>{const p=k.split(':').map(Number);return Math.hypot((p[1]+.5)*step-cx,(p[2]+.5)*step-cy)};const seen=new Set(visible);let margin=window.rxFieldMode?[]:rxW1aCells(step,...pad).filter(k=>!seen.has(k));if(visible.length+margin.length>64)margin=[];rxW1aPlan([...visible.sort((a,c)=>dist(a)-dist(c)),...margin.sort((a,c)=>dist(a)-dist(c))]);rxW1aEvict();rxW1aNotice()}
+  function scheduleParcels(){rxLastUf=null;clearTimeout(rxTimer);rxTimer=setTimeout(()=>loadVisibleParcels(false),window.rxFieldMode?850:120)}
+""".replace("__RX_W1A_CLICK__", _new_click)
+
+_region_start = html.find(_W1A_REGION_START)
+_region_end = html.find(_W1A_REGION_END, _region_start + 1) if _region_start >= 0 else -1
+if (
+    _region_start < 0
+    or _region_end < 0
+    or html.find(_W1A_REGION_START, _region_start + 1) >= 0
+    or _old_click not in html[_region_start:_region_end]
+    or "function scheduleParcels(){" not in html[_region_start:_region_end]
+):
+    raise RuntimeError("w1a_viewport_loader_region_missing")
+html = html[:_region_start] + _W1A_LOADER + html[_region_end:]
 
 # An empty-map click closes the anchor instead of launching a second point resolver.
 once(
@@ -248,8 +402,10 @@ V46_UI = r'''
  const statusInfo=v=>{const raw=String(v||'').trim(),label=raw?(STATUS[raw.toUpperCase()]||raw):'',low=label.toLowerCase();return {raw,label,cls:/ativ/.test(low)?'active':/pendent/.test(low)?'pending':/cancel|suspens|inativ/.test(low)?'bad':''}};
  const typeLabel=v=>{const raw=String(v||'').trim();return raw?(TYPES[raw.toUpperCase()]||raw):''};
  const viewportMemory=new Map();
- function snappedUrl(input){const u=new URL(String(input),location.origin),w=Number(u.searchParams.get('west')),s=Number(u.searchParams.get('south')),e=Number(u.searchParams.get('east')),n=Number(u.searchParams.get('north')),span=Math.max(e-w,n-s);let step=span<=.08?.02:span<=.25?.05:span<=.60?.10:.20;if([w,s,e,n].every(Number.isFinite)){u.searchParams.set('west',String(Math.floor(w/step)*step));u.searchParams.set('south',String(Math.floor(s/step)*step));u.searchParams.set('east',String(Math.ceil(e/step)*step));u.searchParams.set('north',String(Math.ceil(n/step)*step))}return u}
- window.rx46ViewportRequest=async function(input){const u=snappedUrl(input),key=u.toString(),cached=viewportMemory.get(key);if(cached){fetch(u,{cache:'no-store'}).then(async r=>{if(r.ok){const d=await r.json();viewportMemory.set(key,d)}}).catch(()=>{});return {response:{ok:true,status:200},data:cached}}const r=await fetch(u,{cache:'no-store'}),d=await r.json();if(r.ok){viewportMemory.set(key,d);if(viewportMemory.size>36)viewportMemory.delete(viewportMemory.keys().next().value)}return {response:r,data:d}};
+ function snappedUrl(input){const u=new URL(String(input),location.origin);if(u.searchParams.has('cell'))return u;const w=Number(u.searchParams.get('west')),s=Number(u.searchParams.get('south')),e=Number(u.searchParams.get('east')),n=Number(u.searchParams.get('north')),span=Math.max(e-w,n-s);let step=span<=.08?.02:span<=.25?.05:span<=.60?.10:.20;if([w,s,e,n].every(Number.isFinite)){u.searchParams.set('west',String(Math.floor(w/step)*step));u.searchParams.set('south',String(Math.floor(s/step)*step));u.searchParams.set('east',String(Math.ceil(e/step)*step));u.searchParams.set('north',String(Math.ceil(n/step)*step))}return u}
+ // W1a: complete answers are reused for 10 min (same as the server Cache-Control); the browser HTTP cache
+ // does the rest. No background no-store refetch, and an incomplete answer is never remembered.
+ window.rx46ViewportRequest=async function(input,init){const u=snappedUrl(input),key=u.toString(),hit=viewportMemory.get(key);if(hit&&Date.now()-hit.t<600000){viewportMemory.delete(key);viewportMemory.set(key,hit);return {response:{ok:true,status:200},data:hit.d}}if(hit)viewportMemory.delete(key);const r=await fetch(u,init||{}),d=await r.json();if(r.ok&&d&&Number(d.partial_failures||0)===0){viewportMemory.set(key,{t:Date.now(),d});if(viewportMemory.size>160)viewportMemory.delete(viewportMemory.keys().next().value)}return {response:r,data:d}};
  window.rxParcelStyle=function(){return {color:'#80c9aa',weight:1.25,opacity:.96,fill:true,fillColor:'#55b889',fillOpacity:.20}};
  window.rxParcelHoverStyle=function(){return {color:'#a0e8ca',weight:2.1,opacity:1,fillColor:'#63e6a5',fillOpacity:.24}};
  let legacyOpen=null,popup=null,selectedLayer=null,selected=null,seq=0;
@@ -284,4 +440,4 @@ html = html.replace("</body>", V46_UI + "</body>")
 portal_v8.PORTAL_HTML = html
 portal_v8.APP_PORTAL_VERSION = "0.47.0-v47-search-name-truth-fill"
 
-print("RX_MAP_V46=two_level_anchor_cached_grid_labels_truthful_panel_cta_only", flush=True)
+print("RX_MAP_V46=two_level_anchor_cached_grid_labels_truthful_panel_cta_only w1a_cells:canvas_progressive_hysteresis uf:local cache:6h_bytes", flush=True)

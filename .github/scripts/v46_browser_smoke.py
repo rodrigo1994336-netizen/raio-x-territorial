@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 from pathlib import Path
 
 from playwright.async_api import async_playwright
 
-BASE = "http://127.0.0.1:8000/"
+BASE = os.getenv("RX_SMOKE_BASE", "http://127.0.0.1:8000/")
 OUT = Path("artifacts")
 DENSE = {"lat": -18.4448863, "lon": -44.2181254, "zoom": 13}
 results = {"viewports": {}, "movements": [], "console": []}
@@ -29,12 +30,14 @@ async def wait_runtime(page):
     )
 
 
+# W1a: parcels may be drawn by a canvas renderer (no <path> per parcel). Every probe below
+# reads Leaflet layers carrying a CAR code, so it works for SVG and canvas alike.
+PARCELS_IN_VIEW_JS = """()=>{if(typeof map==='undefined'||!map)return 0;const b=map.getBounds();let n=0;map.eachLayer(l=>{const p=l.feature&&l.feature.properties;if(p&&p.cod_imovel&&l.getBounds){try{if(b.intersects(l.getBounds()))n++}catch(e){}}});return n}"""
+
+
 async def set_dense(page):
     await js(page, "p=>map.setView([p.lat,p.lon],p.zoom,{animate:false})", DENSE)
-    await page.wait_for_function(
-        "document.querySelectorAll('.leaflet-overlay-pane path.leaflet-interactive').length>0",
-        timeout=25000,
-    )
+    await page.wait_for_function(f"({PARCELS_IN_VIEW_JS})()>0", timeout=25000)
 
 
 async def map_center(page):
@@ -42,10 +45,7 @@ async def map_center(page):
 
 
 async def visible_parcels(page):
-    return await js(
-        page,
-        """()=>{const mr=document.querySelector('#map')?.getBoundingClientRect();if(!mr)return 0;return [...document.querySelectorAll('.leaflet-overlay-pane path.leaflet-interactive')].filter(p=>{const r=p.getBoundingClientRect();return r.width>1&&r.height>1&&r.right>mr.left&&r.left<mr.right&&r.bottom>mr.top&&r.top<mr.bottom}).length}""",
-    )
+    return await js(page, PARCELS_IN_VIEW_JS)
 
 
 async def proven_empty_map_point(page):
@@ -54,12 +54,16 @@ async def proven_empty_map_point(page):
         """()=>{
           const mapEl=document.querySelector('#map'),r=mapEl?.getBoundingClientRect();
           if(!r)return null;
-          const fx=[.08,.16,.24,.32,.40,.48,.56,.64,.72,.80,.88,.94];
-          const fy=[.12,.22,.32,.42,.52,.62,.72,.82,.90];
+          // W1a: with every CAR drawn, bare pixels are rarer; scan a finer grid (coarse points first).
+          const fx=[.08,.16,.24,.32,.40,.48,.56,.64,.72,.80,.88,.94,.04,.12,.20,.28,.36,.44,.52,.60,.68,.76,.84,.92];
+          const fy=[.12,.22,.32,.42,.52,.62,.72,.82,.90,.17,.27,.37,.47,.57,.67,.77,.86];
           for(const yy of fy)for(const xx of fx){
             const x=r.left+r.width*xx,y=r.top+r.height*yy,el=document.elementFromPoint(x,y);
             if(!el||!el.closest('#map'))continue;
-            if(el.closest('.leaflet-popup,.leaflet-control,.leaflet-interactive'))continue;
+            if(el.closest('.leaflet-popup,.leaflet-control')||(el.tagName!=='CANVAS'&&el.closest('.leaflet-interactive')))continue; // a canvas keeps .leaflet-interactive while hovered; parcels are excluded below
+            const lp=map.containerPointToLayerPoint([x-r.left,y-r.top]);let onParcel=false;
+            const ll=map.containerPointToLatLng([x-r.left,y-r.top]);map.eachLayer(l=>{if(!onParcel&&l.feature?.properties?.cod_imovel&&l._containsPoint&&l.getBounds){try{onParcel=l.getBounds().contains(ll)&&l._containsPoint(lp)}catch(e){}}});
+            if(onParcel)continue;
             return {x,y,tag:el.tagName,id:el.id||null,cls:String(el.className||'')};
           }
           return null;
@@ -67,10 +71,24 @@ async def proven_empty_map_point(page):
     )
 
 
+PARCEL_POINTS_JS = """()=>{const r=document.querySelector('#map').getBoundingClientRect(),top=Math.max(r.top,document.querySelector('header.top')?.getBoundingClientRect().bottom||0),out=[];
+  map.eachLayer(l=>{const p=l.feature&&l.feature.properties;if(out.length>=12||!p||!p.cod_imovel||!l._containsPoint||l._path)return;const b=l.getBounds(),c=map.latLngToContainerPoint(b.getCenter());
+    for(const [dx,dy] of [[0,0],[3,3],[-3,-3],[5,-5],[-5,5]]){const x=r.left+c.x+dx,y=r.top+c.y+dy;if(x<r.left+30||x>r.right-60||y<top+60||y>r.bottom-70)continue;
+      if(!l._containsPoint(map.containerPointToLayerPoint([c.x+dx,c.y+dy])))continue;const el=document.elementFromPoint(x,y);if(!el||el.tagName!=='CANVAS'||!el.closest('#map'))continue;out.push({x,y});break}});return out}"""
+
+
 async def click_first_parcel(page):
+    points = await js(page, PARCEL_POINTS_JS)
+    for pt in points:
+        try:
+            await page.mouse.click(pt["x"], pt["y"])
+            await page.wait_for_selector(".rx46-card", state="visible", timeout=5000)
+            return pt
+        except Exception:
+            pass
     paths = page.locator(".leaflet-overlay-pane path.leaflet-interactive")
     n = await paths.count()
-    assert n > 0, "no interactive CAR polygon to click"
+    assert n > 0 or points, "no interactive CAR polygon to click"
     for i in range(min(n, 12)):
         try:
             b = await paths.nth(i).bounding_box()
@@ -592,7 +610,7 @@ async def movement_gate(browser):
         ("zoom_in_3", "map.setZoom(Math.min(14,map.getZoom()+1),{animate:false})"),
     ]
     for idx, (name, code) in enumerate(ops, 1):
-        await js(page, code)
+        await js(page, f"()=>void ({code})")
         samples = []
         for _ in range(16):
             samples.append(await visible_parcels(page))
@@ -621,14 +639,14 @@ async def movement_gate(browser):
 
 
 async def assert_parcel_fill(page):
-    fills = await js(page, """()=>{const rows=[];map.eachLayer(l=>{if(l._path&&l.feature?.properties?.cod_imovel){const s=getComputedStyle(l._path);rows.push({fill:s.fill,opacity:Number(s.fillOpacity)})}});return rows}""")
+    fills = await js(page, """()=>{const rows=[];map.eachLayer(l=>{if(!l.feature?.properties?.cod_imovel||!l.options)return;if(l._path){const s=getComputedStyle(l._path);rows.push({fill:s.fill,opacity:Number(s.fillOpacity)})}else if(l._parts){rows.push({fill:l.options.fill===false?'none':String(l.options.fillColor||l.options.color),opacity:Number(l.options.fillOpacity)})}});return rows}""")
     assert fills and all(x['fill'] != 'none' and .15 <= x['opacity'] <= .25 for x in fills), fills
 
 
 async def assert_parcel_tooltips(page):
     # C2a: the hover tooltip is a plain location/area line: no municipality heading,
     # no '—' placeholder, pt-BR area.
-    tips = await js(page, """()=>{const rows=[];map.eachLayer(l=>{if(l._path&&l.feature?.properties?.cod_imovel){const t=l.getTooltip?.();const c=t?t.getContent():null;if(typeof c==='string')rows.push(c)}});return rows}""")
+    tips = await js(page, """()=>{const rows=[];map.eachLayer(l=>{if(l.feature?.properties?.cod_imovel&&l.getTooltip){const t=l.getTooltip();const c=t?t.getContent():null;if(typeof c==='string')rows.push(c)}});return rows}""")
     assert tips, "no parcel tooltip content"
     for tip in tips:
         assert "—" not in tip and "<b>" not in tip and "Imóvel rural" not in tip, tip

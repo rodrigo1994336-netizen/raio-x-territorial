@@ -55,6 +55,8 @@ jobs:
           fi
       - name: Selection card panel and 10-movement visual gate
         run: python .github/scripts/v46_browser_smoke.py
+      - name: W1a fast CAR parcels (cells, canvas, hysteresis, honest notice)
+        run: python .github/scripts/w1a_imoveis_rapidos_smoke.py
       - name: Enforce browser smoke execution
         if: always()
         run: |
