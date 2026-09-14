@@ -30,6 +30,10 @@ def _patch_extra_territorial(payload:dict,result:dict):
     labels={'floresta_publica':'Floresta Pública — SFB','sitio_arqueologico':'Sítio Arqueológico — IPHAN'}
     for key,label in labels.items():
         r=services.get(key) or {};source=r.get('source') or ('SFB' if key=='floresta_publica' else 'IPHAN')
+        if key=='sitio_arqueologico' and isinstance(r.get('iphan'),dict):
+            # F2: IPHAN oficial — dentro, junto à divisa (não é interseção) e vizinhança, sem hectare para ponto.
+            import iphan_sicg
+            iphan_sicg.patch_report_payload(payload,r['iphan'],label);continue
         if r.get('ok'):
             n=int(r.get('occurrence_count') or 0);area=float(r.get('area_unique_ha') or 0)
             env.setdefault('layer_rows',[]).append([label,f'{n} ocorrência(s) • {round(area,6)} ha ({_pct(area,total)}%)',source])

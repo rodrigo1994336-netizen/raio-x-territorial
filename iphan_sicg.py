@@ -12,8 +12,12 @@ Regras que este módulo garante:
   nunca "0 sítios";
 * um sítio é uma linha só (ponto e polígono juntados pelo código IPHAN);
 * distância medida da divisa do imóvel até o ponto ou a borda do polígono;
-* posição a menos de 15 m da divisa é "junto à divisa" (a coordenada do IPHAN
-  tem 4 casas decimais, cerca de 11 m), nem "dentro" nem "fora";
+* posição a menos de 15 m da divisa é "junto à divisa" (o IPHAN publica a
+  coordenada arredondada em 4 casas decimais, cerca de 11 m), nem "dentro" nem
+  "fora"; sítio junto à divisa não conta como interseção;
+* polígono inválido do cadastro (237 de 3.661 em 13/09/2026) e CAR inválido são
+  corrigidos com ``make_valid`` antes de medir — sem isso a interseção quebra
+  (a checagem inteira ficaria pendente) ou dá área errada;
 * sítio na vizinhança não é restrição dentro do imóvel.
 """
 from __future__ import annotations
@@ -27,9 +31,10 @@ from typing import Any
 
 import httpx
 from pyproj import CRS, Geod, Transformer
+from shapely import make_valid
 from shapely.geometry import box, shape
 from shapely.geometry.base import BaseGeometry
-from shapely.ops import transform
+from shapely.ops import transform, unary_union
 
 WFS_URL = "https://geoserver.iphan.gov.br/geoserver/ows"
 LAYER_POINTS = "SICG:sitios"
@@ -182,6 +187,17 @@ def format_distance(distance_m: float) -> str:
     return f"{km:,.1f}".translate(str.maketrans(",.", ".,")) + " km"
 
 
+def _valid_polygonal(geom: BaseGeometry) -> BaseGeometry:
+    """Polígono do cadastro pronto para medir: inválido vira válido (só a parte de área)."""
+    if geom.is_valid:
+        return geom
+    fixed = make_valid(geom)
+    if fixed.geom_type in ("Polygon", "MultiPolygon"):
+        return fixed
+    parts = [g for g in getattr(fixed, "geoms", []) if g.geom_type in ("Polygon", "MultiPolygon")]
+    return unary_union(parts) if parts else fixed
+
+
 def _clean(value: Any) -> str | None:
     text = " ".join(str(value or "").split())
     return text or None
@@ -200,6 +216,8 @@ def analyze_sites(
     até ``radius_km`` da divisa), ordenados por distância.
     """
     car_geom = _as_geometry(car)
+    if car_geom.geom_type in ("Polygon", "MultiPolygon"):
+        car_geom = _valid_polygonal(car_geom)  # CAR com autointerseção também quebraria a interseção
     tr = _metric_transformer(car_geom)
     car_m = transform(tr.transform, car_geom)
     boundary_m = car_m.boundary
@@ -210,6 +228,8 @@ def analyze_sites(
                 geom = shape(feature.get("geometry"))
             except Exception:
                 continue
+            if geom.geom_type in ("Polygon", "MultiPolygon"):
+                geom = _valid_polygonal(geom)
             if geom.is_empty:
                 continue
             props = feature.get("properties") or {}
@@ -236,7 +256,7 @@ def analyze_sites(
             gm = transform(tr.transform, geom)
             distance_m = min(distance_m, float(car_m.distance(gm)))
             border_distance_m = min(border_distance_m, float(boundary_m.distance(gm)))
-            if kind == "polígono" and geom.geom_type in ("Polygon", "MultiPolygon"):
+            if kind == "polígono" and geom.geom_type in ("Polygon", "MultiPolygon", "GeometryCollection"):
                 inter_m = car_m.intersection(gm)
                 if not inter_m.is_empty and inter_m.area > 0:
                     poly_area_m2 += float(inter_m.area)
@@ -327,14 +347,15 @@ def constraint_service_result(iphan: dict[str, Any], label: str = "Sítio Arqueo
     """Converte o resultado para o formato de ``territorial_constraints._query_one``.
 
     ``ok`` só é verdadeiro com as duas camadas completas. ``occurrence_count``
-    conta sítios dentro e junto à divisa (precisão da coordenada). O resultado
-    completo segue em ``iphan`` para a vizinhança de 10 km.
+    conta só sítios dentro do imóvel (o formato antigo lê esse número como
+    "interseção exata"); junto à divisa fica em ``border_count`` e em ``iphan``,
+    com a vizinhança de 10 km.
     """
     geoms = list(iphan.pop("_geoms", []) or [])
     if not iphan.get("ok"):
         return {"ok": False, "label": label, "source": SOURCE_LABEL, "service": WFS_URL,
                 "detail": "consulta pendente", "iphan": iphan}
-    hits = list(iphan.get("inside") or []) + list(iphan.get("border") or [])
+    hits = list(iphan.get("inside") or [])
     area = sum(float(r.get("area_dentro_ha") or 0.0) for r in hits)
     occurrences = [
         {
@@ -352,6 +373,7 @@ def constraint_service_result(iphan: dict[str, Any], label: str = "Sítio Arqueo
         "layer_id": f"{LAYER_POINTS}+{LAYER_POLYGONS}",
         "feature_count_bbox": iphan.get("features_in_envelope"),
         "occurrence_count": len(hits),
+        "border_count": len(iphan.get("border") or []),
         "area_unique_ha": round(area, 6),
         "occurrences": occurrences[:20],
         "iphan": iphan,
@@ -404,6 +426,8 @@ def iphan_payload(iphan: dict[str, Any] | None) -> dict[str, Any]:
             "inside": {"state": STATE_PENDING, "count": None, "rows": []},
             "near": {"state": STATE_PENDING, "count": None, "rows": [], "radius_km": RADIUS_KM},
             "headline": "Patrimônio arqueológico: consulta pendente.",
+            "layer_text": "Consulta pendente.",
+            "attention": None,
             "near_text": None,
             "notes": [],
             "level": "neutral",
@@ -432,7 +456,7 @@ def iphan_payload(iphan: dict[str, Any] | None) -> dict[str, Any]:
         n = len(border)
         sentences.append(
             f"{n} {_plural(n, 'sítio arqueológico cadastrado', 'sítios arqueológicos cadastrados')} no IPHAN "
-            f"{_plural(n, 'está', 'estão')} junto à divisa do imóvel: {names}. A posição cadastrada tem precisão de cerca de 11 m; "
+            f"{_plural(n, 'está', 'estão')} junto à divisa do imóvel: {names}. O IPHAN publica a coordenada arredondada (cerca de 11 m); "
             "antes de obra ou movimento de terra perto da divisa, é preciso consultar o IPHAN."
         )
     if not hits:
@@ -460,6 +484,8 @@ def iphan_payload(iphan: dict[str, Any] | None) -> dict[str, Any]:
         "near": {"state": STATE_FOUND if near else STATE_NOT_FOUND, "count": len(near), "rows": near_rows,
                  "headers": ["Sítio", "Tipo", "Distância da divisa"], "radius_km": radius},
         "headline": " ".join(sentences),
+        "layer_text": count_txt,
+        "attention": " ".join(sentences) if hits else None,
         "near_text": near_text,
         "notes": notes,
         "level": level,
@@ -476,6 +502,30 @@ def iphan_payload(iphan: dict[str, Any] | None) -> dict[str, Any]:
             "level": level,
         },
     }
+
+
+DILIGENCE = (
+    "Consultar o IPHAN antes de obra ou movimento de terra no imóvel: há sítio arqueológico cadastrado "
+    "dentro dele ou junto à divisa."
+)
+
+
+def patch_report_payload(payload: dict[str, Any], iphan: dict[str, Any] | None, label: str = "Sítio arqueológico — IPHAN") -> dict[str, Any]:
+    """Escreve a linha do IPHAN no payload do relatório (``live_report_adapter_v11``).
+
+    Substitui o texto antigo, que chamava ponto e sítio junto à divisa de
+    "interseção exata" e imprimia hectare para sítio que é só ponto.
+    """
+    p = iphan_payload(iphan)
+    env = payload.setdefault("environment", {})
+    env.setdefault("layer_rows", []).append([label, p["layer_text"], "IPHAN (SICG)"])
+    env["iphan_f2"] = p
+    payload.setdefault("sources", []).append(dict(p["source_row"]))
+    payload.setdefault("compliance", []).append(dict(p["compliance_row"]))
+    if p.get("attention"):
+        payload.setdefault("attention_points", []).append(p["attention"])
+        payload.setdefault("conclusion", {}).setdefault("diligence", []).append(DILIGENCE)
+    return payload
 
 
 print("RX_IPHAN_SICG=official_points_polygons_radius10km", flush=True)
