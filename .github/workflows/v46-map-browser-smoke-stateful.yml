@@ -8,7 +8,9 @@ on:
 jobs:
   browser-smoke:
     runs-on: ubuntu-latest
-    # +7 min for the two W1a steps (measured locally on a loaded machine: smoke 103-160 s, controls 134-262 s).
+    # Measured locally on the W1A integration (loaded machine): V46 smoke 283 s, W1a boot smoke 27 s + cold server 14 s,
+    # parcels smoke 88 s (103-160 s on the front), mutation controls 86 s (134-262 s), link smoke 96 s. ~10 min of smokes
+    # plus install; 25 min keeps about 2x margin.
     timeout-minutes: 25
     env:
       RX_RELEASE: V8_OPERATIONAL_ZERO_COST

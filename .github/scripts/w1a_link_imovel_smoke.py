@@ -13,8 +13,9 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import time
 from pathlib import Path
-from urllib.parse import quote, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 from urllib.request import urlopen
 
 from playwright.async_api import async_playwright
@@ -97,12 +98,19 @@ async def route_panel(route):
 
 
 async def route_viewport(route):
-    features = [{"type": "Feature", "id": code, "geometry": square(lat, lon), "properties": {
+    # W1a imóveis rápidos asks per grid cell (cell=, west/south/east/north); answer each cell only with
+    # the fixtures inside it, shaped like the server (fetched_at now, so the card data is current).
+    q = parse_qs(urlparse(route.request.url).query)
+    box = [float(q[k][0]) for k in ("west", "south", "east", "north")] if all(k in q for k in ("west", "south", "east", "north")) else None
+    d = 0.004
+    features = [{"type": "Feature", "id": code, "geometry": square(lat, lon, d), "properties": {
         "cod_imovel": code, "municipio": "Curvelo", "uf": "MG", "area": area, "status_imovel": "AT",
         "condicao": "Aguardando análise", "tipo_imovel": "IRU", "m_fiscal": 0.37}}
-        for code, (lat, lon, area) in FIXTURES.items() if code != SLOW]
-    await route.fulfill(status=200, content_type="application/json",
-                        body=json.dumps({"type": "FeatureCollection", "uf": "MG", "features": features, "truncated": False, "cached": False}))
+        for code, (lat, lon, area) in FIXTURES.items()
+        if code != SLOW and (box is None or (lon + d >= box[0] and lat + d >= box[1] and lon - d <= box[2] and lat - d <= box[3]))]
+    body = {"type": "FeatureCollection", "uf": "MG", "ufs": ["MG"], "features": features, "truncated": False,
+            "partial_failures": 0, "cached": False, "fetched_at": round(time.time(), 3)}
+    await route.fulfill(status=200, content_type="application/json", body=json.dumps(body))
 
 
 async def wait_runtime(page):
@@ -252,12 +260,14 @@ async def run_viewport(browser, width, height):
     # 7. A real click (mouse) or tap (touch) on another polygon rewrites ?car= without history entries.
     lat, lon, _ = FIXTURES[OTHER]
     await page.evaluate("a=>map.setView([a[0],a[1]],15,{animate:false})", [lat, lon])
-    await page.wait_for_function(f"(()=>{{let ok=false;map.eachLayer(l=>{{if(l._path&&l.feature?.properties?.cod_imovel==={json.dumps(OTHER)})ok=true}});return ok}})()", timeout=15000)
+    # Parcels may be SVG paths or drawn on the W1a canvas renderer; accept either.
+    await page.wait_for_function(f"(()=>{{let ok=false;map.eachLayer(l=>{{if((l._path||l._containsPoint)&&l.feature?.properties?.cod_imovel==={json.dumps(OTHER)})ok=true}});return ok}})()", timeout=15000)
     await page.wait_for_timeout(400)
-    point = await page.evaluate("""a=>{const [code,lat,lon]=a;let path=null;map.eachLayer(l=>{if(l._path&&l.feature?.properties?.cod_imovel===code)path=l._path});if(!path)return null;
+    point = await page.evaluate("""a=>{const [code,lat,lon]=a;let lay=null;map.eachLayer(l=>{if((l._path||l._containsPoint)&&l.feature?.properties?.cod_imovel===code)lay=l});if(!lay)return null;
       const mr=map.getContainer().getBoundingClientRect();for(const dy of [0,-.002,.002,-.003,.003])for(const dx of [0,-.002,.002,-.003,.003]){
         const p=map.latLngToContainerPoint([lat+dy,lon+dx]),x=mr.left+p.x,y=mr.top+p.y;if(x<0||y<0||x>innerWidth||y>innerHeight)continue;
-        if(document.elementFromPoint(x,y)===path)return {x,y}}return null}""", [OTHER, lat, lon])
+        const el=document.elementFromPoint(x,y);if(lay._path){if(el===lay._path)return {x,y};continue}
+        if(el&&el.tagName==='CANVAS'&&el.closest('#map')&&lay._containsPoint(map.containerPointToLayerPoint(p)))return {x,y}}return null}""", [OTHER, lat, lon])
     assert point, (label, "no uncovered point on the other polygon")
     if touch:
         await page.touchscreen.tap(point["x"], point["y"])
@@ -283,6 +293,9 @@ async def run_viewport(browser, width, height):
     await page.wait_for_function("map.getZoom()===12&&Math.abs(map.getCenter().lat+19.2)<1e-3&&Math.abs(map.getCenter().lng+45)<1e-3", timeout=5000)
 
     # 10. Invalid codes never fetch, never open, never inject; a discreet notice explains.
+    # Baseline from the clean page just loaded: the server's own hashed CSS/JS carry a retry onerror
+    # since W1a arranque, so "injected" means more handler nodes than a page without ?car= has.
+    handler_nodes = await page.evaluate("document.querySelectorAll('img[onerror],svg[onload],[onload],[onerror]').length")
     calls_before = len(car_calls)
     cases = INVALID if not touch else INVALID[:2]
     for i, raw in enumerate(cases + (f"{VALID}&car={OTHER}",)):
@@ -293,7 +306,7 @@ async def run_viewport(browser, width, height):
         await page.wait_for_timeout(400)
         state = await page.evaluate("""()=>({card:document.querySelectorAll('.rx46-card').length,pwned:window.__w1aPwned===1,
           injected:document.querySelectorAll('img[onerror],svg[onload],[onload],[onerror]').length,car:new URL(location.href).searchParams.getAll('car')})""")
-        assert state == {"card": 0, "pwned": False, "injected": 0, "car": []}, (label, raw, state)
+        assert state == {"card": 0, "pwned": False, "injected": handler_nodes, "car": []}, (label, raw, state, "baseline handler nodes", handler_nodes)
         if i == 0:
             await page.screenshot(path=str(OUT / f"w1a_{label}_invalid.png"))
             await assert_target(page, "#rxShareStateW1a .rx-share-state-x", f"{label}:notice-close")
