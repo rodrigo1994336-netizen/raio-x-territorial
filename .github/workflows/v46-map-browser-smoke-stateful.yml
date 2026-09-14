@@ -55,6 +55,8 @@ jobs:
           fi
       - name: Selection card panel and 10-movement visual gate
         run: python .github/scripts/v46_browser_smoke.py
+      - name: W1a boot smoke (one navigation, CSS/JS failure recovery, failed boot page at 375/768/1440, cold server)
+        run: python .github/scripts/w1a_boot_browser_smoke.py --spawn 8311
       - name: Enforce browser smoke execution
         if: always()
         run: |

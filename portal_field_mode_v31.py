@@ -8,7 +8,10 @@ app = portal_v8.app
 
 SW_JS = r'''
 const RX_VERSION='rx-field-v43';
-const SHELL_CACHE=RX_VERSION+'-shell';
+// W1a: new shell cache name. Service workers from before W1a stored any 200 for '/' under
+// 'rx-field-v43-shell', including the temporary boot page served during a deploy; activate
+// deletes every rx-field-* cache outside the set below, so that stale shell is dropped.
+const SHELL_CACHE=RX_VERSION+'-shell-w1a';
 const DATA_CACHE=RX_VERSION+'-data';
 const TILE_CACHE=RX_VERSION+'-tiles';
 const ASSET_CACHE=RX_VERSION+'-assets';

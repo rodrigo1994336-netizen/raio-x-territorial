@@ -31,7 +31,8 @@ Anchors are untouched: ``PORTAL_HTML`` keeps being the canonical inline string
 every module and gate patches or inspects; the split happens on the way out and
 is verified by rebuilding the canonical string from the pieces. If the rebuild
 differs, the canonical inline HTML is served (never a broken page); the same page
-is the last resort when the JS file cannot be loaded (``/?rx-inline=1``).
+is the last resort when the CSS or JS file cannot be loaded (``/?rx-inline=1``). A ``<style>``
+with a relative ``url()`` stays inline (in a file it would resolve under ``/static/rx/``).
 """
 from __future__ import annotations
 
@@ -87,18 +88,26 @@ BOOT_PAGE = r'''<!doctype html>
 #rxBootGuard .mark{width:52px;height:52px;border-radius:16px;background:#63e6a5;color:#052116;font-weight:950;display:grid;place-items:center;margin:0 auto 16px;font-size:18px}
 #rxBootGuard h2{font-size:18px;margin:0 0 8px}#rxBootGuard p{color:#9bb1a6;font-size:13px;line-height:1.55;margin:0 0 18px}
 #rxBootGuard .bar{height:6px;border-radius:999px;background:#173026;overflow:hidden}#rxBootGuard .bar i{display:block;height:100%;width:38%;background:#63e6a5;border-radius:999px;animation:rxboot 1s ease-in-out infinite alternate}@keyframes rxboot{to{transform:translateX(165%)}}
-#rxBootGuard button{display:none;margin:16px auto 0;min-height:44px;border:0;border-radius:11px;background:#63e6a5;color:#052116;padding:10px 16px;font-weight:900;font-size:14px}
+#rxBootGuard button{display:none;margin:16px auto 0;min-height:44px;min-width:44px;border:0;border-radius:11px;background:#63e6a5;color:#052116;padding:10px 16px;font:inherit;font-weight:900;font-size:14px;cursor:pointer}
+body[data-rx-boot=failed] #rxBootGuard button,body[data-rx-boot=slow] #rxBootGuard button{display:block}
+body[data-rx-boot=failed] #rxBootGuard .bar{display:none}
 </style></head><body data-rx-boot="__STATE__">
-<div id="rxBootGuard"><div class="box"><div class="mark">RX</div><h2>Inicializando o Raio-X Territorial</h2><p id="rxBootText">__TEXT__</p><div class="bar"><i></i></div><button id="rxBootRetry" type="button" onclick="location.reload()">Tentar novamente</button></div></div>
+<div id="rxBootGuard"><div class="box"><div class="mark">RX</div><h2 id="rxBootTitle">__TITLE__</h2><p id="rxBootText" aria-live="polite">__TEXT__</p><div class="bar"><i></i></div><button id="rxBootRetry" type="button" onclick="location.reload()">Tentar de novo</button></div></div>
 <script>
 (function(){
-  var tries=0,K='rx-w1a-boot-reloads';
-  function text(t){var el=document.getElementById('rxBootText');if(el)el.textContent=t}
-  function retry(){var b=document.getElementById('rxBootRetry');if(b)b.style.display='block'}
+  // Mirrors the server: pending (loading, reloads by itself when ready), failed (nothing is retried
+  // on the server, so no promise; the button reloads), slow (pending for too long).
+  var S=__COPY__,K='rx-w1a-boot-reloads',tries=0,shown=document.body.getAttribute('data-rx-boot')||'pending';
+  function render(kind){
+    if(kind===shown||!S[kind])return;shown=kind;
+    document.body.setAttribute('data-rx-boot',kind);
+    var h=document.getElementById('rxBootTitle'),p=document.getElementById('rxBootText');
+    if(h)h.textContent=S[kind].title;if(p)p.textContent=S[kind].text;
+  }
   function recent(){try{var now=Date.now(),a=JSON.parse(sessionStorage.getItem(K)||'[]').filter(function(t){return now-t<120000});return a}catch(e){return []}}
   function reloadWhenReady(){
     var a=recent();
-    if(a.length>=5){text('A inicialização está demorando mais que o normal. Você pode tentar novamente.');retry();return false}
+    if(a.length>=5){render('slow');return false}
     try{a.push(Date.now());sessionStorage.setItem(K,JSON.stringify(a))}catch(e){}
     location.reload();return true;
   }
@@ -108,26 +117,33 @@ BOOT_PAGE = r'''<!doctype html>
       var r=await fetch('/v1/bootstrap/state',{cache:'no-store'});
       if(r.ok){
         var d=await r.json();
-        if(d.ready){if(reloadWhenReady())return;return}
-        if(d.error)text('O portal abriu, mas um módulo ainda não carregou. Tentaremos novamente automaticamente.');
+        if(d.ready){if(reloadWhenReady())return}
+        else if(d.error){render('failed')}
+        else if(shown==='failed'){render('pending');tries=0}
       }
     }catch(e){}
-    if(tries>45){text('A inicialização está demorando mais que o normal. Você pode tentar novamente.');retry()}
-    setTimeout(tick,tries<10?500:1000);
+    if(shown==='pending'&&tries>45)render('slow');
+    setTimeout(tick,shown==='failed'?10000:(tries<10?500:1000));
   }
   tick();
 })();
 </script>
 </body></html>'''
 
-_BOOT_TEXT = {
-    "pending": "Carregando mapa, consultas e módulos essenciais. Isso leva apenas alguns segundos após uma atualização.",
-    "failed": "O portal abriu, mas um módulo ainda não carregou. Tentaremos novamente automaticamente.",
+# What the boot page says. "failed" is final for this process (sitecustomize does not retry the
+# deferred load), so it promises nothing and names no internals; the button reloads the tab.
+BOOT_COPY = {
+    "pending": {"title": "Inicializando o Raio-X Territorial", "text": "Carregando o mapa e as consultas. A página abre sozinha assim que estiver pronta."},
+    "slow": {"title": "Inicializando o Raio-X Territorial", "text": "A abertura está demorando mais que o normal. Você pode tentar de novo."},
+    "failed": {"title": "Raio-X Territorial", "text": "Não foi possível abrir o Raio-X agora. Tente de novo em alguns minutos."},
 }
 
 
 def boot_page(state: str) -> bytes:
-    return BOOT_PAGE.replace("__STATE__", state).replace("__TEXT__", _BOOT_TEXT.get(state, _BOOT_TEXT["pending"])).encode("utf-8")
+    kind = state if state in BOOT_COPY else "pending"
+    copy = json.dumps(BOOT_COPY, ensure_ascii=False).replace("</", "<\\/")
+    return (BOOT_PAGE.replace("__STATE__", kind).replace("__TITLE__", BOOT_COPY[kind]["title"])
+            .replace("__TEXT__", BOOT_COPY[kind]["text"]).replace("__COPY__", copy).encode("utf-8"))
 
 
 # ------------------------------------------------------------ vendored Leaflet
@@ -174,13 +190,25 @@ _ID_ONLY = re.compile(r' id="[A-Za-z][A-Za-z0-9_-]*"')
 _STYLESHEET_LINK = re.compile(r"<link\b[^>]*rel=[\"']?stylesheet", re.I)
 
 
+_CSS_URL = re.compile(r"""url\(\s*['"]?\s*([^'")\s]*)""", re.I)
+_CSS_ABSOLUTE = re.compile(r"(?:data:|/|https?:|#)", re.I)
+
+
+def css_relative_refs(css: str) -> list[str]:
+    """References that resolve against the stylesheet URL: inline they meant '/', in /static/rx/ they would not."""
+    refs = [m.group(1) or "url()" for m in _CSS_URL.finditer(css) if not _CSS_ABSOLUTE.match(m.group(1))]
+    if re.search(r"image-set\(", css, re.I):
+        refs.append("image-set(")  # strings inside it are URLs too; not parsed, kept inline
+    return refs
+
+
 def _extractable(kind: str, attrs: str, body: str) -> bool:
     if attrs and not _ID_ONLY.fullmatch(attrs):
         return False  # src/type/media/...: left exactly as written (the id alone stays on the placeholder)
     if kind == "script" and "<!--" in body:
         return False  # HTML "script data escaped" state: keep inline, parsing is not trivial
-    if kind == "style" and re.search(r"@import|@charset", body, re.I):
-        return False
+    if kind == "style" and (re.search(r"@import|@charset", body, re.I) or css_relative_refs(body)):
+        return False  # relative url()/image-set would point into /static/rx/ once moved to a file
     return True
 
 
@@ -231,7 +259,7 @@ def _js_bundle(scripts: list[str]) -> bytes:
 def rebuild(served: str, assets: dict[str, bytes]) -> str:
     """Inverse of assemble(): the canonical HTML back from the served HTML + assets."""
     html = served
-    m = re.search(r'<link rel="stylesheet" href="(/static/rx/[0-9a-f]+\.css)"><link rel="preload" as="script" href="/static/rx/[0-9a-f]+\.js">', html)
+    m = re.search(r'<link rel="stylesheet" href="(/static/rx/[0-9a-f]+\.css)" onerror="[^"]*"><link rel="preload" as="script" href="/static/rx/[0-9a-f]+\.js">', html)
     styles: list[str] = []
     if m:
         styles = _css_parts(assets[m.group(1)].decode("utf-8"))
@@ -251,8 +279,15 @@ def rebuild(served: str, assets: dict[str, bytes]) -> str:
 
 _CSS_SEP = "\n/*rx-w1a-part*/\n"
 _READY_SCRIPT = f"<script>addEventListener('DOMContentLoaded',function(){{window.{READY_FLAG}=true}})</script>"
-# Bundle did not load (stale offline shell, instance swap during a deploy): reload once, then the inline page.
-_ASSET_RETRY = "try{if(!sessionStorage.getItem('rx-w1a-asset-retry')){sessionStorage.setItem('rx-w1a-asset-retry','1');location.reload()}else{location.replace('/?rx-inline=1')}}catch(e){location.replace('/?rx-inline=1')}"
+# CSS or JS file did not load (network drop, stale offline shell, instance swap during a deploy):
+# reload once, then the inline page. One attempt per page even when both files fail; a tab that
+# already reloaded in the last 60 s goes straight to the inline page (no reload loop). The inline
+# URL keeps the page's own query and hash (a shared /?car= link still opens its property).
+_ASSET_RETRY = ("if(window.__rxW1aRetry)return;window.__rxW1aRetry=1;"
+                "var q=new URLSearchParams(location.search);q.set('rx-inline','1');var u='/?'+q+location.hash;"
+                "try{var k='rx-w1a-asset-retry',t=+sessionStorage.getItem(k)||0;"
+                "if(Date.now()-t<60000){location.replace(u)}else{sessionStorage.setItem(k,Date.now());location.reload()}}"
+                "catch(e){location.replace(u)}")
 
 
 def _css_parts(css: str) -> list[str]:
@@ -281,7 +316,7 @@ def assemble(html: str) -> dict:
         preload = f'<link rel="preload" as="script" href="{js_path}">' if js_path else ""
         if not preload:
             raise ValueError("styles_without_scripts_unsupported")
-        parts[pieces["first_css_at"]] = f'<link rel="stylesheet" href="{css_path}">{preload}'
+        parts[pieces["first_css_at"]] = f'<link rel="stylesheet" href="{css_path}" onerror="{_ASSET_RETRY}">{preload}'
     out = "".join(parts)
     if js_path:
         first = re.search(r"<script(?: id=\"[^\"]*\")?>rxW1aRun\(0\)</script>", out).start()
