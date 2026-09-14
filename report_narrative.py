@@ -49,14 +49,18 @@ def build_narrative(payload: dict[str,Any]) -> dict[str,Any]:
     pd=env.get('prodes') or {}; lens=pd.get('lens') or {}; hist=lens.get('historical') or {}; post=lens.get('post_2019_07_31') or {}; credit=lens.get('credit_screening') or {}
     prodes_n=_n(hist.get('occurrence_count',pd.get('count'))); prodes_area=_f(hist.get('area_unique_ha',pd.get('area_ha'))); prodes_pct=hist.get('pct_car')
     post_n=_n(post.get('occurrence_count')); post_area=_f(post.get('area_unique_ha')); post_pct=post.get('pct_car')
+    # F2: leitura única do PRODES (prodes_reading_f2). Quando presente, os textos já vêm prontos.
+    rd=(pd.get('reading') or {}).get('narrative') if isinstance(pd.get('reading'),dict) else None
     emb=_n(enf.get('embargo_count')); anm=_n(mining.get('process_count')); rare=str(mining.get('rare_earth_signal') or '').upper()=='SIM'
     area=_s(prop.get('area_ha')); city=f"{_s(prop.get('municipality'))}/{_s(prop.get('uf'))}"
 
     if emb:
         one=f"O imóvel de {area} ha em {city} merece atenção imediata porque encontramos embargo ambiental intersectando a área analisada."
-    elif post_n:
+    elif rd is not None and rd.get('one_sentence'):
+        one=f"O imóvel de {area} ha em {city} {rd['one_sentence']}"
+    elif rd is None and post_n:
         one=f"O imóvel de {area} ha em {city} tem {prodes_n} ocorrência(s) PRODES no histórico e {post_n} ocorrência(s) no recorte pós-31/07/2019 usado na triagem de crédito; isso exige diligência, mas não prova irregularidade por si só."
-    elif prodes_n:
+    elif rd is None and prodes_n:
         one=f"O imóvel de {area} ha em {city} tem {prodes_n} ocorrência(s) PRODES históricas, sem detecção pós-31/07/2019 entre as ocorrências retornadas nesta consulta."
     elif anm or rare:
         one=f"O imóvel de {area} ha em {city} não mostrou embargo na leitura atual, mas há interesse mineral que merece ser entendido antes de qualquer decisão patrimonial."
@@ -64,7 +68,9 @@ def build_narrative(payload: dict[str,Any]) -> dict[str,Any]:
         one=f"O imóvel de {area} ha em {city} não apresentou alerta crítico nas principais fontes que responderam, mas a conclusão continua condicionada às bases efetivamente consultadas."
 
     found=['CAR localizado e geometria real usada como base para os cruzamentos.']
-    if prodes_n:
+    if rd is not None:
+        found.extend(rd.get('found') or [])
+    elif prodes_n:
         years=', '.join(str(x) for x in hist.get('years') or []) or 'anos não informados'
         found.append(f"PRODES histórico: {prodes_n} ocorrência(s), {prodes_area:.6f} ha de interseção única ({_pct(prodes_pct)} do CAR); anos identificados: {years}.")
         found.append(f"Recorte pós-31/07/2019: {post_n} ocorrência(s), {post_area:.6f} ha de interseção única ({_pct(post_pct)} do CAR), calculada pela união das interseções exatas com o CAR.")
@@ -77,9 +83,11 @@ def build_narrative(payload: dict[str,Any]) -> dict[str,Any]:
     if water.get('pivot_count') not in (None,'NÃO CONSULTADO'): found.append(f"Irrigação: {_s(water.get('pivot_count'))} pivô(s) central(is) intersectante(s) na base disponível.")
 
     why=[]
-    if prodes_n:
+    if rd is not None:
+        why.extend(rd.get('why') or [])
+    elif prodes_n:
         why.append('O histórico PRODES ajuda a reconstruir quando houve desmatamento mapeado. Ocorrência cartográfica não equivale automaticamente a infração; data, autorização e enquadramento ambiental continuam necessários.')
-    if post_n:
+    if rd is None and post_n:
         why.append('Para crédito rural, o MCR exige atenção especial à supressão de vegetação nativa posterior a 31/07/2019. Por isso o Raio-X mostra esse recorte separado do histórico antigo, em vez de misturar tudo em um único número.')
     if emb: why.append('Embargo é diferente de simples alerta cartográfico: exige conferência imediata do ato, da área atingida, da vigência e dos efeitos sobre compra, crédito, uso e garantia.')
     if anm: why.append('Processo minerário pode afetar negociação, percepção de valor e uso futuro da terra. Ele não significa que exista uma jazida economicamente aproveitável.')
@@ -91,7 +99,9 @@ def build_narrative(payload: dict[str,Any]) -> dict[str,Any]:
         if x and x not in attention: attention.append(str(x))
     if not _consulted(sources,'registro de imóveis'):
         attention.append('Matrícula e cadeia dominial continuam sendo uma etapa separada: CAR e SIGEF não comprovam quem é o proprietário registral atual.')
-    if post_n:
+    if rd is not None:
+        attention.extend(x for x in (rd.get('attention') or []) if x not in attention)
+    elif post_n:
         attention.append(f"Há {post_n} ocorrência(s) PRODES no recorte pós-31/07/2019. A análise de crédito deve conferir documentação ambiental e a regra vigente; o Raio-X não transforma isso em impedimento automático.")
     missing=_missing_or_partial(sources)
     if missing:
@@ -100,7 +110,8 @@ def build_narrative(payload: dict[str,Any]) -> dict[str,Any]:
     next_steps=[]
     if not _consulted(sources,'registro de imóveis'): next_steps.append('Obter matrícula atualizada e verificar titularidade, ônus e cadeia dominial.')
     if not _consulted(sources,'snci'): next_steps.append('Completar a consulta SNCI/INCRA quando o conector público/autenticado estiver disponível.')
-    if post_n: next_steps.append('Conferir cada ocorrência PRODES pós-31/07/2019 por data, autorização e documento ambiental aplicável à operação de crédito.')
+    if rd is not None: next_steps.extend(rd.get('next_steps') or [])
+    elif post_n: next_steps.append('Conferir cada ocorrência PRODES pós-31/07/2019 por data, autorização e documento ambiental aplicável à operação de crédito.')
     elif prodes_n: next_steps.append('Interpretar as ocorrências PRODES históricas por data e contexto ambiental, sem tratá-las automaticamente como infração atual.')
     if _n(water.get('grant_count'))>0: next_steps.append('Conferir processo, portaria, vigência, finalidade, autoridade emissora e condições das outorgas que intersectam o imóvel.')
     if not _consulted(sources,'patrimônio') and not _consulted(sources,'iphan'): next_steps.append('Completar patrimônio arqueológico/IPHAN e registrar distância dos sítios mais próximos.')
@@ -120,7 +131,8 @@ def build_narrative(payload: dict[str,Any]) -> dict[str,Any]:
 
     money=[]
     if emb: money.append('Embargo pode afetar crédito, prazo de fechamento e necessidade de assessoria técnica/jurídica.')
-    if post_n: money.append('Detecção PRODES pós-31/07/2019 pode exigir documentação adicional na análise de crédito rural e deve ser verificada antes de fechar a operação.')
+    if rd is not None: money.extend(rd.get('money') or [])
+    elif post_n: money.append('Detecção PRODES pós-31/07/2019 pode exigir documentação adicional na análise de crédito rural e deve ser verificada antes de fechar a operação.')
     elif prodes_n: money.append('Ocorrências PRODES históricas podem gerar custo de diligência ou regularização dependendo do enquadramento real.')
     if anm: money.append('Direitos minerários podem alterar percepção de valor, uso e estratégia de negociação.')
     if not money: money.append('Nenhum custo extraordinário pode ser inferido apenas pela ausência de alertas; documentos e fontes pendentes ainda podem mudar a leitura.')
