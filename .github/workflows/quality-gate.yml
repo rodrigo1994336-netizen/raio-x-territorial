@@ -52,6 +52,10 @@ jobs:
         env:
           RX_RELEASE: OFF
         run: PYTHONPATH=. python scripts/f2_prodes_leitura_gate.py
+      - name: W1a property link, share menu and offline shell gate (rules and positive controls)
+        env:
+          RX_RELEASE: V8_OPERATIONAL_ZERO_COST
+        run: PYTHONPATH=. python scripts/w1a_link_imovel_gate.py
       - name: Import standalone engines
         env:
           RX_RELEASE: OFF

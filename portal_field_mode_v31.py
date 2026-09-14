@@ -24,6 +24,7 @@ self.addEventListener('activate',event=>{
   event.waitUntil((async()=>{
     const keep=new Set([SHELL_CACHE,DATA_CACHE,TILE_CACHE,ASSET_CACHE]);
     for(const key of await caches.keys())if(key.startsWith('rx-field-')&&!keep.has(key))await caches.delete(key);
+    try{const shell=await caches.open(SHELL_CACHE);for(const r of await shell.keys())if(new URL(r.url).search)await shell.delete(r)}catch(e){}
     await self.clients.claim();
   })());
 });
@@ -33,18 +34,18 @@ async function trimCache(cacheName,maxEntries){
   for(let i=0;i<Math.max(0,keys.length-maxEntries);i++)await cache.delete(keys[i]);
 }
 
-async function networkFirst(req,cacheName,timeoutMs,maxEntries=180){
+async function networkFirst(req,cacheName,timeoutMs,maxEntries=180,key=req){
   const cache=await caches.open(cacheName);
   let timer;
   try{
     const timed=new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('timeout')),timeoutMs)});
     const res=await Promise.race([fetch(req),timed]);
     clearTimeout(timer);
-    if(res&&(res.ok||res.type==='opaque')){await cache.put(req,res.clone()).catch(()=>{});await trimCache(cacheName,maxEntries).catch(()=>{})}
+    if(res&&(res.ok||res.type==='opaque')){await cache.put(key,res.clone()).catch(()=>{});await trimCache(cacheName,maxEntries).catch(()=>{})}
     return res;
   }catch(e){
     clearTimeout(timer);
-    const hit=await cache.match(req);
+    const hit=await cache.match(key);
     if(hit)return hit;
     throw e;
   }
@@ -74,7 +75,7 @@ self.addEventListener('fetch',event=>{
   const u=new URL(req.url);
 
   if(u.origin===location.origin&&u.pathname==='/'){
-    event.respondWith(networkFirst(req,SHELL_CACHE,2400,4));
+    event.respondWith(networkFirst(req,SHELL_CACHE,2400,4,'/'));
     return;
   }
 
