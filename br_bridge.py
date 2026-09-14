@@ -15,8 +15,10 @@ Roteamento (decidido pelo código, 14/09/2026):
     limite duro), a MESMA chamada vai pela ponte com o tempo que resta. Motivo: o SICAR costuma
     responder ao Render, e os mapas e camadas dele pesam megabytes (mais latência e saída de rede
     paga em São Paulo, e a ponte tem uma instância só). Depois de uma queda direta resgatada pela
-    ponte, as chamadas ao SICAR vão direto para a ponte por DIRECT_SKIP_WINDOW_S; se a ponte falhar
-    nessa janela, a janela fecha e a próxima tenta direto.
+    ponte, as chamadas ao SICAR vão direto para a ponte por DIRECT_SKIP_WINDOW_S; a janela só fecha
+    quando a falha é da PRÓPRIA ponte (não chegou nela, ou ela recusou o token). Ponte ocupada
+    (429/503) ou erro da fonte repassado (500/502/504...) mantêm a janela: voltar a tentar direto
+    só gastaria de novo o tempo de conexão.
   * O limite duro (timeout_seconds) de cada chamada nunca aumenta: a ponte recebe só o que sobra,
     e o --max-time do curl é reduzido para caber nele. Cancelamento continua o mesmo (o executor
     gerenciado mata o curl).
@@ -24,6 +26,11 @@ Roteamento (decidido pelo código, 14/09/2026):
 Segredo: o token vai para o curl pela entrada padrão (-H @-), nunca na linha de comando (visível
 para outros processos) nem em log. Pela ponte o curl sempre verifica o certificado (-k removido) e
 usa --fail: erro da ponte ou da fonte vira falha (consulta pendente), nunca "não encontrado".
+
+Endereço da ponte: nunca sai no resultado. O curl escreve o host no erro (códigos 6, 7, 35) e o
+TimeoutExpired carrega a linha de comando; os transportes põem esse texto em "detail", que chega ao
+navegador. Por isso o resultado devolvido traz os argumentos originais (endereço oficial) e o erro
+com o endereço da ponte trocado pelo oficial.
 """
 from __future__ import annotations
 
@@ -104,11 +111,17 @@ def status_line(env: Mapping[str, str] | None = None) -> str:
     return "RX_PONTE_BRASIL=off"
 
 
+def url_has_forbidden_chars(url: str) -> bool:
+    """Controle, espaço, barra invertida ou não-ASCII: o endereço vai numa linha de cabeçalho da entrada
+    padrão do curl (X-Ponte-Url), e CR/LF ali seria cabeçalho injetado."""
+    return (not url.isascii()) or "\\" in url or any(ord(ch) <= 0x20 or ord(ch) == 0x7F for ch in url)
+
+
 def routed_host(url: str) -> str | None:
     """Host da lista quando o endereço é https canônico para ele; senão None (vai direto)."""
     if not isinstance(url, str) or not url.startswith("https://"):
         return None
-    if any(ord(ch) <= 0x20 or ord(ch) == 0x7F for ch in url) or "\\" in url:
+    if url_has_forbidden_chars(url):
         return None
     netloc = urlsplit(url).netloc
     if "@" in netloc:
@@ -213,11 +226,50 @@ def should_fallback(proc: subprocess.CompletedProcess) -> bool:
     return proc.returncode == 22 and _http_status(proc) in FALLBACK_HTTP_STATUS
 
 
+def bridge_itself_failed(proc: subprocess.CompletedProcess) -> bool:
+    """A falha foi da PRÓPRIA ponte: o curl não chegou nela (DNS, conexão, TLS, tempo, conexão caída) ou
+    ela recusou o token (401). Ponte ocupada (429/503) e erro da fonte repassado (500/502/504) não contam."""
+    if proc.returncode in FALLBACK_CURL_EXITS:
+        return True
+    return proc.returncode == 22 and _http_status(proc) == 401
+
+
 def _note_bridge_failure(host: str, proc: subprocess.CompletedProcess) -> None:
     status = _http_status(proc) if proc.returncode == 22 else None
     if status in (401, 403, 503):
-        # 401 token errado · 403 host fora da lista · 503 ponte sem token ou ocupada (nunca o token no log)
-        _log_once(f"bridge:{status}", f"RX_PONTE_BRASIL=erro_ponte http={status} host={host}")
+        # O curl do Render não vê de onde veio o código: 401/403/503 podem ser da ponte (token errado, host
+        # fora da lista, ponte sem token ou ocupada) ou da fonte repassada. O guia manda conferir pelo
+        # Cloud Shell antes de trocar o token. Nunca o token no log.
+        _log_once(f"bridge:{status}", f"RX_PONTE_BRASIL=erro_ponte http={status} origem=ponte_ou_fonte host={host}")
+
+
+def _scrubber(cfg: Config, target: str) -> Callable[[Any], Any]:
+    """Troca o endereço e o host da ponte pelo endereço e host oficiais (texto ou bytes)."""
+    official_host = urlsplit(target).hostname or "fonte"
+    host_re = re.compile(re.escape(cfg.bridge_host), re.I)
+    base = cfg.fetch_url[: -len(FETCH_PATH)]
+
+    def scrub(value: Any) -> Any:
+        if isinstance(value, bytes):
+            return scrub(value.decode("utf-8", "surrogateescape")).encode("utf-8", "surrogateescape")
+        if not isinstance(value, str):
+            return value
+        return host_re.sub(official_host, value.replace(cfg.fetch_url, target).replace(base, target))
+
+    return scrub
+
+
+def _run_bridge(runner: Callable[..., subprocess.CompletedProcess], args: Sequence[str], cfg: Config, *,
+                timeout_seconds: float | None, cancel_event, budget_s: float | None = None
+                ) -> subprocess.CompletedProcess:
+    bridge_args, stdin = bridge_request(args, cfg, budget_s=budget_s)
+    scrub = _scrubber(cfg, args[_url_index(args)])
+    try:
+        proc = runner(bridge_args, timeout_seconds=timeout_seconds, cancel_event=cancel_event, input_bytes=stdin)
+    except subprocess.TimeoutExpired as exc:
+        # str(exc) traz a linha de comando (endereço da ponte): relança com a chamada original.
+        raise subprocess.TimeoutExpired(list(args), exc.timeout, output=exc.output, stderr=scrub(exc.stderr)) from None
+    return subprocess.CompletedProcess(list(args), proc.returncode, proc.stdout, scrub(proc.stderr))
 
 
 def direct_skipped(host: str) -> bool:
@@ -274,8 +326,7 @@ def run_curl(args: Sequence[str], *, timeout_seconds: float | None, cancel_event
         return runner(args, timeout_seconds=timeout_seconds, cancel_event=cancel_event)
 
     if host in INCRA_HOSTS:
-        bridge_args, stdin = bridge_request(args, cfg)
-        proc = runner(bridge_args, timeout_seconds=timeout_seconds, cancel_event=cancel_event, input_bytes=stdin)
+        proc = _run_bridge(runner, args, cfg, timeout_seconds=timeout_seconds, cancel_event=cancel_event)
         if proc.returncode:
             _note_bridge_failure(host, proc)
         return proc
@@ -294,14 +345,13 @@ def run_curl(args: Sequence[str], *, timeout_seconds: float | None, cancel_event
             return proc
         status = _http_status(proc) if proc.returncode == 22 else None
         reason = f"http_{status}" if status else f"curl_{proc.returncode}"
-    bridge_args, stdin = bridge_request(args, cfg, budget_s=budget)
-    bridged = runner(bridge_args, timeout_seconds=budget, cancel_event=cancel_event, input_bytes=stdin)
+    bridged = _run_bridge(runner, args, cfg, timeout_seconds=budget, cancel_event=cancel_event, budget_s=budget)
     if bridged.returncode == 0:
         if reason is not None:
             _open_skip_window(host, reason)
     else:
         _note_bridge_failure(host, bridged)
-        if reason is None:
+        if reason is None and bridge_itself_failed(bridged):
             _close_skip_window(host)
     return bridged
 

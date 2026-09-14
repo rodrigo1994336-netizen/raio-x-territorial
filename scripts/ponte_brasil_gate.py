@@ -19,6 +19,7 @@ Uso: PYTHONPATH=. python scripts/ponte_brasil_gate.py
 """
 from __future__ import annotations
 
+import ast
 import contextlib
 import http.client
 import importlib.util
@@ -32,6 +33,7 @@ import subprocess
 import sys
 import threading
 import time
+import types
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest import mock
@@ -116,6 +118,10 @@ class FakeUpstream(BaseHTTPRequestHandler):
                 self._reply(302, b"", [("Location", "https://geoserver.car.gov.br/redir-loop")])
             elif path == "/redir-incra":
                 self._reply(302, b"", [("Location", "https://acervofundiario.incra.gov.br/ok")])
+            elif path == "/redir-post":
+                self._reply(302, b"", [("Location", "/echo")])
+            elif path == "/redir-307":
+                self._reply(307, b"", [("Location", "/echo")])
             elif path.startswith("/size/"):
                 self._reply(200, b"x" * int(path.rsplit("/", 1)[1]), [("Content-Type", "text/plain")])
             elif path.startswith("/nolen/"):
@@ -274,16 +280,22 @@ def s_not_configured():
         with PonteEnv(token=token) as e:
             refused(e.call(token=token or TOKEN), 503, "not_configured")
             refused(e.call(token=TOKEN), 503, "not_configured")
-            refused(e.call(path="/healthz", token=None, url=None), 503, "not_configured")
+            refused(e.call(path=ponte.HEALTH_PATH, token=None, url=None), 503, "not_configured")
             assert e.connects == []
 
 
 def s_health_and_paths():
+    health = ponte.HEALTH_PATH
+    # Cloud Run reserva caminhos terminados em "z" (/healthz) e os que começam com /_ah/: nunca chegam ao contêiner.
+    assert not health.rstrip("/").endswith("z") and not health.startswith("/_ah/"), health
     with PonteEnv() as e:
-        st, _, body = e.call(path="/healthz", token=None, url=None)
+        st, _, body = e.call(path=health, token=None, url=None)
         assert st == 200 and body == b"ok\n", (st, body)
-        refused(e.call(method="POST", path="/healthz", token=None, url=None, body=b""), 405, "method_not_allowed")
+        refused(e.call(method="POST", path=health, token=None, url=None, body=b""), 405, "method_not_allowed")
         refused(e.call(path="/qualquer", token=TOKEN), 404, "not_found")
+        refused(e.call(path="/healthz", token=TOKEN), 404, "not_found")
+    doc = (ROOT / "docs" / "PONTE_BRASIL_ATIVACAO.md").read_text(encoding="utf-8")
+    assert f'"$URL{health}"' in doc and "healthz" not in doc, "guia fora do caminho de saúde da ponte"
 
 
 def s_scheme():
@@ -337,13 +349,20 @@ def s_canonical():
 
 def s_private_dns():
     for ips in (["10.0.0.5"], ["127.0.0.1"], ["169.254.169.254"], ["::1"], ["::ffff:10.0.0.1"], ["fd00::1"],
-                ["100.64.0.1"], ["0.0.0.0"], ["fe80::1%eth0"], [PUBLIC_IP, "192.168.0.10"]):
+                ["100.64.0.1"], ["0.0.0.0"], ["fe80::1%eth0"], [PUBLIC_IP, "192.168.0.10"],
+                # IPv4 interno embutido em IPv6: mapeado, NAT64, 6to4, Teredo (cliente 192.0.2.45)
+                ["::ffff:127.0.0.1"], ["64:ff9b::a9fe:a9fe"], ["2002:a9fe:a9fe::1"],
+                ["2001:0:4136:e378:8000:63bf:3fff:fdd2"]):
         with PonteEnv(resolver=lambda host, timeout, ips=ips: list(ips)) as e:
             refused(e.call(), 403, "resolved_private_ip")
             assert e.connects == [], ("conectou apesar do IP privado", ips)
     with PonteEnv() as e:
         st, _, _ = e.call()
         assert st == 200 and e.connects == [("geoserver.car.gov.br", PUBLIC_IP)], ("conexão não presa ao IP conferido", e.connects)
+    mapped_public = "::ffff:" + PUBLIC_IP  # IPv4 público mapeado é o próprio IPv4: aceito e preso a ele
+    with PonteEnv(resolver=lambda host, timeout: [mapped_public]) as e:
+        st, _, _ = e.call()
+        assert st == 200 and e.connects == [("geoserver.car.gov.br", mapped_public)], (st, e.connects)
 
 
 def s_redirects():
@@ -421,7 +440,143 @@ def s_timeout():
         t0 = time.monotonic()
         refused(e.call(url="https://geoserver.car.gov.br/slow", headers={"X-Ponte-Timeout": "1"}), 504, "upstream_timeout")
         assert time.monotonic() - t0 < 2.5
+    with PonteEnv(upstream_timeout_s=1.0) as e:  # o cliente pede MAIS que o teto: vale o teto
+        t0 = time.monotonic()
+        refused(e.call(url="https://geoserver.car.gov.br/slow", headers={"X-Ponte-Timeout": "60"}), 504, "upstream_timeout")
+        took = time.monotonic() - t0
+        assert took < 2.5, ("X-Ponte-Timeout passou do teto", took)
     assert ponte.Service().upstream_timeout_s == ponte.UPSTREAM_TIMEOUT_S == 25.0
+
+
+def s_inflight_release():
+    """20 buscas no MESMO Service (com e sem erro): a vaga de busca simultânea sempre volta."""
+    with PonteEnv() as e:
+        paths = ["/ok", "/status500", "/redir-out", "/truncated"]
+        for i in range(ponte.MAX_INFLIGHT + 4):
+            path = paths[i % len(paths)]
+            st, hdrs, _ = e.call(url="https://geoserver.car.gov.br" + path)
+            assert hdrs.get("x-ponte-error") != "busy", ("vaga de busca não liberada", i, path, st)
+        got = [e.svc.inflight.acquire(blocking=False) for _ in range(ponte.MAX_INFLIGHT + 1)]
+        for ok in got:
+            if ok:
+                e.svc.inflight.release()
+        assert got.count(True) == ponte.MAX_INFLIGHT, ("vagas livres depois das buscas", got.count(True))
+        assert e.svc.budget.used == 0, e.svc.budget.used
+
+
+def s_malformed():
+    """Entrada malformada com token válido é 400 da ponte, nunca 500 internal."""
+    with PonteEnv() as e:
+        refused(e.call(url="https://[::1/ok"), 400, "target_malformed")
+        refused(e.call(method="POST", url="https://geoserver.car.gov.br/echo", headers={"Content-Length": "²"}),
+                400, "bad_content_length")
+        assert e.connects == []
+        assert '"status": 500' not in e.log.getvalue(), e.log.getvalue()
+
+
+def s_content_type():
+    """Content-Type do cliente só chega à fonte se for válido; senão vai application/octet-stream."""
+    with PonteEnv() as e:
+        for bad in ("text/xml;evil=<x>", "text/xml\x01", "a b/c"):
+            st, _, body = e.call(method="POST", url="https://geoserver.car.gov.br/echo", body=b"<a/>",
+                                 headers={"Content-Type": bad})
+            seen = json.loads(body)["headers"]
+            assert st == 200 and seen.get("content-type") == "application/octet-stream", (bad, st, seen.get("content-type"))
+        st, _, body = e.call(method="POST", url="https://geoserver.car.gov.br/echo", body=b"<a/>",
+                             headers={"Content-Type": "text/xml; charset=UTF-8"})
+        assert json.loads(body)["headers"].get("content-type") == "text/xml; charset=UTF-8", body
+
+
+def s_redirect_post():
+    """POST que recebe 302 segue como GET sem corpo (como o curl -L); 307 mantém POST e corpo."""
+    with PonteEnv() as e:
+        st, _, body = e.call(method="POST", url="https://geoserver.car.gov.br/redir-post", body=b"<Filter/>",
+                             headers={"Content-Type": "text/xml"})
+        seen = json.loads(body)
+        assert st == 200 and seen["method"] == "GET" and seen["body_len"] == 0, (st, seen)
+        assert "content-type" not in seen["headers"] and "content-length" not in seen["headers"], seen["headers"]
+        st, _, body = e.call(method="POST", url="https://geoserver.car.gov.br/redir-307", body=b"<Filter/>",
+                             headers={"Content-Type": "text/xml"})
+        seen = json.loads(body)
+        assert st == 200 and seen["method"] == "POST" and seen["body_len"] == 9, (st, seen)
+
+
+def _socket_closed_within(sock, seconds, drip=None):
+    """True se o servidor fechar a conexão antes de `seconds` (mandando `drip` a cada 0,3 s)."""
+    t0 = time.monotonic()
+    sock.settimeout(0.3)
+    while time.monotonic() - t0 < seconds:
+        try:
+            if drip:
+                sock.sendall(drip)
+            if sock.recv(1) == b"":
+                return True
+        except socket.timeout:
+            continue
+        except OSError:
+            return True
+    return False
+
+
+def s_slow_client():
+    """Cliente que pinga um cabeçalho por vez perde a conexão no prazo total, não fica pendurado."""
+    with PonteEnv(header_deadline_s=1.0) as e:
+        sock = socket.create_connection(("127.0.0.1", e.port), 5)
+        try:
+            sock.sendall(b"GET /v1/fetch HTTP/1.1\r\nHost: ponte\r\n")
+            t0 = time.monotonic()
+            closed = _socket_closed_within(sock, 4.0, drip=b"X-A: a\r\n")
+            took = time.monotonic() - t0
+        finally:
+            sock.close()
+        assert closed and took < 2.5, ("conexão lenta continuou viva", closed, round(took, 2))
+        st, _, _ = e.call()  # pedido normal continua funcionando
+        assert st == 200, st
+    assert ponte.Service().header_deadline_s == ponte.HEADER_DEADLINE_S == 10.0
+
+
+def _wait(predicate, seconds=3.0):
+    t0 = time.monotonic()
+    while time.monotonic() - t0 < seconds:
+        if predicate():
+            return True
+        time.sleep(0.02)
+    return predicate()
+
+
+def s_connection_cap():
+    """Acima do teto de conexões abertas a nova conexão fecha na hora; ao liberar, volta a atender."""
+    request = b"GET " + ponte.HEALTH_PATH.encode() + b" HTTP/1.1\r\nHost: ponte\r\n\r\n"
+
+    def keepalive():  # conexão atendida (resposta lida) e mantida aberta: ocupa uma vaga
+        sock = socket.create_connection(("127.0.0.1", e.port), 5)
+        sock.sendall(request)
+        data = b""
+        while not data.endswith(b"ok\n"):
+            chunk = sock.recv(4096)
+            assert chunk, ("conexão dentro do teto não foi atendida", data)
+            data += chunk
+        return sock
+
+    with PonteEnv(max_connections=2) as e:
+        held = [keepalive() for _ in range(2)]
+        try:
+            extra = socket.create_connection(("127.0.0.1", e.port), 5)
+            try:
+                try:
+                    extra.sendall(request)
+                except OSError:
+                    pass
+                assert _socket_closed_within(extra, 2.0), "conexão acima do teto foi atendida"
+            finally:
+                extra.close()
+        finally:
+            for sock in held:
+                sock.close()
+        assert _wait(lambda: e.server._slots._value == 2), "vagas de conexão não voltaram"
+        st, _, _ = e.call(path=ponte.HEALTH_PATH, token=None, url=None)
+        assert st == 200, st
+    assert ponte.Service().max_connections == ponte.MAX_CONNECTIONS == 96
 
 
 def s_headers():
@@ -472,10 +627,19 @@ def s_upstream_status():
 
 
 def s_tls_and_source():
-    ctx = ponte.tls_context()
     import ssl
-    assert ctx.verify_mode == ssl.CERT_REQUIRED and ctx.check_hostname is True
-    assert ctx.minimum_version >= ssl.TLSVersion.TLSv1_2
+    for host in sorted(ponte.ALLOWED_HOSTS):
+        ctx = ponte.tls_context_for(host)
+        assert ctx.verify_mode == ssl.CERT_REQUIRED and ctx.check_hostname is True, host
+        assert ctx.minimum_version >= ssl.TLSVersion.TLSv1_2, host
+    # Concessão medida em 14/09/2026: o SICAR só negocia AES256-GCM-SHA384 (troca de chave RSA). Se a cifra
+    # sumir do contexto, a ponte deixa de alcançar o SICAR em silêncio.
+    sicar = {c["name"] for c in ponte.tls_context_for("geoserver.car.gov.br").get_ciphers()}
+    assert "AES256-GCM-SHA384" in sicar, "contexto do SICAR sem AES256-GCM-SHA384: a ponte não alcança o SICAR"
+    incra = ponte.tls_context_for("acervofundiario.incra.gov.br").get_ciphers()
+    rsa_kex = sorted(c["name"] for c in incra if c.get("kea") == "kx-rsa")
+    assert not rsa_kex, ("INCRA com troca de chave RSA: a concessão é só do SICAR", rsa_kex[:5])
+    assert {c["name"] for c in incra} == {c["name"] for c in ssl.create_default_context().get_ciphers()}
     assert ponte.Service().connector is ponte.tls_connector and ponte.Service().resolver is ponte.system_resolver
     src = (ROOT / "ponte_brasil" / "app.py").read_text(encoding="utf-8")
     assert "server_hostname=self.host" in src and "create_connection((self.pinned_ip" in src
@@ -702,17 +866,109 @@ def c_sicar_budget_and_codes():
         with mock.patch.object(subprocess, "run", rec):
             sds2._curl(SICAR2_URL, False)
         assert len(rec.calls) == 1, rec.calls
-        # ponte falha dentro da janela: a janela fecha
-        br_bridge.reset_state()
-        rec = Recorder((7, 1.0, b"", b""), (0, 1.0, b"<xml/>", b""), (22, 1.0, b"", b"curl: (22) The requested URL returned error: 502"),
-                       (0, 0.5, b"<xml/>", b""), clock=clock)
-        with mock.patch.object(subprocess, "run", rec):
-            sds2._curl(SICAR2_URL, False)
-            assert br_bridge.direct_skipped("geoserver.car.gov.br")
-            sds2._curl(SICAR2_URL, False)
-            assert not br_bridge.direct_skipped("geoserver.car.gov.br"), "janela não fechou com a ponte em falha"
-            sds2._curl(SICAR2_URL, False)
-        assert len(rec.calls) == 4 and "input" not in rec.calls[3][1], rec.calls[3]
+
+
+def c_sicar_window_rule():
+    """Dentro da janela, só falha da PRÓPRIA ponte fecha a janela; ponte ocupada ou erro da fonte, não."""
+    _, _, _, _, sds2 = _import_transports()
+    host = "geoserver.car.gov.br"
+    cases = (
+        ("fonte 502 repassada", 22, b"curl: (22) The requested URL returned error: 502", True),
+        ("fonte 504 pela ponte", 22, b"curl: (22) The requested URL returned error: 504", True),
+        ("ponte ocupada 503", 22, b"curl: (22) The requested URL returned error: 503", True),
+        ("limite de taxa 429", 22, b"curl: (22) The requested URL returned error: 429", True),
+        ("ponte fora: conexão", 7, b"curl: (7) Failed to connect", False),
+        ("ponte fora: DNS", 6, b"curl: (6) Could not resolve host", False),
+        ("ponte fora: tempo", 28, b"curl: (28) Operation timed out", False),
+        ("token recusado 401", 22, b"curl: (22) The requested URL returned error: 401", False),
+    )
+    clock = FakeClock()
+    with ponte_env(ENV_ON), mock.patch.object(br_bridge, "_now", clock):
+        for name, rc, err, stays in cases:
+            br_bridge.reset_state()
+            rec = Recorder((7, 1.0, b"", b""), (0, 1.0, b"<xml/>", b""), (rc, 1.0, b"", err), (0, 0.5, b"<xml/>", b""),
+                           clock=clock)
+            with mock.patch.object(subprocess, "run", rec):
+                sds2._curl(SICAR2_URL, False)  # direto cai, ponte resgata: janela abre
+                assert br_bridge.direct_skipped(host), (name, "janela não abriu")
+                sds2._curl(SICAR2_URL, False)  # na janela, pela ponte, falha
+                assert br_bridge.direct_skipped(host) is stays, (name, "janela devia ficar " + ("aberta" if stays else "fechada"))
+                sds2._curl(SICAR2_URL, False)
+            assert len(rec.calls) == 4 and "input" in rec.calls[2][1], (name, rec.calls)
+            assert ("input" in rec.calls[3][1]) is stays, (name, "próxima chamada", rec.calls[3])
+
+
+def c_no_bridge_url_leak():
+    """Erro de transporte e TimeoutExpired pela ponte nunca levam o endereço da ponte ao resultado."""
+    leak_err = (b"curl: (7) Failed to connect to ponte-gate.a.run.app port 443 after 3 ms: Couldn't connect to server; "
+                b"curl: (6) Could not resolve host: PONTE-GATE.a.run.app (" + BRIDGE_FETCH.encode() + b")")
+    for mode in ("stderr", "timeout"):
+        for name, call, (target, attr), _args, _kwargs in legacy_cases():
+            bridge_seen: list[list[str]] = []
+
+            def runner(args, **kwargs):
+                args = list(args)
+                if "input" in kwargs or "input_bytes" in kwargs:
+                    bridge_seen.append(args)
+                    if mode == "timeout":
+                        raise subprocess.TimeoutExpired(args, kwargs.get("timeout", kwargs.get("timeout_seconds")),
+                                                        stderr=leak_err)
+                    return subprocess.CompletedProcess(args, 7, b"", leak_err)
+                return subprocess.CompletedProcess(args, 7, b"", b"curl: (7) Failed to connect to geoserver.car.gov.br port 443")
+
+            with ponte_env(ENV_ON), mock.patch.object(target, attr, runner):
+                try:
+                    out = call()
+                    text = json.dumps(out, default=str, ensure_ascii=False)
+                except Exception as exc:  # sicar_detail_sources._curl não captura TimeoutExpired: o texto dela conta
+                    text = f"{type(exc).__name__}:{exc}:{getattr(exc, 'cmd', '')}:{getattr(exc, 'stderr', '')}"
+            assert bridge_seen and BRIDGE_FETCH in bridge_seen[0], (name, mode, "a chamada não passou pela ponte")
+            assert "ponte-gate" not in text.lower(), (name, mode, "endereço da ponte no resultado", text[:300])
+
+
+def c_probe_sources():
+    """Com a ponte ligada o probe mede o INCRA pela ponte (nunca httpx direto); desligada, igual a antes."""
+    import asyncio
+
+    deploy_app = _import_transports()[0]
+    incra_root = deploy_app.TARGETS["incra_root"]
+
+    class FakeResponse:
+        status_code = 200
+        content = b"ok"
+
+    class FakeClient:
+        seen: list[str] = []
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def get(self, url, **kwargs):
+            FakeClient.seen.append(str(url))
+            return FakeResponse()
+
+    for env, bridged in ((ENV_ON, True), ({}, False)):
+        FakeClient.seen = []
+        rec = Recorder()
+        with ponte_env(env), mock.patch.object(deploy_app.httpx, "AsyncClient", FakeClient), \
+                mock.patch.object(deploy_app, "run_managed_process", rec):
+            out = asyncio.run(deploy_app.probe_sources())
+        hosts = {urlsplit(u).hostname for u in FakeClient.seen}
+        assert set(deploy_app.TARGETS) <= set(out), sorted(out)
+        bridge_calls = [c for c in rec.calls if "input_bytes" in c[1]]
+        if bridged:
+            assert "acervofundiario.incra.gov.br" not in hosts, ("INCRA por httpx direto com a ponte ligada", FakeClient.seen)
+            assert out["incra_root"].get("via") == "ponte" and out["incra_root"]["ok"] is True, out["incra_root"]
+            assert len(bridge_calls) == 1 and f"X-Ponte-Url: {incra_root}".encode() in bridge_calls[0][1]["input_bytes"], rec.calls
+        else:
+            assert "acervofundiario.incra.gov.br" in hosts and "via" not in out["incra_root"], (FakeClient.seen, out["incra_root"])
+            assert not bridge_calls, rec.calls
 
 
 def c_cancel_and_timeout():
@@ -761,6 +1017,11 @@ def c_config():
     for url in ("http://acervofundiario.incra.gov.br/x", "https://acervofundiario.incra.gov.br:8443/x",
                 "https://u@acervofundiario.incra.gov.br/x", "https://ACERVOFUNDIARIO.incra.gov.br/x"):
         assert br_bridge.route_for(url, ENV_ON) == "direct", url
+    # o endereço vai numa linha de cabeçalho (X-Ponte-Url) da entrada padrão do curl: CR/LF, controle,
+    # barra invertida ou não-ASCII nunca vão pela ponte
+    for url in (INCRA_URL + "\r\nX-Ponte-Url: https://geoserver.car.gov.br/", INCRA_URL + "\x00", INCRA_URL + "\x7f",
+                INCRA_URL + "&nome=São", "https://acervofundiario.incra.gov.br\\@evil.example.com/"):
+        assert br_bridge.route_for(url, ENV_ON) == "direct", repr(url)
 
 
 def c_real_curl():
@@ -795,13 +1056,104 @@ HOST_RE = re.compile(r"https?://([a-z0-9.-]+\.(?:incra|car)\.gov\.br)", re.I)
 BROWSER_ONLY = {"consulta.car.gov.br": "portal_map_v46.py"}
 TRANSPORTS = ("deploy_app.py", "incra_acervo_f2.py", "incra_snci_public_v42.py", "sicar_detail_sources.py",
               "sicar_detail_sources_v2.py")
-# httpx direto ao SICAR, mas a rota foi substituída no arranque por módulo que usa deploy_app._curl
+# função com httpx direto ao SICAR, mas a rota foi substituída no arranque por módulo que usa deploy_app._curl
 SUPERSEDED = {
-    "portal_api.py": ("portal_sicar_resilient.py", "'/v1/live/sicar/viewport','/v1/live/resolve'"),
-    "portal_v8.py": ("portal_sicar_resilient.py", "'/v1/live/sicar/viewport','/v1/live/resolve'"),
-    "portal_advanced_search_v39.py": ("portal_cafir_inverse_v44.py", "!='/v1/live/search/advanced'"),
+    "portal_api.py:_sicar_at_point": ("portal_sicar_resilient.py", "'/v1/live/sicar/viewport','/v1/live/resolve'"),
+    "portal_v8.py:live_sicar_viewport": ("portal_sicar_resilient.py", "'/v1/live/sicar/viewport','/v1/live/resolve'"),
+    "portal_advanced_search_v39.py:advanced_property_search": ("portal_cafir_inverse_v44.py", "!='/v1/live/search/advanced'"),
 }
-SKIP_DIRS = {"tests", "scripts", ".github", "benchmark", "ponte_brasil", "static", "data", ".git"}
+# função que chama direto E conhece a ponte: cada uma com a verificação que prova o desvio
+BRIDGE_AWARE = {"deploy_app.py:probe_sources": "c_probe_sources"}
+DIRECT_HTTP_MODULES = {"httpx", "requests", "urllib3", "aiohttp"}
+OFFICIAL_HOSTS = ("acervofundiario.incra.gov.br", "geoserver.car.gov.br")
+
+
+def _host_literal(node) -> bool:
+    return any(isinstance(n, ast.Constant) and isinstance(n.value, str) and any(h in n.value for h in OFFICIAL_HOSTS)
+               for n in ast.walk(node))
+
+
+def direct_http_functions(sources: dict[str, str]) -> set[str]:
+    """'arquivo.py:função' de toda função que faz HTTP/curl direto (httpx, requests, urllib, subprocess, run_managed_process)
+    E referencia um host do INCRA/SICAR (literal ou constante com o host, inclusive importada ou reexportada)."""
+    trees = {name[:-3]: ast.parse(text) for name, text in sources.items()}
+    imports: dict[str, dict[str, object]] = {}
+    consts: dict[str, set[str]] = {}
+    for mod, tree in trees.items():
+        imp: dict[str, object] = {}
+        for n in ast.walk(tree):
+            if isinstance(n, ast.Import):
+                for a in n.names:
+                    imp[a.asname or a.name.split(".")[0]] = a.name if a.asname else a.name.split(".")[0]
+            elif isinstance(n, ast.ImportFrom) and n.module:
+                for a in n.names:
+                    imp[a.asname or a.name] = (n.module, a.name)
+        imports[mod] = imp
+        for n in tree.body:
+            if isinstance(n, (ast.Assign, ast.AnnAssign)) and n.value is not None and _host_literal(n.value):
+                for t in (n.targets if isinstance(n, ast.Assign) else [n.target]):
+                    if isinstance(t, ast.Name):
+                        consts.setdefault(mod, set()).add(t.id)
+    changed = True
+    while changed:  # reexportação: from deploy_app import *, from deploy_app import SICAR
+        changed = False
+        for mod, imp in imports.items():
+            for alias, origin in imp.items():
+                if isinstance(origin, tuple) and origin[0] in consts:
+                    add = set(consts[origin[0]]) if origin[1] == "*" else ({alias} if origin[1] in consts[origin[0]] else set())
+                    if add - consts.get(mod, set()):
+                        consts.setdefault(mod, set()).update(add)
+                        changed = True
+        for mod, tree in trees.items():
+            for n in ast.walk(tree):
+                if isinstance(n, ast.ImportFrom) and n.module in consts and any(a.name == "*" for a in n.names):
+                    if consts[n.module] - consts.get(mod, set()):
+                        consts.setdefault(mod, set()).update(consts[n.module])
+                        changed = True
+
+    flagged: set[str] = set()
+    for mod, tree in trees.items():
+        imp, local = imports[mod], consts.get(mod, set())
+
+        def refs_host(fn) -> bool:
+            if _host_literal(fn):
+                return True
+            for n in ast.walk(fn):
+                if isinstance(n, ast.Name) and n.id in local:
+                    return True
+                if isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name):
+                    origin = imp.get(n.value.id)
+                    if isinstance(origin, str) and n.attr in consts.get(origin, set()):
+                        return True
+            return False
+
+        def calls_direct(fn) -> bool:
+            for n in ast.walk(fn):
+                if not isinstance(n, ast.Call):
+                    continue
+                f = n.func
+                if isinstance(f, ast.Name):
+                    origin = imp.get(f.id)
+                    if f.id == "run_managed_process" or (isinstance(origin, tuple) and (
+                            origin[0].split(".")[0] in DIRECT_HTTP_MODULES or origin[0] == "urllib.request")):
+                        return True
+                elif isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name):
+                    origin = imp.get(f.value.id)
+                    if origin in DIRECT_HTTP_MODULES:
+                        return True
+                    if origin == "subprocess" and f.attr in ("run", "Popen", "call", "check_call", "check_output"):
+                        return True
+                    if origin == "asyncio" and f.attr.startswith("create_subprocess"):
+                        return True
+                elif isinstance(f, ast.Attribute) and isinstance(f.value, ast.Attribute) and isinstance(f.value.value, ast.Name):
+                    if imp.get(f.value.value.id) == "urllib" and f.value.attr == "request":
+                        return True
+            return False
+
+        for n in ast.walk(tree):
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and calls_direct(n) and refs_host(n):
+                flagged.add(f"{mod}.py:{n.name}")
+    return flagged
 
 
 def c_hosts_and_transports():
@@ -823,15 +1175,20 @@ def c_hosts_and_transports():
         text = (ROOT / name).read_text(encoding="utf-8")
         assert "br_bridge.run_curl(" in text, (name, "transporte sem br_bridge")
         assert "subprocess.run(" not in text and "run_managed_process(" not in text, (name, "curl fora do br_bridge")
-    consumers = set()
-    for path in ROOT.glob("*.py"):
-        text = path.read_text(encoding="utf-8", errors="ignore")
-        uses_host = any(h in text for h in ponte.ALLOWED_HOSTS) or re.search(r"\bbase\.SICAR\b|from deploy_app import[^\n]*\bSICAR\b", text)
-        direct_http = re.search(r"subprocess\.run\(|run_managed_process\(|httpx\.|urlopen\(|requests\.(get|post)\(", text)
-        if uses_host and direct_http:
-            consumers.add(path.name)
-    unknown = consumers - set(TRANSPORTS) - set(SUPERSEDED) - {"br_bridge.py"}
-    assert not unknown, ("transporte novo para INCRA/SICAR sem br_bridge", sorted(unknown))
+    assert set(OFFICIAL_HOSTS) == set(ponte.ALLOWED_HOSTS)
+    # Varredura por FUNÇÃO, em todos os arquivos (sem isentar os transportes): chamada direta + host oficial.
+    sources = {p.name: p.read_text(encoding="utf-8", errors="ignore") for p in ROOT.glob("*.py")}
+    flagged = direct_http_functions(sources)
+    expected = set(SUPERSEDED) | set(BRIDGE_AWARE)
+    assert flagged <= expected, ("chamada direta ao INCRA/SICAR fora do br_bridge", sorted(flagged - expected))
+    assert expected <= flagged, ("lista da varredura desatualizada", sorted(expected - flagged))
+    # controle positivo da própria varredura: httpx novo dentro de um transporte e requests num arquivo novo
+    probe = dict(sources)
+    probe["deploy_app.py"] += "\n\nasync def _gate_novo_httpx():\n    async with httpx.AsyncClient() as c:\n        return await c.get(SICAR)\n"
+    probe["gate_novo_modulo.py"] = ("import requests\nimport portal_api as base\n\n"
+                                    "def buscar():\n    return requests.get(base.SICAR, timeout=5)\n")
+    caught = direct_http_functions(probe) - flagged
+    assert caught == {"deploy_app.py:_gate_novo_httpx", "gate_novo_modulo.py:buscar"}, ("varredura cega", sorted(caught))
     for name, (replacer, marker) in SUPERSEDED.items():
         assert marker in (ROOT / replacer).read_text(encoding="utf-8"), (name, "rota antiga voltou a valer", replacer)
     wf = (ROOT / ".github" / "workflows" / "quality-gate.yml").read_text(encoding="utf-8")
@@ -863,6 +1220,59 @@ def _bridge_request_no_fail(args, cfg, *, budget_s=None):
 
 
 _ORIG_BRIDGE_REQUEST = br_bridge.bridge_request
+
+
+class MutationTargetMissing(RuntimeError):
+    """O trecho a mutar não existe (ou não é único): erro da mutação, nunca "mutante morto"."""
+
+
+def _mutated_source(path: Path, old: str, new: str) -> str:
+    src = path.read_text(encoding="utf-8")
+    if src.count(old) != 1:
+        raise MutationTargetMissing(f"{path.name}: trecho aparece {src.count(old)}x: {old.strip()[:70]!r}")
+    return src.replace(old, new)
+
+
+@contextlib.contextmanager
+def ponte_source_mutant(old: str, new: str):
+    """Troca uma linha do app.py da ponte (mutação de código, como numa revisão) e roda a verificação contra ela."""
+    global ponte
+    path = ROOT / "ponte_brasil" / "app.py"
+    name = "ponte_brasil_app_mutante"
+    module = types.ModuleType(name)
+    module.__file__ = str(path)
+    sys.modules[name] = module
+    original = ponte
+    try:
+        exec(compile(_mutated_source(path, old, new), str(path), "exec"), module.__dict__)
+        ponte = module
+        yield
+    finally:
+        ponte = original
+        sys.modules.pop(name, None)
+
+
+@contextlib.contextmanager
+def bridge_source_mutant(old: str, new: str):
+    """Mesma ideia no br_bridge, no próprio módulo (os transportes o chamam por br_bridge.run_curl)."""
+    saved = dict(br_bridge.__dict__)
+    try:
+        code = compile(_mutated_source(ROOT / "br_bridge.py", old, new), str(ROOT / "br_bridge.py"), "exec")
+        with contextlib.redirect_stdout(io.StringIO()):
+            exec(code, br_bridge.__dict__)
+        yield
+    finally:
+        br_bridge.__dict__.clear()
+        br_bridge.__dict__.update(saved)
+
+
+def _ponte_mut(old, new):
+    return lambda: ponte_source_mutant(old, new)
+
+
+def _bridge_mut(old, new):
+    return lambda: bridge_source_mutant(old, new)
+
 
 MUTATIONS = [
     ("token_ok sempre verdadeiro", lambda: mock.patch.object(ponte, "token_ok", lambda *a: True), s_token),
@@ -903,6 +1313,36 @@ MUTATIONS = [
      c_sicar_direct_then_bridge),
     ("ponte sem prazo mínimo", lambda: mock.patch.object(br_bridge, "MIN_BRIDGE_BUDGET_S", 0.0), c_sicar_budget_and_codes),
     ("404 vira queda", lambda: mock.patch.object(br_bridge, "FALLBACK_HTTP_STATUS", frozenset({403, 404})), c_sicar_budget_and_codes),
+    # mutações de código (revisão de 14/09/2026: estas sobreviviam ao gate anterior)
+    ("busca não libera a vaga", _ponte_mut("                svc.inflight.release()\n", "                pass\n"), s_inflight_release),
+    ("SICAR sem a lista de cifras RSA", _ponte_mut("        ctx.set_ciphers(RSA_KEX_CIPHERS)\n", "        pass\n"), s_tls_and_source),
+    ("INCRA com a concessão do SICAR", _ponte_mut("return _TLS_RSA_KEX if host in RSA_KEX_TLS_HOSTS else _TLS_DEFAULT",
+                                                   "return _TLS_RSA_KEX"), s_tls_and_source),
+    ("X-Ponte-Timeout sem teto", _ponte_mut("return max(1.0, min(limit, asked))", "return max(1.0, asked)"), s_timeout),
+    ("Content-Type do cliente sem limpeza", _ponte_mut('clean_content_type(get("Content-Type"))', 'get("Content-Type")'),
+     s_content_type),
+    ("POST mantido após 302", _ponte_mut('if resp.status in (301, 302, 303) and method != "GET":',
+                                         'if resp.status == 303 and method != "GET":'), s_redirect_post),
+    ("urlsplit malformado vira 500", _ponte_mut('    except ValueError:\n        raise Refused(400, "target_malformed") from None',
+                                                '    except KeyError:\n        raise Refused(400, "target_malformed") from None'),
+     s_malformed),
+    ("Content-Length não ASCII vira 500", _ponte_mut("if not (raw.isascii() and raw.isdigit()):", "if not raw.isdigit():"),
+     s_malformed),
+    ("sem prazo total para ler o pedido", _ponte_mut("        self._intake_timer.start()\n", "        pass\n"), s_slow_client),
+    ("sem teto de conexões", _ponte_mut("threading.BoundedSemaphore(service.max_connections)", "threading.BoundedSemaphore(10 ** 6)"),
+     s_connection_cap),
+    ("erro da ponte devolvido com o endereço dela",
+     _bridge_mut("    return subprocess.CompletedProcess(list(args), proc.returncode, proc.stdout, scrub(proc.stderr))\n",
+                 "    return proc\n"), c_no_bridge_url_leak),
+    ("TimeoutExpired com a linha de comando da ponte",
+     _bridge_mut("        raise subprocess.TimeoutExpired(list(args), exc.timeout, output=exc.output, stderr=scrub(exc.stderr)) from None\n",
+                 "        raise\n"), c_no_bridge_url_leak),
+    ("janela fecha com qualquer falha pela ponte", lambda: mock.patch.object(br_bridge, "bridge_itself_failed", lambda proc: True),
+     c_sicar_window_rule),
+    ("janela nunca fecha", lambda: mock.patch.object(br_bridge, "bridge_itself_failed", lambda proc: False), c_sicar_window_rule),
+    ("URL com CR/LF pela ponte", lambda: mock.patch.object(br_bridge, "url_has_forbidden_chars", lambda url: False), c_config),
+    ("probe mede o INCRA por httpx com a ponte ligada",
+     lambda: mock.patch.object(br_bridge, "route_for", lambda url, env=None: br_bridge.ROUTE_DIRECT), c_probe_sources),
 ]
 
 _ORIG_SERVICE_INIT = ponte.Service.__init__
@@ -959,7 +1399,9 @@ def main() -> int:
         s_token, s_not_configured, s_health_and_paths, s_scheme, s_host_list, s_ip_literal, s_userinfo, s_port,
         s_canonical, s_private_dns, s_redirects, s_response_size, s_incomplete, s_methods, s_request_body, s_timeout, s_headers,
         s_rate_limit, s_log_hygiene, s_upstream_status, s_tls_and_source,
-        c_off_identical, c_incra_bridge, c_sicar_direct_then_bridge, c_sicar_budget_and_codes, c_cancel_and_timeout,
+        s_inflight_release, s_malformed, s_content_type, s_redirect_post, s_slow_client, s_connection_cap,
+        c_off_identical, c_incra_bridge, c_sicar_direct_then_bridge, c_sicar_budget_and_codes, c_sicar_window_rule,
+        c_cancel_and_timeout, c_no_bridge_url_leak, c_probe_sources,
         c_config, c_real_curl, c_hosts_and_transports,
     ]
     for fn in checks:

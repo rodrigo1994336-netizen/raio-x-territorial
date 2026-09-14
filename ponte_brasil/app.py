@@ -11,10 +11,18 @@ Travas (cada uma tem teste e controle positivo em scripts/ponte_brasil_gate.py):
   * DNS resolvido pela ponte e conexão presa ao IP conferido (sem DNS rebinding): IP privado,
     loopback, link-local (169.254.169.254, metadados) ou reservado é recusado;
   * até 3 redirecionamentos, cada um conferido pelas mesmas travas;
-  * só GET e POST; corpo de requisição até 1 MiB; resposta até 25 MiB; 25 s no total;
-  * repassa à fonte só Accept, Content-Type e User-Agent; devolve só Content-Type e
-    Content-Encoding (nada de cookie);
+  * só GET e POST; corpo de requisição até 1 MiB; resposta até 25 MiB; 25 s no total (o cliente
+    pode pedir menos, nunca mais);
+  * repassa à fonte só Accept, Content-Type (conferido) e User-Agent; devolve só Content-Type e
+    Content-Encoding (nada de cookie); POST que recebe 301/302/303 segue como GET sem corpo;
+  * TLS verificado; a concessão de cifra com troca de chave RSA vale só para o SICAR, que só
+    negocia assim; o INCRA usa o contexto padrão do Python;
+  * prazo total de 10 s para linha de pedido, cabeçalhos e corpo, e teto de conexões abertas
+    (cliente que pinga um byte por vez não segura a ponte);
   * limite de taxa por instância; log sem token, sem corpo e sem endereço completo.
+
+Limite que a ponte NÃO tem: pedido sem token ainda chega ao contêiner e é cobrado pelo Cloud Run.
+--max-instances 1 limita máquinas, não pedidos (ver docs/PONTE_BRASIL_ATIVACAO.md, custo).
 
 Só biblioteca padrão. Sobe com: PORT=8080 PONTE_TOKEN=... python app.py
 """
@@ -61,9 +69,17 @@ MAX_INFLIGHT = 16            # buscas simultâneas na fonte
 BUFFER_BUDGET_BYTES = 96 * 1024 * 1024   # soma dos corpos em memória (instância de 256 MiB)
 READ_CHUNK = 64 * 1024
 DEFAULT_USER_AGENT = "RaioX-PonteBrasil/1"
+HEADER_DEADLINE_S = 10.0     # linha de pedido + cabeçalhos + corpo, no total (o timeout de leitura é por leitura)
+MAX_CONNECTIONS = 96         # conexões abertas ao mesmo tempo; acima fecha na hora (Cloud Run: concorrência 80)
+
+# SICAR: só negocia troca de chave RSA (AES256-GCM-SHA384, medido em 14/09/2026). A lista
+# do Python a recusa; esta aceita, com certificado verificado e sem cifras nulas, MD5 ou 3DES.
+RSA_KEX_TLS_HOSTS = frozenset({"geoserver.car.gov.br"})
+RSA_KEX_CIPHERS = "DEFAULT:!aNULL:!eNULL:!MD5:!3DES:@SECLEVEL=2"
 
 FETCH_PATH = "/v1/fetch"
-HEALTH_PATH = "/healthz"
+# Nunca um caminho terminado em "z" (/healthz): o Cloud Run reserva e responde antes do contêiner.
+HEALTH_PATH = "/v1/health"
 HDR_TOKEN = "X-Ponte-Token"
 HDR_URL = "X-Ponte-Url"
 HDR_TIMEOUT = "X-Ponte-Timeout"
@@ -132,6 +148,16 @@ def host_allowed(host: str) -> bool:
     return host in ALLOWED_HOSTS
 
 
+_NAT64 = ipaddress.ip_network("64:ff9b::/96")
+
+
+def _address_is_public(ip) -> bool:
+    if (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved
+            or ip.is_unspecified):
+        return False
+    return bool(ip.is_global)
+
+
 def ip_is_public(ip_text: str) -> bool:
     if "%" in ip_text:  # IPv6 com zona é sempre link-local
         return False
@@ -139,12 +165,21 @@ def ip_is_public(ip_text: str) -> bool:
         ip = ipaddress.ip_address(ip_text)
     except ValueError:
         return False
-    if ip.version == 6 and ip.ipv4_mapped is not None:
-        ip = ip.ipv4_mapped
-    if (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved
-            or ip.is_unspecified):
-        return False
-    return bool(ip.is_global)
+    if ip.version == 6:
+        # IPv4 embutido (mapeado, 6to4, Teredo, NAT64) é conferido como IPv4, sem depender da versão do
+        # Python (a 3.12 do CI e a 3.13+ classificam essas faixas de jeitos diferentes).
+        if ip.ipv4_mapped is not None:
+            return _address_is_public(ip.ipv4_mapped)
+        embedded = []
+        if ip.sixtofour is not None:
+            embedded.append(ip.sixtofour)
+        if ip.teredo is not None:
+            embedded.extend(ip.teredo)
+        if ip in _NAT64:
+            embedded.append(ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF))
+        if any(not _address_is_public(v4) for v4 in embedded):
+            return False
+    return _address_is_public(ip)
 
 
 def validate_target(url: str | None) -> tuple[str, str]:
@@ -155,7 +190,10 @@ def validate_target(url: str | None) -> tuple[str, str]:
         raise Refused(400, "target_malformed")
     if not url.startswith("https://"):
         raise Refused(403, "scheme_not_https")
-    parts = urlsplit(url)
+    try:
+        parts = urlsplit(url)  # "https://[::1/" levanta ValueError: é entrada malformada, não erro interno
+    except ValueError:
+        raise Refused(400, "target_malformed") from None
     netloc = parts.netloc
     if has_userinfo(netloc):
         raise Refused(403, "userinfo_refused")
@@ -299,26 +337,31 @@ def system_resolver(host: str, timeout: float) -> list[str]:
     return ips
 
 
-def tls_context() -> ssl.SSLContext:
-    """Certificado e nome conferidos. O SICAR (geoserver.car.gov.br) só negocia troca de chave RSA
-    (AES256-GCM-SHA384, medido em 14/09/2026): a lista de cifras do Python a recusa; a DEFAULT do
-    OpenSSL (a mesma do curl do sistema) aceita, sem abrir mão da verificação."""
+def tls_context(host: str | None = None) -> ssl.SSLContext:
+    """Certificado e nome sempre conferidos. Só os hosts de RSA_KEX_TLS_HOSTS (o SICAR) recebem a lista de
+    cifras que aceita troca de chave RSA; os demais (o INCRA) ficam com a lista padrão do Python."""
     ctx = ssl.create_default_context()
-    ctx.set_ciphers("DEFAULT")
+    if host in RSA_KEX_TLS_HOSTS:
+        ctx.set_ciphers(RSA_KEX_CIPHERS)
     ctx.minimum_version = ssl.TLSVersion.TLSv1_2
     ctx.check_hostname = True
     ctx.verify_mode = ssl.CERT_REQUIRED
     return ctx
 
 
-_TLS = tls_context()
+_TLS_DEFAULT = tls_context()
+_TLS_RSA_KEX = tls_context(next(iter(RSA_KEX_TLS_HOSTS)))
+
+
+def tls_context_for(host: str) -> ssl.SSLContext:
+    return _TLS_RSA_KEX if host in RSA_KEX_TLS_HOSTS else _TLS_DEFAULT
 
 
 class PinnedHTTPSConnection(http.client.HTTPSConnection):
     """HTTPS para o nome oficial (SNI e certificado), conectando no IP já conferido."""
 
     def __init__(self, host: str, ip: str, timeout: float):
-        super().__init__(host, UPSTREAM_PORT, timeout=timeout, context=_TLS)
+        super().__init__(host, UPSTREAM_PORT, timeout=timeout, context=tls_context_for(host))
         self.pinned_ip = ip
 
     def connect(self) -> None:
@@ -366,6 +409,8 @@ class Service:
     max_request_bytes: int = MAX_REQUEST_BYTES
     upstream_timeout_s: float = UPSTREAM_TIMEOUT_S
     max_redirects: int = MAX_REDIRECTS
+    header_deadline_s: float = HEADER_DEADLINE_S
+    max_connections: int = MAX_CONNECTIONS
     clock: Callable[[], float] = time.monotonic
     log_stream: object = None
     bucket: TokenBucket = field(default_factory=lambda: TokenBucket(RATE_PER_S, RATE_BURST))
@@ -416,12 +461,16 @@ def body_complete(resp) -> bool:
     return resp.length in (None, 0)
 
 
-def _expire(sock: socket.socket, expired: threading.Event) -> None:
-    expired.set()
+def _shutdown_socket(sock: socket.socket) -> None:
     try:
         sock.shutdown(socket.SHUT_RDWR)
     except OSError:
         pass
+
+
+def _expire(sock: socket.socket, expired: threading.Event) -> None:
+    expired.set()
+    _shutdown_socket(sock)
 
 
 def fetch(svc: Service, method: str, url: str, body: bytes | None, *, client_headers, timeout_s: float) -> Upstream:
@@ -532,6 +581,28 @@ class PonteHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args) -> None:  # noqa: A002
         return None
 
+    def handle_one_request(self) -> None:
+        # Prazo total para linha de pedido, cabeçalhos e corpo. O timeout acima (30 s) vale por leitura: um
+        # cliente que manda um byte a cada 20 s o renovaria para sempre. No Cloud Run o front-end do Google
+        # já junta os cabeçalhos; este prazo vale para a ponte em qualquer lugar.
+        expired = threading.Event()
+        self._intake_timer = threading.Timer(self.svc.header_deadline_s, _expire, args=(self.connection, expired))
+        self._intake_timer.daemon = True
+        self._intake_timer.start()
+        try:
+            super().handle_one_request()
+        except OSError:
+            if not expired.is_set():
+                raise
+            self.close_connection = True  # prazo vencido: a leitura cai (no Windows com erro, no Linux vazia)
+        finally:
+            self._intake_timer.cancel()
+
+    def _intake_done(self) -> None:
+        timer = getattr(self, "_intake_timer", None)
+        if timer is not None:
+            timer.cancel()
+
     def do_GET(self) -> None:
         self._handle()
 
@@ -568,7 +639,7 @@ class PonteHandler(BaseHTTPRequestHandler):
                 raise Refused(411, "length_required")
             return None
         raw = raw.strip()
-        if not raw.isdigit():
+        if not (raw.isascii() and raw.isdigit()):  # "²".isdigit() é True e int("²") falha
             raise Refused(400, "bad_content_length")
         n = int(raw)
         if not request_within_limit(n, self.svc.max_request_bytes):
@@ -621,6 +692,7 @@ class PonteHandler(BaseHTTPRequestHandler):
             if not method_allowed(self.command):
                 raise Refused(405, "method_not_allowed")
             body = self._read_body()
+            self._intake_done()  # pedido inteiro lido: daqui em diante vale o prazo da busca
             url = self.headers.get(HDR_URL)
             host, _ = validate_target(url)
             if not svc.inflight.acquire(blocking=False):
@@ -658,7 +730,25 @@ class PonteServer(ThreadingHTTPServer):
 
     def __init__(self, address: tuple[str, int], service: Service):
         self.service = service
+        self._slots = threading.BoundedSemaphore(service.max_connections)
         super().__init__(address, PonteHandler)
+
+    def process_request(self, request, client_address) -> None:
+        # Teto de conexões abertas (uma thread cada): acima dele a conexão fecha na hora, sem thread nova.
+        if not self._slots.acquire(blocking=False):
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self._slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address) -> None:
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._slots.release()
 
 
 def make_server(address: tuple[str, int], service: Service) -> PonteServer:
