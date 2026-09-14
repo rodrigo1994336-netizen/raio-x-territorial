@@ -31,7 +31,7 @@ async def _retry_failed_core_v30(result:dict):
     if not (result.get('sigef') or {}).get('ok'):
         keys.append('sigef');jobs.append(_bounded('SIGEF',base.query_sigef(bbox),8))
     if not (result.get('embargos_ibama') or {}).get('ok'):
-        keys.append('embargos_ibama');jobs.append(_bounded('IBAMA_embargos',base.query_embargos(bbox),8))
+        keys.append('embargos_ibama');jobs.append(_bounded('IBAMA_embargos',base.query_embargos(bbox,car.get('geometry')),8))
     if not (result.get('prodes') or {}).get('ok'):
         keys.append('prodes');jobs.append(_bounded('PRODES',base.query_prodes(bbox),10))
 

@@ -207,15 +207,19 @@ def register_routes(app: FastAPI, analyze_fn: Callable[..., Awaitable[dict[str,A
             _session_set(to,car=car)
             lines=_result_header(result,car)
             if intent in {'summary','property'}:
-                emb=((result.get('embargos_ibama') or {}).get('exact') or {}).get('occurrence_count')
-                anm=((result.get('anm') or {}).get('exact') or {}).get('occurrence_count')
-                pro=((result.get('prodes') or {}).get('exact') or {}).get('occurrence_count')
+                # H1: a count is shown only for a source that answered (ok=True); otherwise pending.
+                def _answered_count(key):
+                    src=result.get(key) or {}
+                    return ((src.get('exact') or {}).get('occurrence_count')) if src.get('ok') is True else None
+                emb=_answered_count('embargos_ibama')
+                anm=_answered_count('anm')
+                pro=_answered_count('prodes')
                 fire=result.get('fire_live') or {}
                 lines += [
-                    f"Embargos IBAMA: {emb if emb is not None else 'fonte indisponível'}",
-                    f"PRODES histórico: {pro if pro is not None else 'fonte indisponível'} ocorrência(s)",
-                    f"Processos ANM: {anm if anm is not None else 'fonte indisponível'}",
-                    f"Fogo recente dentro: {fire.get('inside_count') if fire.get('ok') else 'fonte indisponível'}",
+                    f"Embargos IBAMA: {emb if emb is not None else 'consulta pendente'}",
+                    f"PRODES histórico: {str(pro)+' ocorrência(s)' if pro is not None else 'consulta pendente'}",
+                    f"Processos ANM: {anm if anm is not None else 'consulta pendente'}",
+                    f"Fogo recente dentro: {fire.get('inside_count') if fire.get('ok') else 'consulta pendente'}",
                     '', 'Digite *relatório* para o PDF completo ou *menu* para ver todas as funções.'
                 ]
             elif intent=='rain':

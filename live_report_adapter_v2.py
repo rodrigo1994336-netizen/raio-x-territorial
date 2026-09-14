@@ -43,8 +43,10 @@ def _patch_autos(payload: dict, result: dict):
         cats=payload.get('conclusion',{}).get('categories') or []
         for row in cats:
             if row.get('label')=='Fiscalização':
-                emb_count=int((result.get('embargos_ibama') or {}).get('exact',{}).get('occurrence_count') or 0)
-                row['text']=f'Embargos IBAMA: {emb_count}. Autos de infração ambientais: {count}. Valor nominal somado dos autos localizados: {_money(total)}.'
+                emb=result.get('embargos_ibama') or {}
+                emb_count=int((emb.get('exact') or {}).get('occurrence_count') or 0) if emb.get('ok') is True else 0
+                emb_text=f'Embargos IBAMA: {emb_count}.' if emb.get('ok') is True else 'Embargos IBAMA: consulta pendente.'
+                row['text']=f'{emb_text} Autos de infração ambientais: {count}. Valor nominal somado dos autos localizados: {_money(total)}.'
                 if count or emb_count:
                     row['risk']='ALTO'; row['level']='critical'
         if count:

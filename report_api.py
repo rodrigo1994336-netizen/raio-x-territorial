@@ -118,7 +118,7 @@ async def _retry_failed_core(result:dict):
     if not bbox: return result
     jobs=[]; keys=[]
     if not (result.get('sigef') or {}).get('ok'): keys.append('sigef'); jobs.append(query_sigef(bbox))
-    if not (result.get('embargos_ibama') or {}).get('ok'): keys.append('embargos_ibama'); jobs.append(query_embargos(bbox))
+    if not (result.get('embargos_ibama') or {}).get('ok'): keys.append('embargos_ibama'); jobs.append(query_embargos(bbox,car.get('geometry')))
     if not (result.get('prodes') or {}).get('ok'): keys.append('prodes'); jobs.append(query_prodes(bbox))
     if jobs:
         values=await asyncio.gather(*jobs,return_exceptions=True)
@@ -161,7 +161,7 @@ async def _analyze_uncached(car_code:str):
         _query_autos_resilient(geometry,bbox),
         _safe_async('fire_live',analyze_fire_near_property(geometry,5.0,6),'INPE Programa Queimadas'),
         _safe_async('territorial_constraints',query_territorial_constraints(geometry,bbox),'restrições territoriais'),
-        _safe_thread('water_mg',query_outorgas_mg,geometry,bbox,5.0,source='IDE-Sisema / IGAM + ANA'),
+        _safe_thread('water_mg',query_outorgas_mg,geometry,bbox,5.0,((car.get('properties') or {}).get('uf') or car_code[:2]),source='IDE-Sisema / IGAM + ANA'),
         _safe_thread('pivots_ana',query_pivots_ana,geometry,bbox,5.0,source='ANA / SNIRH - Pivôs Centrais'),
         _safe_thread('climate_nasa',query_climate_nasa,geometry,30,source='NASA POWER - Daily API'),
         _safe_async('critical_minerals',query_critical_minerals(geometry,result.get('anm')),'ANM/SIGMINE + SGB/GeoSGB'),

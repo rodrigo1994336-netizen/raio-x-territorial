@@ -6,6 +6,7 @@ import xml.etree.ElementTree as ET
 
 import httpx
 import deploy_app
+import source_layer_guard as layer_guard
 
 PRODES=deploy_app.PRODES
 _CACHE_TTL=6*3600
@@ -69,9 +70,16 @@ async def query_prodes_fast(bbox):
                             'count':'2000','outputFormat':'application/json'
                         })
                         rr.raise_for_status()
-                        data=rr.json();fs=data.get('features') or []
+                        data=rr.json()
+                        if not isinstance(data,dict) or not isinstance(data.get('features'),list):
+                            raise ValueError('wfs_answer_without_features')
+                        fs=data.get('features') or []
                         ms=round((time.monotonic()-t0)*1000)
-                        print(f'RX_PRODES_LAYER={name}:{ms}ms:count={len(fs)}',flush=True)
+                        matched=data.get('numberMatched')
+                        truncated=len(fs)>=2000 or (isinstance(matched,int) and matched>len(fs))
+                        print(f'RX_PRODES_LAYER={name}:{ms}ms:count={len(fs)}:truncated={truncated}',flush=True)
+                        if truncated:
+                            return {'layer':name,'title':title,'score':score,'count':len(fs),'features':fs,'elapsed_ms':ms,'truncated':True}
                         return {'layer':name,'title':title,'score':score,'count':len(fs),'features':fs,'elapsed_ms':ms} if fs else None
                     except Exception as e:
                         ms=round((time.monotonic()-t0)*1000)
@@ -83,10 +91,20 @@ async def query_prodes_fast(bbox):
             # layers are exposed separately so a timeout is never misread as no PRODES.
             hits=[x for x in rows if x and x.get('count',0)>0]
             failed=[x for x in rows if x and x.get('error')]
+            truncated=[x.get('layer') for x in rows if x and x.get('truncated')]
+            # H1: "no PRODES intersection" needs every yearly layer answering, complete,
+            # from a live catalog; a failed or truncated layer makes the whole reading pending.
+            if failed or truncated or not hits:
+                verdict=await asyncio.to_thread(layer_guard.prodes_zero_verdict,[x[1] for x in layers],failed,truncated)
+            else:
+                verdict={'answer':True,'state':'answered_hit','reason':'hits'}
             total_ms=round((time.monotonic()-started)*1000)
-            print(f'RX_PRODES_FAST_READY={total_ms}ms:hits={len(hits)}:failed={len(failed)}:catalog_cache={cached}',flush=True)
+            print(f'RX_PRODES_FAST_READY={total_ms}ms:hits={len(hits)}:failed={len(failed)}:truncated={len(truncated)}:catalog_cache={cached}:state={verdict.get("state")}',flush=True)
             return {
-                'ok':True,
+                'ok':bool(verdict.get('answer')),
+                'source_state':verdict.get('state'),
+                'layer_guard':{k:v for k,v in verdict.items() if k in ('reason','layer')},
+                'truncated_layers':truncated,
                 'candidate_layers':[x[1] for x in layers],
                 'hits':hits,
                 'failed_layers':[{k:x.get(k) for k in ('layer','error','detail','elapsed_ms')} for x in failed],
