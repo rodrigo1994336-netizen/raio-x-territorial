@@ -4,13 +4,21 @@ SPEC_RELATORIO_LIVRO seções 2.1, 2.3, 2.7, 8.3 e 9.4, com as decisões do dono
 corrigidas gravadas na F1. Desenha, **sem compositor** (pilha de blocos medidos com mola, no lugar da P10),
 as três páginas que o dono aprova antes da onda 2 (D12):
 
-- p. 1 · ficha e resposta rápida: código do CAR como título, retrato Sentinel-2 com vizinhança e limite do
-  CAR (D1 desligado), 4 fatos, "Em resumo", painel de 6 respostas e "O que isso significa para você";
-- p. 3 · capítulo 1, "Tem desmatamento registrado?": mapa das manchas sobre a imagem esmaecida (1 dentro,
-  3 toques na divisa), lupa na faixa de 2021, legenda com todas as manchas, linha do tempo com os três
-  períodos legais, alerta recente (D9, sem nome da fonte no corpo) e a regra do crédito (Res. CMN 5.303/2026);
-- p. 7 · capítulo 5, "A terra": rampas no ângulo real pelas classes de relevo da Embrapa (em %), leitura
-  legal em graus, solo do mapa do IBGE, textura do MapBiomas Solo, aptidão e erosão da Embrapa.
+- p. 1 · ficha e resposta rápida: código do CAR numa linha como título, retrato Sentinel-2 fechado no imóvel
+  (40–50% da largura, cor natural, D1 desligado), 4 fatos, "Em resumo" com a APP a recompor (D6), painel de
+  6 respostas, todas com linha de situação, e "O que isso significa para você" com rótulo pendurado;
+- p. 3 · capítulo 1, "Tem desmatamento registrado?": mapa das manchas sobre a imagem esmaecida (1 dentro e 3
+  chamadas numeradas na divisa), lupa nos 3 pedacinhos de 2021, legenda agrupada pelos três períodos da lei,
+  linha do tempo com uma pista para dentro e outra para a divisa, alerta recente (D9, sem nome da fonte) e a
+  regra do crédito pela Res. CMN 5.303/2026 com o limite da lista oficial;
+- p. 7 · capítulo 5, "A terra": barra 100% das classes de relevo da Embrapa (em %, com a casa decimal),
+  rampas iguais no ângulo real com o limite de 25° tracejado, mapa das células de 30 m (complemento conferido
+  contra a F1), solo do IBGE com os componentes de lavoura da mancha, leitura do mapa regional × terreno medido,
+  textura do MapBiomas Solo e a outra estimativa ao lado.
+
+Revisão de 13/09 (duas notas 8): piso de 8,5 pt para anotação, selo e rodapé; "Nenhum registro" no lugar de
+"Não encontrado"; código curto RX-… no cabeçalho; site (D4) no rodapé. O que a F1 ainda não traz fica em
+``COMPLEMENTO_F1``, com a fonte conferida.
 
 Entradas: o estilo da P3 (``report_book_v10_style``) e a F1 congelada da P0
 (``tests/fixtures/book/curvelo_corrigido.json``, hash conferido antes de desenhar). Nenhum número é
@@ -34,6 +42,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import json
 import math
 import os
@@ -56,6 +65,7 @@ report_ptbr_v50.install()  # como em produção: o texto do livro não pode pass
 import report_book_v10_style as st  # noqa: E402
 from report_book_v10_contracts import LayoutError  # noqa: E402
 from reportlab.lib.styles import ParagraphStyle  # noqa: E402
+from reportlab.lib.colors import HexColor  # noqa: E402
 from reportlab.lib.units import mm  # noqa: E402
 from reportlab.lib.utils import ImageReader  # noqa: E402
 from reportlab.pdfbase import pdfmetrics  # noqa: E402
@@ -68,7 +78,42 @@ TOPO = G.origem_y + G.util_a
 LARG = G.util_l
 U = G.u
 FIXTURE = ROOT / "tests" / "fixtures" / "book" / "curvelo_corrigido.json"
+CELULAS = FIXTURE.parent / "curvelo_declividade_celulas.json"  # complemento da F1 (scripts/book_v10_celulas_declividade.py)
 TOTAL_PAGINAS = 13  # mapa do livro de Curvelo (seção 2.0.1)
+
+# Piso de leitura da revisão da amostra (13/09): nenhuma anotação, rótulo, selo ou rodapé abaixo de 8,5 pt, e o
+# cabeçalho de tabela em INK2 (o MUTED some no celular). Proposta para a tabela 1.3 da SPEC; aqui só sobrepõe os
+# estilos em memória, sem mexer no módulo da P3.
+PISO_PT = 8.5
+ANOT = PISO_PT  # tamanho de toda anotação desenhada direto no canvas (escala, eixo, rótulo de figura)
+
+# Rampa de inclinação, do plano (claro) ao forte ondulado (escuro): a mesma na barra, nos ícones e no mapa de células.
+TONS_RELEVO = {"plano": "#EFE7D6", "suave ondulado": "#D8C3A1", "ondulado": "#B48A5C", "forte ondulado": "#6E4A2C",
+               "montanhoso": "#4A3020", "escarpado": "#2E1E14"}
+
+# O que a F1 ainda não traz e esta amostra usa, com a fonte já conferida (a P0 leva para a F1 gerada):
+COMPLEMENTO_F1 = {
+    "MG-3120904-DFB380BECD7A4323AD8AA68FA14D011F": {
+        # fontes/01_car_composicao_datas.md, linha 54: APP_TOTAL 1,4547 = APP_LAGO_NATURAL 1,4547
+        "app_em_volta_de": "da lagoa",
+        # fontes/03_alertas_desmatamento.md, linha 90: a camada de alertas atuais começa em 01/08/2025
+        "alertas_desde": "2025-08-01",
+    },
+}
+# Limite de soma da lista oficial do MMA para o MCR 2-9-17 (plano/F4_checagem_mcr.md, linhas 103–104)
+LIMITE_LISTA_MMA_HA = {"Cerrado": Decimal("5"), "Pantanal": Decimal("5"), "Amazônia": Decimal("6.25")}
+
+
+def aplicar_piso_de_leitura() -> None:
+    for token in ("kicker", "tab_cab", "selo_rotulo", "rodape_id", "corrente", "eixo"):
+        s = st.ESTILO[token]
+        extras = {"fontSize": max(s.fontSize, PISO_PT), "leading": max(s.leading, PISO_PT + 2)}
+        if token == "tab_cab":
+            extras["textColor"] = COR["INK2"]
+        st.ESTILO[token] = ParagraphStyle(token, parent=s, **extras)
+    # "Não encontrado" com círculo vazado, para notícia boa, se lê como "não achamos o dado" (revisão, item 11).
+    forma, cor, _, cor_rot = st.SELO[("nao_encontrado", False)]
+    st.SELO[("nao_encontrado", False)] = (forma, cor, "Nenhum registro", cor_rot)
 
 # Contorno de MG simplificado (malha do IBGE, qualidade mínima, simplificado a 0,05°), só para o
 # encarte desta amostra. O asset definitivo é assets/geo/uf_simplificado.json (P3, ainda não feito).
@@ -279,6 +324,23 @@ def conferir_hash_f1() -> None:
         conferidos += 1
     if conferidos < 5:
         raise SystemExit(f"curvelo_corrigido.sha256 lista só {conferidos} arquivos (esperado JSON + 4 imagens)")
+    soma = CELULAS.with_suffix(".sha256").read_text(encoding="utf-8").split()[0]
+    if hashlib.sha256(CELULAS.read_bytes()).hexdigest() != soma.lower():
+        raise SystemExit(f"{CELULAS.name} não bate com o .sha256")
+
+
+def celulas_declividade(L: "Leitura") -> list[dict]:
+    """Células de 30 m do complemento, conferidas contra a F1: mesmo total e mesmas partes por classe (0,1 ponto)."""
+    dados = json.loads(CELULAS.read_text(encoding="utf-8"))
+    relevo = L.valor("relevo")
+    celulas = dados["celulas"]
+    if len(celulas) != relevo["pixels"]:
+        raise LayoutError(f"{CELULAS.name}: {len(celulas)} células; a F1 diz {relevo['pixels']}")
+    for linha in relevo["classes_embrapa_pct"]:
+        n = sum(1 for x in celulas if x["classe"] == linha["classe"])
+        if _q(Decimal(n * 100) / len(celulas), 1) != _q(linha["pct"], 1):
+            raise LayoutError(f"{CELULAS.name}: {linha['classe']} não bate com a F1")
+    return celulas
 
 
 # ===========================================================================
@@ -457,7 +519,7 @@ def icone(c, nome: str, x: float, y: float, tamanho: float, cor=None, traco: flo
 
 def kicker(c, x, y_topo, t: str, cor, nome_icone: str | None = None) -> float:
     """Rótulo de capítulo ou seção com ícone de 5 mm. Devolve a altura usada (5 mm)."""
-    base = y_topo - 5 * mm / 2 - altura_maiuscula("Sans-Sb", 7.8) / 2
+    base = y_topo - 5 * mm / 2 - altura_maiuscula("Sans-Sb", st.ESTILO["kicker"].fontSize) / 2
     xx = x
     if nome_icone:
         icone(c, nome_icone, x, y_topo - 5 * mm, 5 * mm, cor, 1.0)
@@ -566,11 +628,18 @@ def caminho_geom(c, geom: dict, mapa: Mapa):
     return p
 
 
-def limite_car(c, geom: dict, mapa: Mapa, grosso: float = 2.8, fino: float = 1.5) -> None:
+def limite_car(c, geom: dict, mapa: Mapa, grosso: float = 2.8, fino: float = 1.5, halo: float = 0.45,
+               preencher: float = 0.0) -> None:
+    """Limite do CAR com traço duplo (halo escuro por baixo, linha clara por cima) e, se pedido, véu branco."""
     c.saveState()
     c.setLineJoin(1)
+    if preencher:
+        c.setFillColor(COR["PAPER"])
+        c.setFillAlpha(preencher)
+        c.drawPath(caminho_geom(c, geom, mapa), stroke=0, fill=1)
+        c.setFillAlpha(1)
     c.setStrokeColor(COR["INK"])
-    c.setStrokeAlpha(0.45)
+    c.setStrokeAlpha(halo)
     c.setLineWidth(grosso)
     c.drawPath(caminho_geom(c, geom, mapa), stroke=1, fill=0)
     c.setStrokeAlpha(1)
@@ -580,56 +649,56 @@ def limite_car(c, geom: dict, mapa: Mapa, grosso: float = 2.8, fino: float = 1.5
     c.restoreState()
 
 
-def pilula(c, x, y, w, h, alpha: float = 0.9) -> None:
+def pilula(c, x, y, w, h, alpha: float = 0.85) -> None:
     c.saveState()
     c.setFillColor(COR["CREAM"])
     c.setFillAlpha(alpha)
-    c.roundRect(x, y, w, h, 1.6 * mm, stroke=0, fill=1)
+    c.roundRect(x, y, w, h, 1.4 * mm, stroke=0, fill=1)
     c.restoreState()
 
 
-def escala_e_norte(c, mapa: Mapa, x, y) -> None:
-    """Pílula com barra de escala (a opção que dá 18–30 mm) e seta norte de 5 mm."""
-    escolha = 500
-    for metros in (20, 50, 100, 200, 500, 1000):
-        if 18 * mm <= metros * mapa.s <= 30 * mm:
-            escolha = metros
-            break
+def escala_e_norte(c, mapa: Mapa, x, y) -> tuple[float, float]:
+    """Pílula justa com barra de escala e seta norte. A barra é a opção que dá 18–30 mm; se nenhuma der, a mais perto
+    dessa faixa. Devolve (largura, altura) da pílula."""
+    opcoes = (20, 50, 100, 200, 500, 1000)
+    dentro = [m for m in opcoes if 18 * mm <= m * mapa.s <= 30 * mm]
+    escolha = dentro[0] if dentro else min(opcoes, key=lambda m: min(abs(m * mapa.s - 18 * mm), abs(m * mapa.s - 30 * mm)))
     barra = escolha * mapa.s
-    w, h = barra + 16 * mm, 9 * mm
+    pad, h = 2.4 * mm, 8.2 * mm
+    w = pad + barra + 3.4 * mm + 3.2 * mm + pad
     pilula(c, x, y, w, h)
-    bx, by = x + 3 * mm, y + 3.2 * mm
+    bx, by = x + pad, y + 4.1 * mm
     c.saveState()
     c.setStrokeColor(COR["INK"])
-    c.setFillColor(COR["INK"])
     c.setLineWidth(0.8)
     c.line(bx, by, bx + barra, by)
     for t in (0, 0.5, 1):
-        c.line(bx + barra * t, by, bx + barra * t, by + (1.4 if t != 0.5 else 0.9) * mm)
+        c.line(bx + barra * t, by, bx + barra * t, by + (1.3 if t != 0.5 else 0.8) * mm)
     c.restoreState()
-    linha_simples(c, bx + barra / 2, by - 2.3 * mm, _ptbr(Decimal(escolha)) + " m", "Sans", 7.8, COR["INK"], "centro")
-    nx, ny = bx + barra + 6.5 * mm, y + 1.6 * mm
+    linha_simples(c, bx + barra / 2, by - 3 * mm, _ptbr(Decimal(escolha)) + " m", "Sans", ANOT, COR["INK"], "centro")
+    nx, ny = bx + barra + 3.4 * mm + 1.6 * mm, y + 3.4 * mm
     c.saveState()
     c.setFillColor(COR["INK"])
     p = c.beginPath()
-    p.moveTo(nx, ny + 5 * mm)
-    p.lineTo(nx - 1.6 * mm, ny + 1.2 * mm)
-    p.lineTo(nx, ny + 2 * mm)
-    p.lineTo(nx + 1.6 * mm, ny + 1.2 * mm)
+    p.moveTo(nx, ny + 3.8 * mm)
+    p.lineTo(nx - 1.5 * mm, ny + 0.4 * mm)
+    p.lineTo(nx, ny + 1.1 * mm)
+    p.lineTo(nx + 1.5 * mm, ny + 0.4 * mm)
     p.close()
     c.drawPath(p, stroke=0, fill=1)
     c.restoreState()
-    linha_simples(c, nx, ny - 0.4 * mm, "N", "Sans-Sb", 7.8, COR["INK"], "centro")
+    linha_simples(c, nx, y + 0.9 * mm, "N", "Sans-Sb", ANOT, COR["INK"], "centro")
+    return w, h
 
 
-def encarte_uf(c, uf: str, lonlat, x, y, w=24 * mm, h=20 * mm) -> None:
+def encarte_uf(c, uf: str, lonlat, x, y, w=19 * mm, h=16 * mm) -> None:
     contorno = _CONTORNO_UF[uf]
     lons = [p[0] for p in contorno]
     lats = [p[1] for p in contorno]
     k = math.cos(math.radians(sum(lats) / len(lats)))
     lx, ly = (max(lons) - min(lons)) * k, max(lats) - min(lats)
     pilula(c, x, y, w, h)
-    s = min((w - 5 * mm) / lx, (h - 5 * mm) / ly)
+    s = min((w - 3.4 * mm) / lx, (h - 3.4 * mm) / ly)
     ox = x + (w - lx * s) / 2
     oy = y + (h - ly * s) / 2
 
@@ -650,26 +719,93 @@ def encarte_uf(c, uf: str, lonlat, x, y, w=24 * mm, h=20 * mm) -> None:
     c.restoreState()
 
 
+def marcador_numero(c, x: float, y: float, n: int, cor=None, raio: float = 2.1 * mm) -> None:
+    """Chamada numerada desenhada (círculo branco, traço na cor do período e algarismo): nunca por glifo ①."""
+    c.saveState()
+    c.setFillColor(COR["PAPER"])
+    c.setStrokeColor(cor if cor is not None else COR["INK"])
+    c.setLineWidth(1.1)
+    c.circle(x, y, raio, stroke=1, fill=1)
+    c.restoreState()
+    linha_simples(c, x, y - altura_maiuscula("Sans-Sb", ANOT) / 2, str(n), "Sans-Sb", ANOT, COR["INK"], "centro")
+
+
+def recorte_imagem(caminho: Path, lim, caixa, largura_px: int, natural: bool = False):
+    """Recorta a caixa (metros) da imagem georreferenciada e amplia com filtro bicúbico. ``natural`` tira a cara de
+    falsa-cor do Sentinel na seca: menos ganho no vermelho, gama mais suave e saturação −20%."""
+    from PIL import Image, ImageEnhance
+
+    img = Image.open(caminho).convert("RGB")
+    sx = img.width / (lim[2] - lim[0])
+    sy = img.height / (lim[3] - lim[1])
+    janela = ((caixa[0] - lim[0]) * sx, (lim[3] - caixa[3]) * sy, (caixa[2] - lim[0]) * sx, (lim[3] - caixa[1]) * sy)
+    altura_px = round(largura_px * (caixa[3] - caixa[1]) / (caixa[2] - caixa[0]))
+    rec = img.resize((largura_px, altura_px), Image.BICUBIC, box=janela)
+    if natural:
+        r, g, b = rec.split()
+        rec = Image.merge("RGB", (r.point(lambda v: v * 0.9), g, b.point(lambda v: min(255, v * 1.04))))
+        rec = rec.point(lambda v: round(255 * (v / 255) ** 0.88))
+        rec = ImageEnhance.Contrast(rec).enhance(0.92)
+        rec = ImageEnhance.Color(rec).enhance(0.8)
+    return rec
+
+
 # ===========================================================================
 # Componentes de página (versões de amostra dos da seção 1.6)
 # ===========================================================================
 KICKER_SIGNIFICADO = "O que isso significa para você"
+COLUNA_ROTULO = 31 * mm  # rótulo pendurado da caixa de significado, em 3 linhas curtas
 
 
-def caixa_significado(itens: list[tuple[str | None, str]], largura: float = LARG, corrido: bool = False):
-    """Fundo CREAM, barra FOREST de 2,6 pt, kicker e itens em ``caixa``. Devolve (altura, desenhar).
+def linhas_de_rotulo(t: str, largura: float, token: str = "kicker") -> list[str]:
+    """Quebra um rótulo espacejado em linhas que cabem na largura (por palavra)."""
+    linhas, atual = [], ""
+    for palavra in t.split():
+        tentativa = f"{atual} {palavra}".strip()
+        if atual and st.largura_espacejada(tentativa, token) > largura:
+            linhas.append(atual)
+            atual = palavra
+        else:
+            atual = tentativa
+    return linhas + ([atual] if atual else [])
 
-    ``corrido=True`` (p. 1, onde cada milímetro conta): o kicker entra na primeira linha do primeiro item,
-    como título corrido de livro, em vez de ocupar uma linha própria.
-    """
-    pad_esq, pad = 6 * mm, (G.us(1) if corrido else 4 * mm)
-    interno = largura - pad_esq - pad
-    recuo = st.largura_espacejada(KICKER_SIGNIFICADO, "kicker") + 3 * mm if corrido else 0
-    pars = [texto((f"<b>{perfil}</b> " if perfil else "") + t, "caixa", interno,
-                  **({"firstLineIndent": recuo} if corrido and i == 0 else {}))
-            for i, (perfil, t) in enumerate(itens)]
-    cabeca = 0 if corrido else 5 * mm + 1.5 * mm
-    altura = pad + cabeca + sum(p.altura for p in pars) + 1.2 * mm * (len(pars) - 1) + pad
+
+def caixa_significado(itens: list[tuple[str | None, str]], largura: float = LARG, colunas: bool = False):
+    """Fundo CREAM, barra FOREST de 2,6 pt, rótulo pendurado numa coluna à esquerda e texto numa medida de ~65
+    caracteres. ``colunas=True``: os itens com perfil ("Se vai comprar:") ficam lado a lado; os sem perfil correm
+    por cima, na largura toda do texto. Devolve (altura, desenhar)."""
+    pad_esq, pad = 6 * mm, 4 * mm
+    x_txt = pad_esq + COLUNA_ROTULO
+    medida = largura - x_txt - pad
+    gap_col = 6 * mm
+    rot_linhas = linhas_de_rotulo(KICKER_SIGNIFICADO, COLUNA_ROTULO - 5 * mm)
+    if colunas:
+        corridos = [texto(t, "caixa", medida) for perfil, t in itens if not perfil]
+        perfis = [(perfil, t) for perfil, t in itens if perfil]
+    else:
+        corridos = [texto((f"<b>{perfil}</b> " if perfil else "") + t, "caixa", medida) for perfil, t in itens]
+        perfis = []
+    larguras = [medida]
+    lado = []
+    if perfis:
+        util = medida - gap_col * (len(perfis) - 1)
+        partes = [[Decimal(1) / len(perfis)] * len(perfis)]
+        if len(perfis) == 2:
+            partes = [[Decimal(k) / 100, 1 - Decimal(k) / 100] for k in range(36, 65, 2)]
+
+        def alturas(fr):
+            return [texto(f"<b>{pf}</b> {t}", "caixa", util * float(f), registrar=False).altura
+                    for (pf, t), f in zip(perfis, fr)]
+
+        melhor = min(partes, key=lambda fr: (max(alturas(fr)), abs(fr[0] - Decimal("0.5"))))
+        larguras = [util * float(f) for f in melhor]
+        lado = [texto(f"<b>{pf}</b> {t}", "caixa", w) for (pf, t), w in zip(perfis, larguras)]
+    entre = 1.6 * mm
+    alt_txt = sum(p.altura for p in corridos) + entre * max(0, len(corridos) - 1)
+    if lado:
+        alt_txt += (entre if corridos else 0) + max(p.altura for p in lado)
+    alt_rot = len(rot_linhas) * st.ESTILO["kicker"].leading
+    altura = pad + max(alt_txt, alt_rot) + pad
 
     def desenhar(c, x, y_topo, h):
         c.saveState()
@@ -680,13 +816,21 @@ def caixa_significado(itens: list[tuple[str | None, str]], largura: float = LARG
         c.line(x + 1.3, y_topo - h, x + 1.3, y_topo)
         c.restoreState()
         y = y_topo - pad - (h - altura) / 2
-        if corrido:
-            rotulo(c, x + pad_esq, y - st.ESTILO["caixa"].fontSize, KICKER_SIGNIFICADO, "kicker", COR["FOREST"])
-        else:
-            kicker(c, x + pad_esq, y, KICKER_SIGNIFICADO, COR["FOREST"])
-            y -= cabeca
-        for par in pars:
-            y -= par.desenhar(c, x + pad_esq, y) + 1.2 * mm
+        base = y - st.ESTILO["caixa"].fontSize + 1
+        for i, linha in enumerate(rot_linhas):
+            rotulo(c, x + pad_esq, base - i * st.ESTILO["kicker"].leading, linha, "kicker", COR["FOREST"])
+        for par in corridos:
+            y -= par.desenhar(c, x + x_txt, y) + entre
+        xc = x + x_txt
+        for k, par in enumerate(lado):
+            if k:
+                c.saveState()
+                c.setStrokeColor(COR["RULE"])
+                c.setLineWidth(G.fio_fino)
+                c.line(xc - gap_col / 2, y, xc - gap_col / 2, y - max(q.altura for q in lado))
+                c.restoreState()
+            par.desenhar(c, xc, y)
+            xc += larguras[k] + gap_col
 
     return altura, desenhar
 
@@ -750,8 +894,42 @@ def cabeca_secao(pergunta: str, nome_icone: str | None = None):
 
 
 # ===========================================================================
-# PÁGINA 1 — ficha e resposta rápida (seção 2.1)
+# PÁGINA 1 — ficha e resposta rápida (seção 2.1, com a revisão de 13/09)
 # ===========================================================================
+def site_do_relatorio(L: Leitura) -> str:
+    """D4: o contato é só o site, lido da decisão gravada na F1 (sem o esquema, como se escreve num livro)."""
+    achado = re.search(r"https?://([\w.\-]+)", L.p["_fixture"]["decisoes_do_dono"]["D4"])
+    if not achado:
+        raise LayoutError("D4 sem endereço do site")
+    return achado.group(1)
+
+
+def codigo_curto(report_id: str) -> str:
+    """RX-20260913T215201Z-A14D011F → RX-A14D011F: o carimbo em UTC ao lado da hora de Brasília parecia erro."""
+    return "RX-" + report_id.rsplit("-", 1)[-1]
+
+
+def f_gms(valor: float, positivo: str, negativo: str) -> str:
+    v = abs(Decimal(str(valor)))
+    graus = int(v)
+    minutos_d = (v - graus) * 60
+    minutos = int(minutos_d)
+    segundos = int(_q((minutos_d - minutos) * 60, 0))
+    if segundos == 60:
+        minutos, segundos = minutos + 1, 0
+    return f"{graus}°{minutos:02d}'{segundos:02d}\" {negativo if valor < 0 else positivo}"
+
+
+def f_comparar_area_ficha(ha) -> str | None:
+    """D2 na ficha: abaixo de 5 ha, a comparação da seção 1.9; até 100 ha, em campos de futebol oficiais."""
+    v = Decimal(str(ha))
+    if v < 5:
+        return f_comparar_area(v)
+    if v < 100:
+        return f"cerca de {f_inteiro(v / Decimal('0.714'))} campos de futebol"
+    return None
+
+
 def pagina_1(c, L: Leitura, grade: bool) -> float:
     _PAGINA_ATUAL[0] = 1
     p = L.p
@@ -768,7 +946,12 @@ def pagina_1(c, L: Leitura, grade: bool) -> float:
     pct_dentro = sum(Decimal(str(o["area_inside_ha"])) for o in dentro) / area * 100
     maior = max(dentro, key=lambda o: o["area_inside_ha"])
     anos_maior = f"{maior['prev_image_date'][:4]} e {maior['image_date'][:4]}"
+    antes_2008 = all(o["periodo_legal"] == "ate_2008_07_22" for o in dentro)
     recente = pos2019[0]
+    compl = COMPLEMENTO_F1.get(prop["car_code"], {})
+    composicao = L.fato("composicao_car")
+    comp = composicao["valor"] if composicao["estado"] == "encontrado" else None
+    site = site_do_relatorio(L)
 
     blocos: list[Bloco] = []
 
@@ -779,33 +962,42 @@ def pagina_1(c, L: Leitura, grade: bool) -> float:
         largura = rotulo(c, x, base, "Raio-X Territorial", "kicker", COR["FOREST"])
         linha_simples(c, x + largura + 2 * mm, base, "Relatório do imóvel rural", "Sans", 8.6, COR["INK2"])
         linha_simples(c, x + LARG, base, f"Emitido em {f_data_brasilia(emitido)}, às {f_hora_brasilia(emitido)} · "
-                      f"{p['report_id']}", "Sans", 8.6, COR["INK2"], "dir")
+                      f"Código {codigo_curto(p['report_id'])}", "Sans", 8.6, COR["INK2"], "dir")
         c.saveState()
         c.setStrokeColor(COR["FOREST"])
         c.setLineWidth(0.8)
         c.line(x, G.pagina_a - G.cabecalho_fio, x + LARG, G.pagina_a - G.cabecalho_fio)
         c.restoreState()
+        linha_simples(c, x, G.folio_base, site, "Sans", PISO_PT, COR["INK2"])
 
-    # --- identidade (regra 5: sem nome validado, título = código do CAR) ------
+    # --- identidade (regra 5: sem nome validado, título = código do CAR, numa linha só) ------------
     codigo = prop["car_code"]
     if prop.get("name") and str(prop.get("name_source", "")).startswith("SICAR:"):
         raise LayoutError("a F1 de Curvelo não tem nome validado; a variante com nome é da P11")
-    partes = codigo.split("-", 2)
-    titulo = texto(f"{partes[0]}-{partes[1]}-<br/>{partes[2]}", "codigo_titulo", LARG)
-    # O rótulo "imóvel rural identificado pelo código do CAR" abre a frase explicativa (regra 5): assim a
-    # identidade cabe em 2 linhas de título + 1 de legenda e sobra altura para o retrato.
-    explica = texto("<b>Imóvel rural identificado pelo código do Cadastro Ambiental Rural (CAR).</b> O SICAR não "
-                    "publica nome para este imóvel.", "legenda", LARG)
-    alt_ident = titulo.altura + 1.4 * mm + explica.altura
+    pt_codigo, espaco_letra = 15.0, 0.6
+    while pdfmetrics.stringWidth(codigo, "Disp-Sb", pt_codigo) + espaco_letra * (len(codigo) - 1) > LARG:
+        pt_codigo -= 0.5
+        if pt_codigo < 12:
+            raise LayoutError("o código do CAR não cabe numa linha")
+    explica = texto("Imóvel rural identificado pelo código do Cadastro Ambiental Rural (CAR).", "legenda", LARG)
+    cap_k = altura_maiuscula("Sans-Sb", PISO_PT)
+    cap_c = altura_maiuscula("Disp-Sb", pt_codigo)
+    alt_ident = cap_k + 2.4 * mm + cap_c + 2 * mm + explica.altura
 
     def identidade(c, x, y_topo, h):
-        y = y_topo
-        y -= titulo.desenhar(c, x, y) + 1.4 * mm
-        explica.desenhar(c, x, y)
+        rotulo(c, x, y_topo - cap_k, "Imóvel no CAR", "kicker", COR["FOREST"])
+        base = y_topo - cap_k - 2.4 * mm - cap_c
+        REGISTRO.append((1, codigo))
+        c.saveState()
+        c.setFillColor(COR["INK"])
+        c.setFont("Disp-Sb", pt_codigo)
+        c.drawString(x, base, codigo, charSpace=espaco_letra)  # uma sequência só: copiar e colar sai inteiro
+        c.restoreState()
+        explica.desenhar(c, x, base - 2 * mm)
 
     blocos.append(Bloco("identidade", alt_ident, identidade, espaco=0))
 
-    # --- retrato com vizinhança + coluna de fatos ----------------------------
+    # --- retrato com vizinhança próxima + coluna de fatos ----------------------------
     base_img = b["base_image"]
     geom = b["geometry"]
     nuvens = "sem nuvens" if Decimal(str(base_img["cloud_pct"])) < Decimal("0.5") else \
@@ -816,23 +1008,26 @@ def pagina_1(c, L: Leitura, grade: bool) -> float:
                     "legenda", 104 * mm)
     fm = b["fiscal_module_ha"]
     mf = Decimal(str(car["fiscal_modules"]))
-    unidade_mf = "módulo fiscal" if mf < 2 else "módulos fiscais"
-    leg_mf = (f"pela conta do próprio CAR, 1 módulo fiscal em {prop['municipality']} tem cerca de "
-              f"{f_inteiro(fm['value'])} ha") if fm["origin"] == "conta_car" else \
-        f"em {prop['municipality']}, 1 módulo fiscal = {f_inteiro(fm['value'])} ha"
+    regra = L.valor("regra_credito")
+    mod_legenda = (f"1&nbsp;módulo em {prop['municipality']} ≈ {f_inteiro(fm['value'])}&nbsp;ha" if fm["origin"] ==
+                   "conta_car" else f"em {prop['municipality']}, 1 módulo fiscal = {f_inteiro(fm['value'])} ha")
+    if regra["faixa_modulos"] == "ate_4":
+        mod_legenda = "até 4 módulos, a lei tem regras próprias; " + mod_legenda
     situacao = {"AT": "Ativo", "PE": "Pendente", "SU": "Suspenso", "CA": "Cancelado"}[car["status"]]
     analise = {"Aguardando análise": "ainda não conferido pelo órgão ambiental"}.get(car["analysis_status"])
     leg_cad = f"inscrito no CAR em {f_data(inscricao)}" + (f"; {analise}" if analise else "")
+    lon, lat = geom["centroid_lonlat"]
     col_w = LARG - 104 * mm - G.calha
     fatos = [
-        ("Localização", f"{prop['municipality']} ({prop['uf']})", "município onde o imóvel está"),
-        ("Área declarada no CAR", f_ha(area), f_ha_extenso(area)),
-        ("Tamanho", f"{_ptbr(_q(mf, 2))} {unidade_mf}", leg_mf),
+        ("Localização", f"{prop['municipality']} ({prop['uf']})",
+         f"centro do imóvel: {f_gms(lat, 'N', 'S')}, {f_gms(lon, 'E', 'W')}"),
+        ("Área declarada no CAR", f_ha(area), f_comparar_area_ficha(area) or f_ha_extenso(area)),
+        ("Módulos fiscais", _ptbr(_q(mf, 2)), mod_legenda),
         ("Cadastro", situacao, leg_cad),
     ]
     fatos_t = [(r, texto(v, "fato_valor", col_w), texto(lg, "legenda", col_w)) for r, v, lg in fatos]
-    passo_fato = 2.6 * mm
-    alt_fatos = sum(4 * mm + v.altura + 0.6 * mm + lg.altura for _, v, lg in fatos_t) + passo_fato * 3
+    passo_min = 2.6 * mm
+    alt_fatos = sum(4 * mm + v.altura + 0.6 * mm + lg.altura for _, v, lg in fatos_t) + passo_min * 3
     img_min, img_max = 70 * mm, 88 * mm
     fixo_img = 1.8 * mm + leg_img.altura
     mola_min = max(img_min + fixo_img, alt_fatos)
@@ -841,65 +1036,82 @@ def pagina_1(c, L: Leitura, grade: bool) -> float:
         ih = h - fixo_img
         iw = 104 * mm
         lim = base_img["bounds_m"]
-        caixa = caixa_na_proporcao(((lim[0] + lim[2]) / 2, (lim[1] + lim[3]) / 2), lim[2] - lim[0], ih / iw, lim)
-        if caixa[3] - caixa[1] > lim[3] - lim[1] + 0.01:  # a figura é mais alta que a imagem: corta a largura
-            altura_m = lim[3] - lim[1]
-            largura_m = altura_m * iw / ih
-            caixa = caixa_na_proporcao(((lim[0] + lim[2]) / 2, (lim[1] + lim[3]) / 2), largura_m, ih / iw, lim)
+        bb = geom["bbox_m"]
+        # imóvel com 40–50% da largura do quadro (revisão, item 3): ~1,2–1,5 km, e nunca mais que a imagem
+        larg_m = min(max((bb[2] - bb[0]) / 0.45, (bb[3] - bb[1]) / 0.62 * iw / ih), lim[2] - lim[0])
+        caixa = caixa_na_proporcao(((bb[0] + bb[2]) / 2, (bb[1] + bb[3]) / 2), larg_m, ih / iw, lim)
         mapa = Mapa(x, y_topo - ih, iw, ih, caixa)
+        foto = recorte_imagem(L.imagem(base_img["path"]), lim, caixa, int(iw / 72 * 300), natural=True)
         c.saveState()
         clip = c.beginPath()
         clip.roundRect(x, y_topo - ih, iw, ih, 3 * mm)
         c.clipPath(clip, stroke=0, fill=0)
-        mapa.imagem(c, L.imagem(base_img["path"]), lim)
-        limite_car(c, geom["car_m"], mapa)
+        buf = io.BytesIO()
+        foto.save(buf, "JPEG", quality=90, optimize=True)  # JPEG: sem perda, o retrato dobrava o PDF
+        buf.seek(0)
+        c.drawImage(ImageReader(buf), x, y_topo - ih, iw, ih)
+        limite_car(c, geom["car_m"], mapa, grosso=3.4, fino=1.6, halo=0.7, preencher=0.12)
         c.restoreState()
-        escala_e_norte(c, mapa, x + 3 * mm, y_topo - ih + 3 * mm)
-        encarte_uf(c, geom["uf"], geom["centroid_lonlat"], x + iw - 27 * mm, y_topo - ih + 3 * mm)
+        escala_e_norte(c, mapa, x + 2.5 * mm, y_topo - ih + 2.5 * mm)
+        encarte_uf(c, geom["uf"], geom["centroid_lonlat"], x + iw - 19 * mm - 2.5 * mm, y_topo - ih + 2.5 * mm)
         leg_img.desenhar(c, x, y_topo - ih - 1.8 * mm)
-        # coluna de fatos
+        # coluna de fatos: o pé alinha com o pé da legenda da imagem
         xf = x + iw + G.calha
+        natural = alt_fatos - passo_min * 3
+        passo = max(passo_min, (h - natural) / 3)
         y = y_topo
         for i, (r, v, lg) in enumerate(fatos_t):
             if i:
                 c.saveState()
                 c.setStrokeColor(COR["RULE"])
                 c.setLineWidth(G.fio_fino)
-                c.line(xf, y + passo_fato / 2, xf + col_w, y + passo_fato / 2)
+                c.line(xf, y + passo / 2, xf + col_w, y + passo / 2)
                 c.restoreState()
-            rotulo(c, xf, y - altura_maiuscula("Sans-Sb", 7.8), r, "tab_cab")
+            rotulo(c, xf, y - altura_maiuscula("Sans-Sb", PISO_PT), r, "tab_cab")
             y -= 4 * mm
             y -= v.desenhar(c, xf, y) + 0.6 * mm
-            y -= lg.altura
-            lg.desenhar(c, xf, y + lg.altura)
-            y -= passo_fato
+            lg.desenhar(c, xf, y)
+            y -= lg.altura + passo
 
     blocos.append(Bloco("retrato", mola_min, retrato, mola=(mola_min, max(mola_min, img_max + fixo_img)), espaco=1))
 
-    # --- em resumo (kicker corrido na 1ª linha; no máximo 3 linhas em 170 mm) ---------------
-    nucleo_ausente = all(L.fato(k)["estado"] == "nao_encontrado" for k in
-                         ("embargo_ibama", "embargo_icmbio", "autos", "ti", "uc", "quilombola", "assentamento",
-                          "floresta_publica", "anm"))
+    # --- em resumo -----------------------------------------------------------------
+    nucleo = ("embargo_ibama", "embargo_icmbio", "autos", "ti", "uc", "quilombola", "assentamento",
+              "floresta_publica", "anm")
+    nucleo_ausente = all(L.fato(k)["estado"] == "nao_encontrado" for k in nucleo)
     recuo_resumo = st.largura_espacejada("Em resumo", "kicker") + 3 * mm
-    frase_ausencia = (" Nas bases consultadas, não apareceu embargo, área protegida nem processo de mineração sobre "
-                      "o imóvel." if nucleo_ausente else "")
-    ausencia_curta = (" Não apareceu embargo, área protegida nem processo de mineração."
-                      if nucleo_ausente else "")
-    detalhe = (f"{f_faixa_parte(pct_dentro).capitalize()} teve a vegetação nativa retirada entre {anos_maior}; "
-               f"em {recente['year']}, uma faixa de {f_ha(recente['area_inside_ha'])} na divisa.")
-    variantes = (  # modelo longo da seção 2.1 e as versões curtas, na ordem; entra a primeira que cabe em 3 linhas
-        f"O que mais pede atenção é o desmatamento mapeado pelo INPE. {detalhe}{frase_ausencia}",
-        f"O que mais pede atenção é o desmatamento: {detalhe[0].lower()}{detalhe[1:]}{ausencia_curta}",
-        f"O que mais pede atenção é o desmatamento. {detalhe}{frase_ausencia}",
-        f"O que mais pede atenção é o desmatamento mapeado pelo INPE. {detalhe}",
+    periodo_lei = ", antes de 22/07/2008" if antes_2008 else ""
+    frase_desm = f"{f_faixa_parte(pct_dentro)} teve a vegetação nativa retirada entre {anos_maior}{periodo_lei}."
+    frase_desm_curta = f"{f_pct(pct_dentro)} da área perdeu a vegetação nativa entre {anos_maior}{periodo_lei}."
+    em_volta = compl.get("app_em_volta_de")
+    frase_app = ""
+    if comp and Decimal(str(comp["app"]["a_recompor_ha"])) > 0:
+        frase_app = (f" O CAR também declara {f_ha(comp['app']['a_recompor_ha'])} a recompor na faixa de proteção"
+                     f"{' ' + em_volta if em_volta else ''} (APP).")
+    ausencia = " Não apareceu embargo, terra indígena, unidade de conservação nem mineração." if nucleo_ausente else ""
+    frase_app_curta = (f" O CAR declara {f_ha(comp['app']['a_recompor_ha'])} a recompor na APP"
+                       f"{' ' + em_volta if em_volta else ''}." if frase_app else "")
+    ausencia_curta = ausencia.replace(" Não apareceu embargo, terra indígena, unidade de conservação nem mineração.",
+                                      " Sem embargo, terra indígena, unidade de conservação ou mineração.")
+    variantes = (  # primeiro o que cabe em 3 linhas (seção 2.1); se nenhum couber, aceita 4
+        f"O que mais pede atenção é o desmatamento: {frase_desm}{frase_app}{ausencia}",
+        f"Pede atenção o desmatamento: {frase_desm}{frase_app_curta}{ausencia}",
+        f"Pede atenção o desmatamento: {frase_desm}{frase_app_curta}{ausencia_curta}",
+        # sem a sigla solta: "faixa de proteção" por extenso (a APP é apresentada no cartão logo abaixo)
+        f"Atenção ao desmatamento: {frase_desm_curta}"
+        + (frase_app_curta.replace(" na APP", " na faixa de proteção") if frase_app_curta else "") + ausencia_curta,
+        f"Pede atenção o desmatamento: {frase_desm_curta}"
+        + (frase_app_curta.replace(" na APP da ", " em volta da ") if frase_app_curta and em_volta else "")
+        + ausencia_curta,
+        f"Pede atenção o desmatamento: {frase_desm_curta}{frase_app_curta}{ausencia_curta}",
     )
-    for modelo in variantes:
-        resumo = texto(modelo, "resposta", LARG, registrar=False, firstLineIndent=recuo_resumo)
-        if resumo.linhas <= 3:
-            REGISTRO.append((1, modelo))
-            break
-    else:
-        raise LayoutError(f"p. 1: 'Em resumo' com {resumo.linhas} linhas (máximo 3)")
+    medidos = [(m, texto(m, "resposta", LARG, registrar=False, firstLineIndent=recuo_resumo)) for m in variantes]
+    escolhido = next(((m, t) for m, t in medidos if t.linhas <= 3), None) or \
+        next(((m, t) for m, t in medidos if t.linhas <= 4), None)
+    if not escolhido:
+        raise LayoutError("p. 1: 'Em resumo' passa de 4 linhas")
+    REGISTRO.append((1, escolhido[0]))
+    resumo = escolhido[1]
 
     def em_resumo(c, x, y_topo, h):
         rotulo(c, x, y_topo - st.ESTILO["resposta"].fontSize, "Em resumo", "kicker", COR["FOREST"])
@@ -907,7 +1119,7 @@ def pagina_1(c, L: Leitura, grade: bool) -> float:
 
     blocos.append(Bloco("em_resumo", resumo.altura, em_resumo, espaco=1))
 
-    # --- painel de 6 respostas -------------------------------------------------
+    # --- painel de 6 respostas: toda linha tem situação ------------------------------------------
     solo = L.valor("textura_solo")
     relevo = L.valor("relevo")
     uso = L.valor("mapbiomas")
@@ -934,7 +1146,6 @@ def pagina_1(c, L: Leitura, grade: bool) -> float:
     se_de, se_ate = intervalo(secos)
     dentro_outorga = [g for g in outorgas if g["posicao"] == "dentro"]
     nivel = pocos["nivel_estatico_mediano_m"]["valor"]
-    sigef = L.fato("sigef")
     atencao_prodes = bool(pos2019) or any(o["periodo_legal"] != "ate_2008_07_22" for o in dentro)
     estados_embargo = {L.fato(k)["estado"] for k in ("embargo_ibama", "embargo_icmbio", "autos")}
     estados_area = {L.fato(k)["estado"] for k in ("ti", "uc", "quilombola", "assentamento", "floresta_publica", "anm")}
@@ -945,37 +1156,47 @@ def pagina_1(c, L: Leitura, grade: bool) -> float:
                 return e
         raise LayoutError(f"estados inesperados: {estados}")
 
-    sigef_frase = {
-        "nao_encontrado": f" Não há parcela certificada no SIGEF (INCRA) sobre o imóvel, na base de "
-                          f"{f_data(sigef['data_base'])}.",
-        "pendente": " A consulta ao INCRA está pendente.",
-    }.get(sigef["estado"], "")
-    sigef_curta = {
-        "nao_encontrado": f" Nenhuma parcela certificada no SIGEF (INCRA) na base de {f_data(sigef['data_base'])}.",
-        "pendente": " Consulta ao INCRA pendente.",
-    }.get(sigef["estado"], "")
+    n_out = "uma outorga" if len(dentro_outorga) == 1 else f"{len(dentro_outorga)} outorgas"
+    if comp:
+        app = comp["app"]
+        atencao_comp = Decimal(str(app["a_recompor_ha"])) > 0
+        rl = "nenhuma Reserva Legal declarada" if comp["reserva_legal"]["declarada"]["estado"] == "nao_encontrado" \
+            else "Reserva Legal declarada"
+        cartao_docs = (
+            "documento", "O que o dono declarou no CAR?", ("selo", "encontrado", atencao_comp),
+            f"Faixa de proteção{' ' + em_volta if em_volta else ''} (APP) de {f_ha(app['total_ha'])}, com "
+            f"{f_ha(app['a_recompor_ha'])} a recompor, e {rl}. O CAR não prova quem é o dono.",
+            f"APP de {f_ha(app['total_ha'])}, {f_ha(app['a_recompor_ha'])} a recompor; {rl}. O CAR não prova o dono.", 5)
+        agua_cad = Decimal(str(comp["agua_declarada_ha"]))
+        lagoa = "uma lagoa" if em_volta == "da lagoa" else "água"
+        agua_longo = (f"Há {lagoa} declarada no CAR, com {f_ha(agua_cad)} de água, e {n_out} do IGAM para poço dentro do "
+                      f"imóvel. Nos poços da região, a água fica a uns {f_metros(nivel)}.")
+        agua_curto = (f"{lagoa.capitalize()} com {f_ha(agua_cad)} no CAR e {n_out} de poço; nos poços da região, água a "
+                      f"uns {f_metros(nivel)}.")
+    else:
+        cartao_docs = ("documento", "O que os documentos provam?", ("informativo",),
+                       "O CAR mostra onde fica e o que foi declarado; não prova quem é o dono.",
+                       "O CAR não prova quem é o dono.", 5)
+        agua_longo = (f"Nos poços cadastrados da região, a água costuma estar a uns {f_metros(nivel)}. Há {n_out} do "
+                      "IGAM para poço dentro do imóvel.")
+        agua_curto = f"Água a uns {f_metros(nivel)} nos poços da região; {n_out} dentro do imóvel."
     cartoes = [
-        ("folha", "Tem desmatamento registrado?", ("encontrado", atencao_prodes),
-         f"Sim. Vegetação nativa retirada em {f_pct(pct_dentro)} da área entre {anos_maior}. Depois de 31/07/2019, "
-         f"só uma faixa de {f_ha(recente['area_inside_ha'])} na divisa, em {recente['year']}.",
-         f"Sim. {f_pct(pct_dentro)} da área, entre {anos_maior}; 1 registro na divisa depois de 31/07/2019.", 3),
-        ("carimbo", "Tem embargo ou auto de infração no local?", (pior(estados_embargo), False),
+        ("folha", "Tem desmatamento registrado?", ("selo", "encontrado", atencao_prodes),
+         f"Sim. Vegetação nativa retirada em {f_pct(pct_dentro)} da área entre {anos_maior}{periodo_lei}. Depois de "
+         f"31/07/2019, só {f_ha(recente['area_inside_ha'])} na divisa, em {recente['year']}.",
+         f"Sim. {f_pct(pct_dentro)} da área, entre {anos_maior}{periodo_lei}; {f_ha(recente['area_inside_ha'])} na "
+         f"divisa em {recente['year']}.", 3),
+        ("carimbo", "Tem embargo ou auto de infração no local?", ("selo", pior(estados_embargo), False),
          "Não. Nenhum embargo do IBAMA ou do ICMBio no mapa de embargos sobre a área, nem auto de infração do "
          "IBAMA com local dentro dela.",
          "Não. Nenhum embargo no mapa do IBAMA ou do ICMBio, nem auto com local no imóvel.", 4),
-        ("escudo", "Está em área protegida ou tem mineração?", (pior(estados_area), False),
-         "Não. Fora de terra indígena, unidade de conservação, território quilombola, assentamento e floresta "
-         "pública. Nenhum processo de mineração na ANM.",
-         "Não. Fora das áreas protegidas consultadas; nenhum processo de mineração na ANM.", 4),
-        ("documento", "O que os documentos provam?", None,
-         "O CAR mostra onde fica e o que foi declarado; não prova quem é o dono." + sigef_frase,
-         "O CAR não prova quem é o dono." + sigef_curta, 5),
-        ("gota", "Tem água?", None,
-         f"Nos poços cadastrados da região, a água costuma estar a uns {f_metros(nivel)}. Há "
-         f"{'uma outorga' if len(dentro_outorga) == 1 else f'{len(dentro_outorga)} outorgas'} do IGAM para poço "
-         "dentro do imóvel.",
-         f"Água a uns {f_metros(nivel)} nos poços da região; {len(dentro_outorga)} outorga dentro do imóvel.", 6),
-        ("broto", "Como é a terra e o clima?", None,
+        ("escudo", "Está em terra indígena ou unidade de conservação, ou tem mineração?",
+         ("selo", pior(estados_area), False),
+         "Não. Também fora de território quilombola, assentamento e floresta pública; nenhum processo na ANM.",
+         "Não. Nem quilombola, assentamento, floresta pública ou processo na ANM.", 4),
+        cartao_docs,
+        ("gota", "Tem água?", ("informativo",), agua_longo, agua_curto, 6),
+        ("broto", "Como é a terra e o clima?", ("informativo",),
          f"{nomes_uso.get(classes_uso[principal]['classe'], 'uso').capitalize()} na maior parte "
          f"({pcts_uso[principal]}%), terreno {terreno}, solo {SOLO_ADJETIVO[solo['classe_textural']]}. Chove de {ch_de} a "
          f"{ch_ate}; quase nada de {se_de} a {se_ate}.",
@@ -983,22 +1204,41 @@ def pagina_1(c, L: Leitura, grade: bool) -> float:
          f"chuvas de {ch_de} a {ch_ate}.", 7),
     ]
     card_w, card_h = G.col2, 27 * mm
+    larg_pergunta = card_w - 7.5 * mm
 
     def montar_cartao(dados):
-        nome_ic, pergunta, selo, longo, curto, pag = dados
+        nome_ic, pergunta, situacao_c, longo, curto, pag = dados
+        tit = texto(pergunta, "painel_pergunta", larg_pergunta)
+        if tit.linhas > 2:
+            raise LayoutError(f"cartão '{pergunta}': pergunta com mais de 2 linhas")
+        max_linhas = 3 if tit.linhas == 1 else 2
         ref = f' <font name="Sans-Sb" size="8.6" color="{st.HEX["FOREST"]}">→&nbsp;pág.&nbsp;{pag}</font>'
         for modelo in (longo, curto):
             t = texto(modelo + ref, "painel_resposta", card_w, registrar=False)
-            if t.linhas <= 3:
+            if t.linhas <= max_linhas:
                 REGISTRO.append((1, modelo))
-                REGISTRO.append((1, pergunta))
-                return nome_ic, pergunta, selo, t
-        raise LayoutError(f"cartão '{pergunta}': o texto curto passa de 3 linhas")
+                return nome_ic, tit, situacao_c, t
+        raise LayoutError(f"cartão '{pergunta}': o texto curto passa de {max_linhas} linhas")
 
     cartoes_t = [montar_cartao(d) for d in cartoes]
 
+    def situacao_do_cartao(c, x, y, situacao_c):
+        if situacao_c[0] == "selo":
+            st.desenhar_selo(c, x, y, situacao_c[1], situacao_c[2])
+            return
+        # sem fato de estado: linha neutra, sem círculo (o círculo é só dos três estados)
+        c.saveState()
+        c.setStrokeColor(COR["MUTED"])
+        c.setLineWidth(1)
+        c.setLineCap(1)
+        c.line(x + 0.5 * mm, y + st.SELO_ALTURA / 2, x + st.SELO_DIAMETRO - 0.5 * mm, y + st.SELO_ALTURA / 2)
+        c.restoreState()
+        cap = altura_maiuscula(st.ESTILO["selo_rotulo"].fontName, st.ESTILO["selo_rotulo"].fontSize)
+        rotulo(c, x + st.SELO_DIAMETRO + st.SELO_ESPACO, y + st.SELO_ALTURA / 2 - cap / 2, "Informativo", "selo_rotulo",
+               COR["INK2"])
+
     def painel(c, x, y_topo, h):
-        for i, (nome_ic, pergunta, selo, resp) in enumerate(cartoes_t):
+        for i, (nome_ic, tit, situacao_c, resp) in enumerate(cartoes_t):
             col, lin = i % 2, i // 2
             cx = x + col * (card_w + G.calha)
             cy = y_topo - lin * (card_h + G.us(1))
@@ -1008,31 +1248,31 @@ def pagina_1(c, L: Leitura, grade: bool) -> float:
             c.line(cx, cy, cx + card_w, cy)
             c.restoreState()
             y = cy - 1.4 * mm
-            if selo:
-                st.desenhar_selo(c, cx, y - 4.2 * mm, *selo)
-            y -= 4.2 * mm + 1 * mm
+            situacao_do_cartao(c, cx, y - st.SELO_ALTURA, situacao_c)
+            y -= st.SELO_ALTURA + 1 * mm
             icone(c, nome_ic, cx, y - 6 * mm + 0.6 * mm, 6 * mm, COR["INK"], 1.0)
-            base = y - 4.6 * mm + 0.9 * mm
-            c.saveState()
-            c.setFont("Sans-Sb", 10.5)
-            c.setFillColor(COR["INK"])
-            c.drawString(cx + 7.5 * mm, base, pergunta)
-            c.restoreState()
-            y -= 4.6 * mm + 1.4 * mm
+            y -= tit.desenhar(c, cx + 7.5 * mm, y + 0.4 * mm) + 1.2 * mm
             resp.desenhar(c, cx, y)
 
     blocos.append(Bloco("painel", 3 * card_h + 2 * G.us(1), painel, espaco=1))
 
     # --- o que isso significa para você, com a nota da consulta, ancorada no pé -----------
-    antes_2008 = all(o["periodo_legal"] == "ate_2008_07_22" for o in dentro)
+    lei_2008 = ("a retirada dentro é anterior a 22/07/2008, data que a lei usa para área já em uso. "
+                if antes_2008 else "")
+    depois = (f"Depois, a APP a recompor (pág. 5). "
+              if comp and Decimal(str(comp["app"]["a_recompor_ha"])) > 0 else "")
+    respondidos = {k: L.fato(k)["estado"] in ("encontrado", "nao_encontrado")
+                   for k in ("alertas_mensais", "sitio_arqueologico", "armazens")}
+    em_volta_itens = [nome for chave, nome in (("sitio_arqueologico", "sítios arqueológicos"), ("armazens", "armazéns"))
+                      if respondidos[chave]]
+    amplitude = ""
+    if respondidos["alertas_mensais"] and em_volta_itens:
+        amplitude = f"Vimos ainda alertas recentes (pág. 3), {' e '.join(em_volta_itens)} (pág. 10). "
     alt_cx, des_cx = caixa_significado([
-        (None, "Comece pelo desmatamento (pág. 3): "
-               + ("a retirada dentro do imóvel é anterior a 22/07/2008, " if antes_2008 else "")
-               + f"e a faixa de {recente['year']} na divisa pode aparecer na conferência do crédito rural, que "
-               f"começa em {f_data(L.valor('regra_credito')['inicio_exigencia'])}. "
-               f"Consultas feitas em {f_data_brasilia(emitido)} em bases públicas oficiais; não substituem certidão "
-               "de cartório, vistoria ou laudo técnico."),
-    ], corrido=True)
+        (None, f"Comece pelo desmatamento (pág. 3): {lei_2008}{depois}{amplitude}"
+               f"Consultas de {f_data_brasilia(emitido)} em bases públicas oficiais; não substituem certidão de "
+               "cartório, vistoria ou laudo."),
+    ])
     blocos.append(Bloco("significado", alt_cx, des_cx, espaco=1, ancorar=True))
     ocupacao = compor(c, blocos, 1, grade)
     marca(c)
@@ -1046,6 +1286,22 @@ def pagina_1(c, L: Leitura, grade: bool) -> float:
 PERIODO_COR = {"ate_2008_07_22": "PRODES_ATE_2008", "ate_2019_07_31": "PRODES_ATE_2019",
                "depois_2019_07_31": "PRODES_DEPOIS_2019"}
 PERIODO_ORDEM = {"depois_2019_07_31": 3, "ate_2019_07_31": 2, "ate_2008_07_22": 1}
+PERIODO_ROTULO = {"ate_2008_07_22": "até 22/07/2008", "ate_2019_07_31": "de 23/07/2008 a 31/07/2019",
+                  "depois_2019_07_31": "depois de 31/07/2019"}
+RESOLUCAO_SATELITE_M = {"Landsat": 30, "Sentinel": 10, "CBERS": 20}
+
+
+def f_intervalo(o: dict) -> str:
+    """Período em que a retirada foi percebida: da imagem anterior à imagem do ano (regra 3.4-3); sem a imagem
+    anterior, só o ano."""
+    if o.get("prev_image_date"):
+        return f"{f_mes_ano_curto(o['prev_image_date'])} a {f_mes_ano_curto(o['image_date'])}"
+    return str(o["year"])
+
+
+def rodape_capitulo(p: dict, site: str) -> str:
+    return (f"CAR {p['property']['car_code'][:11]}…{p['property']['car_code'][-8:]} · emitido em "
+            f"{f_data_brasilia(p['generated_at'])} · {site}")
 
 
 def pagina_3(c, L: Leitura, grade: bool) -> float:
@@ -1057,21 +1313,24 @@ def pagina_3(c, L: Leitura, grade: bool) -> float:
     area = Decimal(str(p["property"]["area_ha"]))
     bioma = L.valor("bioma")["bioma"]
     dentro = [o for o in occ if o["classe"] == "dentro"]
-    divisa = [o for o in occ if o["classe"] == "divisa"]
+    divisa = sorted([o for o in occ if o["classe"] == "divisa"], key=lambda o: o["image_date"])
+    numero = {o["id"]: i + 1 for i, o in enumerate(divisa)}  # chamadas 1, 2, 3 na ordem do tempo
     pos2019 = [o for o in occ if o["periodo_legal"] == "depois_2019_07_31"]
     atencao = bool(pos2019) or any(o["periodo_legal"] != "ate_2008_07_22" for o in dentro)
     maior = max(dentro, key=lambda o: o["area_inside_ha"])
     pct_d = Decimal(str(maior["area_inside_ha"])) / area * 100
-    quase_fora = all(Decimal(str(o["feature_area_ha"])) / Decimal(str(o["area_inside_ha"])) >= 10 for o in divisa)
     recente = pos2019[0]
     regra = L.valor("regra_credito")
     alertas = L.fato("alertas_mensais")
+    composicao = L.fato("composicao_car")
+    comp = composicao["valor"] if composicao["estado"] == "encontrado" else None
+    compl = COMPLEMENTO_F1.get(p["property"]["car_code"], {})
     b = L.book
     geom = b["geometry"]
     figuras = b["prodes_figuras"]
     consulta = fato["consultado_em"]
-    rodape = f"CAR {p['property']['car_code'][:11]}…{p['property']['car_code'][-8:]} · emitido em " \
-             f"{f_data_brasilia(p['generated_at'])}"
+    site = site_do_relatorio(L)
+    satelite = next((m for nome, m in RESOLUCAO_SATELITE_M.items() if all(nome in o["plataforma"] for o in occ)), None)
     blocos: list[Bloco] = []
 
     # --- cabeça -------------------------------------------------------------------
@@ -1081,13 +1340,6 @@ def pagina_3(c, L: Leitura, grade: bool) -> float:
         f"Sim. O Instituto Nacional de Pesquisas Espaciais (INPE) mapeou vegetação nativa retirada em "
         f"{f_faixa_parte(pct_d)}, {periodo}. Outras {numeros[len(divisa)]} manchas só encostam na divisa; uma é "
         f"de {recente['year']}.",
-        f"Sim. O mapa de desmatamento do Instituto Nacional de Pesquisas Espaciais (INPE) mostra a vegetação "
-        f"nativa retirada em {f_faixa_parte(pct_d)}, {periodo}. Outras {numeros[len(divisa)]} manchas"
-        f"{', quase inteiras fora do imóvel,' if quase_fora else ''} encostam na divisa; uma delas é de "
-        f"{recente['year']}, depois de 31/07/2019.",
-        f"Sim. O mapa do Instituto Nacional de Pesquisas Espaciais (INPE) mostra a vegetação nativa retirada em "
-        f"{f_faixa_parte(pct_d)}, {periodo}. Outras {numeros[len(divisa)]} manchas só encostam na divisa; uma "
-        f"é de {recente['year']}, depois de 31/07/2019.",
         f"Sim. O mapa do INPE mostra a vegetação nativa retirada em {f_faixa_parte(pct_d)}, {periodo}. Outras "
         f"{numeros[len(divisa)]} manchas só encostam na divisa; uma é de {recente['year']}, depois de 31/07/2019.",
     )
@@ -1100,51 +1352,61 @@ def pagina_3(c, L: Leitura, grade: bool) -> float:
                                ("encontrado", atencao))
     blocos.append(Bloco("cabeca", alt, des, espaco=0))
 
-    # --- mapa + legenda-tabela --------------------------------------------------------
-    ordenadas = sorted(occ, key=lambda o: (PERIODO_ORDEM[o["periodo_legal"]], o["area_inside_ha"]), reverse=True)
-    leg_w = LARG - 110 * mm - G.calha
+    # --- mapa + legenda agrupada pelos três períodos da lei --------------------------------------
+    mw = 110 * mm
+    leg_w = LARG - mw - G.calha
     destaque_valor = f_ha(maior["area_inside_ha"])
-    destaque_leg = texto(f"dentro do imóvel, {f_pct(pct_d)} da área<br/>entre {f_mes_ano_curto(maior['prev_image_date'])} "
-                         f"e {f_mes_ano_curto(maior['image_date'])}", "legenda", leg_w)
-    entradas = []
-    for o in ordenadas:
-        pct_o = Decimal(str(o["area_inside_ha"])) / area * 100
-        valores = f"{f_ha(o['area_inside_ha'])} · {f_pct(pct_o)}".replace(" ha", "&nbsp;ha")
-        if o["classe"] == "dentro":
-            linha = f"<b>{o['year']}</b> · dentro do imóvel<br/>{valores}"
-        else:
-            linha = f"<b>{o['year']}</b> · na divisa<br/>faixa de uns {f_metros(o['inner_mean_width_m'])} · {valores}"
-        entradas.append((o, texto(linha, "legenda", leg_w - 6 * mm)))
+    destaque_leg = texto(f"dentro do imóvel, {f_pct(pct_d)} da área", "legenda", leg_w)
+    grupos = []
+    for periodo_legal in sorted({o["periodo_legal"] for o in occ}, key=lambda k: PERIODO_ORDEM[k]):
+        cab = PERIODO_ROTULO[periodo_legal]
+        itens = []
+        for o in sorted([o for o in occ if o["periodo_legal"] == periodo_legal], key=lambda o: o["image_date"]):
+            pct_o = Decimal(str(o["area_inside_ha"])) / area * 100
+            if o["classe"] == "dentro":
+                linha = f"<b>{f_intervalo(o)}</b> · dentro"
+            else:
+                pedacos = o.get("pieces_inside") or 1
+                qtd = f"{pedacos} pedacinhos, " if pedacos > 1 else ""
+                linha = (f"<b>{f_intervalo(o)}</b> · na divisa<br/>{qtd}{f_ha(o['area_inside_ha'])} · "
+                         f"{f_pct(pct_o)}").replace(" ha", "&nbsp;ha")
+            itens.append((o, texto(linha, "legenda", leg_w - 6.5 * mm)))
+        grupos.append((periodo_legal, cab, itens))
     chave_car = texto("limite declarado no CAR", "legenda", leg_w - 9 * mm)
     chave_inpe = texto("mancha inteira mapeada pelo INPE", "legenda", leg_w - 9 * mm)
-    alt_leg = (11.5 * mm + destaque_leg.altura + 3 * mm + 4.5 * mm + sum(t.altura + 1.6 * mm for _, t in entradas)
-               + 1.8 * mm + chave_car.altura + chave_inpe.altura)
-    comp = f_comparar_area(recente["area_inside_ha"])
+    cab_grupo = 5.2 * mm
+    alt_leg = (11.5 * mm + destaque_leg.altura + 2.6 * mm
+               + sum(cab_grupo + sum(t.altura + 1.2 * mm for _, t in itens) for _, _, itens in grupos)
+               + 1.4 * mm * (len(grupos) - 1) + 1.6 * mm + chave_car.altura + chave_inpe.altura)
+    comp_area = f_comparar_area(recente["area_inside_ha"])
+    borda_cima = [numero[o["id"]] for o in divisa
+                  if max(n for poly in ([figuras[o["id"]]["feature_geom_m"]["coordinates"]]
+                                        if figuras[o["id"]]["feature_geom_m"]["type"] == "Polygon"
+                                        else figuras[o["id"]]["feature_geom_m"]["coordinates"])
+                         for _, n in poly[0]) >= b["base_image"]["bounds_m"][3] - 0.5]
+    nomes_divisa = ", ".join(str(numero[o["id"]]) for o in divisa[:-1]) + f" e {numero[divisa[-1]['id']]}"
+    estreitas = (f" em faixas mais estreitas que um ponto do satélite ({satelite} m)" if satelite and
+                 all(Decimal(str(o["inner_mean_width_m"])) < satelite for o in divisa) else "")
     legenda_mapa = texto(
-        f"Fundo: Sentinel-2 de {f_data(b['base_image']['date'])}, esmaecida. A mancha de {recente['year']} tem "
-        f"{f_ha(recente['feature_area_ha'])}; só {f_ha(recente['area_inside_ha'])}"
-        f"{', ' + comp + ',' if comp else ''} entram neste CAR.", "legenda", 110 * mm)
+        f"Fundo: Sentinel-2 de {f_data(b['base_image']['date'])}, esmaecida. As manchas {nomes_divisa} só encostam na "
+        f"divisa{estreitas}" + (f"; a {borda_cima[0]} sai do quadro." if borda_cima else "."),
+        "legenda", mw)
     fixo_mapa = 1.6 * mm + legenda_mapa.altura
     mola_min = max(70 * mm, alt_leg - fixo_mapa) + fixo_mapa
 
     def mapa_bloco(c, x, y_topo, h):
+        from shapely.geometry import Point, box, shape as sh_shape
+        from shapely.ops import unary_union
+
         mh = h - fixo_mapa
-        mw = 110 * mm
         lim = b["base_image"]["bounds_m"]
-        # Enquadramento das manchas: a caixa cabe o CAR e a mancha inteira de cada ocorrência, com margem,
-        # na proporção da figura; sobra à direita para a lupa não cobrir mancha nenhuma.
-        xs, ys = [], []
-        for g in [geom["car_m"]] + [f["feature_geom_m"] for f in figuras.values()]:
-            polys = [g["coordinates"]] if g["type"] == "Polygon" else g["coordinates"]
-            for poly in polys:
-                for e, n in poly[0]:
-                    xs.append(e)
-                    ys.append(n)
-        alt_m = min(lim[3] - lim[1], (max(ys) - min(ys)) + 80)
-        larg_m = max(alt_m * mw / mh, (max(xs) - min(xs)) + 300 + 600)
-        alt_m = larg_m * mh / mw
-        x_min = max(lim[0], min(min(xs) - 300, lim[2] - larg_m))
-        y_min = max(lim[1], min(min(ys) - 40, lim[3] - alt_m))
+        todas = [sh_shape(geom["car_m"])] + [sh_shape(f["feature_geom_m"]) for f in figuras.values()]
+        ux0, uy0, ux1, uy1 = unary_union(todas).bounds
+        # escala que cabe todas as manchas, com margem, deixando uma faixa à direita para a lupa
+        s = min((mw - 38 * mm) / (ux1 - ux0 + 80), mh / (uy1 - uy0 + 60))
+        larg_m, alt_m = mw / s, mh / s
+        x_min = max(lim[0], min(ux0 - 40, lim[2] - larg_m))
+        y_min = max(lim[1], min((uy0 + uy1) / 2 - alt_m / 2, lim[3] - alt_m))
         caixa = (x_min, y_min, x_min + larg_m, y_min + alt_m)
         mapa = Mapa(x, y_topo - mh, mw, mh, caixa)
         c.saveState()
@@ -1154,26 +1416,73 @@ def pagina_3(c, L: Leitura, grade: bool) -> float:
         mapa.imagem(c, L.imagem(b["base_image"]["path_muted"]), lim)
         desenhar_manchas(c, mapa, occ, figuras, geom)
         c.restoreState()
-        # lupa na ocorrência de divisa depois de 31/07/2019
-        alvo = figuras[recente["id"]]["inside_geom_m"]
-        pts = [pt for poly in ([alvo["coordinates"]] if alvo["type"] == "Polygon" else alvo["coordinates"])
-               for pt in poly[0]]
-        ce = (min(e for e, _ in pts) + max(e for e, _ in pts)) / 2
-        cn = (min(n for _, n in pts) + max(n for _, n in pts)) / 2
-        r = 15 * mm
-        lx, ly = x + mw - r - 4 * mm, y_topo - mh + r + 4 * mm
+
+        def na_pagina(g):
+            from shapely.ops import transform as sh_transform
+            return sh_transform(lambda e, n, z=None: mapa.pt(e, n), g)
+
+        ocupado = unary_union([na_pagina(g) for g in todas])
+        pilula_esc = box(x, y_topo - mh, x + 42 * mm, y_topo - mh + 12 * mm)
+
+        # chamadas numeradas nas manchas da divisa (a última vai para a lupa)
+        car_c = na_pagina(sh_shape(geom["car_m"])).centroid
+        chamadas = []
+        for o in divisa:
+            if o["id"] == recente["id"]:
+                continue
+            alvo = na_pagina(sh_shape(figuras[o["id"]]["inside_geom_m"])).centroid
+            dx, dy = alvo.x - car_c.x, alvo.y - car_c.y
+            norma = math.hypot(dx, dy) or 1
+            mx = min(max(alvo.x + dx / norma * 8 * mm, x + 4 * mm), x + mw - 4 * mm)
+            my = min(max(alvo.y + dy / norma * 8 * mm, y_topo - mh + 4 * mm), y_topo - 4 * mm)
+            chamadas.append((o, alvo, mx, my))
+
+        # lupa na ocorrência depois de 31/07/2019: posição que menos cobre manchas e chamadas
+        alvo_g = sh_shape(figuras[recente["id"]]["inside_geom_m"])
+        ce, cn = alvo_g.centroid.x, alvo_g.centroid.y
         tx, ty = mapa.pt(ce, cn)
+        r = 15 * mm
+        candidatos = []
+        passo = 3 * mm
+        yy = y_topo - mh + r + 3 * mm
+        while yy <= y_topo - r - 8 * mm:
+            candidatos.append((x + mw - r - 3 * mm, yy))
+            yy += passo
+        xx = x + 46 * mm + r
+        while xx <= x + mw - r - 3 * mm:
+            candidatos.append((xx, y_topo - mh + r + 3 * mm))
+            xx += passo
+        evitar = unary_union([ocupado.buffer(1.2 * mm), pilula_esc]
+                             + [Point(mx, my).buffer(3 * mm) for _, _, mx, my in chamadas])
+
+        def custo(ponto):
+            circ = Point(ponto).buffer(r + 1 * mm)
+            rot = box(ponto[0] - 26 * mm, ponto[1] + r, ponto[0] + 26 * mm, ponto[1] + r + 7 * mm)
+            return (circ.intersection(evitar).area + rot.intersection(evitar).area,
+                    math.hypot(ponto[0] - tx, ponto[1] - ty))
+
+        lx, ly = min(candidatos, key=custo)
+        for o, alvo, mx, my in chamadas:
+            cor = COR[PERIODO_COR[o["periodo_legal"]]]
+            c.saveState()
+            c.setStrokeColor(COR["INK"])
+            c.setLineWidth(0.6)
+            ang = math.atan2(alvo.y - my, alvo.x - mx)
+            c.line(mx + 2.1 * mm * math.cos(ang), my + 2.1 * mm * math.sin(ang), alvo.x, alvo.y)
+            c.restoreState()
+            marcador_numero(c, mx, my, numero[o["id"]], cor)
         c.saveState()
         c.setStrokeColor(COR["INK"])
-        c.setLineWidth(0.5)
+        c.setLineWidth(1)
         ang = math.atan2(ty - ly, tx - lx)
         c.line(lx + r * math.cos(ang), ly + r * math.sin(ang), tx - 2.2 * mm * math.cos(ang),
                ty - 2.2 * mm * math.sin(ang))
-        c.setLineWidth(0.7)
+        c.setLineWidth(0.8)
         c.circle(tx, ty, 2.2 * mm, stroke=1, fill=0)
         c.restoreState()
-        escala_lupa = (2 * r - 6 * mm) / max(90.0, max(e for e, _ in pts) - min(e for e, _ in pts) + 30)
-        lado_m = 2 * r / escala_lupa
+        pedacos = alvo_g.geoms if alvo_g.geom_type == "MultiPolygon" else [alvo_g]
+        ex0, ey0, ex1, ey1 = alvo_g.bounds
+        lado_m = max(90.0, ex1 - ex0 + 30, ey1 - ey0 + 30)
         mapa_l = Mapa(lx - r, ly - r, 2 * r, 2 * r, (ce - lado_m / 2, cn - lado_m / 2, ce + lado_m / 2, cn + lado_m / 2))
         c.saveState()
         c.setFillColor(COR["PAPER"])
@@ -1182,18 +1491,47 @@ def pagina_3(c, L: Leitura, grade: bool) -> float:
         clip.circle(lx, ly, r)
         c.clipPath(clip, stroke=0, fill=0)
         mapa_l.imagem(c, L.imagem(b["base_image"]["path_muted"]), lim)
-        desenhar_manchas(c, mapa_l, [recente], {recente["id"]: figuras[recente["id"]]}, geom, fino=True)
+        c.setFillColor(COR["PAPER"])
+        c.setFillAlpha(0.72)  # foto a ~30%: o fundo não disputa com as células
+        c.rect(lx - r, ly - r, 2 * r, 2 * r, stroke=0, fill=1)
+        c.setFillAlpha(1)
+        c.setStrokeColor(COR["INK2"])
+        c.setLineWidth(0.7)
+        c.setDash(1.6, 1.2)
+        c.drawPath(caminho_geom(c, figuras[recente["id"]]["feature_geom_m"], mapa_l), stroke=1, fill=0)
+        c.setDash()
+        c.setFillColor(COR[PERIODO_COR[recente["periodo_legal"]]])
+        c.setStrokeColor(COR["INK"])
+        c.setLineWidth(0.5)
+        for peca in pedacos:
+            c.drawPath(caminho_geom(c, {"type": "Polygon", "coordinates": [list(peca.exterior.coords)]}, mapa_l),
+                       stroke=1, fill=1)
+        c.setStrokeColor(COR["INK"])
+        c.setLineWidth(1.4)
+        c.setLineJoin(1)
+        c.drawPath(caminho_geom(c, geom["car_m"], mapa_l), stroke=1, fill=0)
         c.restoreState()
         c.saveState()
         c.setStrokeColor(COR["INK"])
         c.setLineWidth(0.8)
         c.circle(lx, ly, r, stroke=1, fill=0)
         c.restoreState()
-        rotulo_lupa = f"{recente['year']} · faixa de uns {f_metros(recente['inner_mean_width_m'])}"
-        wl = pdfmetrics.stringWidth(rotulo_lupa, "Sans-Sb", 7.8) + 4 * mm
-        pilula(c, lx - wl / 2, ly + r + 1.2 * mm, wl, 4.6 * mm, 0.95)
-        linha_simples(c, lx, ly + r + 2.7 * mm, rotulo_lupa, "Sans-Sb", 7.8, COR["INK"], "centro")
-        escala_e_norte(c, mapa, x + 3 * mm, y_topo - mh + 3 * mm)
+        n_pecas = recente.get("pieces_inside") or len(pedacos)
+        rotulo_lupa = (f"{recente['year']} · {n_pecas} pedacinhos, {f_ha(recente['area_inside_ha'])} no total"
+                       if n_pecas > 1 else f"{recente['year']} · {f_ha(recente['area_inside_ha'])}")
+        if comp_area:  # D2: o tamanho que dá para imaginar
+            rotulo_lupa += " (" + comp_area.replace("mais ou menos o tamanho de ", "≈ ").replace("menor que ", "< ") + ")"
+        wt = pdfmetrics.stringWidth(rotulo_lupa, "Sans-Sb", ANOT)
+        wl = wt + 4.2 * mm + 4.5 * mm
+        xp = min(max(lx - wl / 2, x + 2 * mm), x + mw - 2 * mm - wl)  # a pílula não sai do mapa
+        yp = ly + r + 1.2 * mm if ly + r + 7 * mm <= y_topo else ly - r - 6.6 * mm
+        pilula(c, xp, yp, wl, 5.4 * mm, 0.95)
+        marcador_numero(c, xp + 3.3 * mm, yp + 2.7 * mm, numero[recente["id"]],
+                        COR[PERIODO_COR[recente["periodo_legal"]]], raio=1.9 * mm)
+        REGISTRO.append((3, rotulo_lupa))
+        linha_simples(c, xp + 6.2 * mm, yp + 2.7 * mm - altura_maiuscula("Sans-Sb", ANOT) / 2,
+                      rotulo_lupa, "Sans-Sb", ANOT, COR["INK"])
+        escala_e_norte(c, mapa, x + 2.5 * mm, y_topo - mh + 2.5 * mm)
         legenda_mapa.desenhar(c, x, y_topo - mh - 1.6 * mm)
 
         # coluna da legenda
@@ -1215,24 +1553,32 @@ def pagina_3(c, L: Leitura, grade: bool) -> float:
         c.line(xl, y, xl + leg_w, y)
         c.restoreState()
         y -= 11.5 * mm
-        y -= destaque_leg.desenhar(c, xl, y) + 3 * mm
-        c.saveState()
-        c.setStrokeColor(COR["RULE"])
-        c.setLineWidth(G.fio_fino)
-        c.line(xl, y + 1.2 * mm, xl + leg_w, y + 1.2 * mm)
-        c.restoreState()
-        rotulo(c, xl, y - altura_maiuscula("Sans-Sb", 7.8) - 0.6 * mm, "Todas as manchas", "tab_cab")
-        y -= 4.5 * mm
-        for o, t in entradas:
+        y -= destaque_leg.desenhar(c, xl, y) + 2.6 * mm
+        for k, (periodo_legal, cab, itens) in enumerate(grupos):
+            if k:
+                y -= 1.4 * mm
+            # cabeça do grupo: faixa na cor do período (a mesma da linha do tempo) com o período escrito
             c.saveState()
-            c.setFillColor(COR[PERIODO_COR[o["periodo_legal"]]])
-            c.setStrokeColor(COR["INK"])
-            c.setLineWidth(0.5 if o["periodo_legal"] != "depois_2019_07_31" else 0.6)
-            c.rect(xl, y - 4 * mm, 4 * mm, 4 * mm, stroke=1, fill=1)
+            c.setFillColor(COR[PERIODO_COR[periodo_legal]])
+            c.rect(xl, y - 4.4 * mm, leg_w, 4.4 * mm, stroke=0, fill=1)
             c.restoreState()
-            y -= t.desenhar(c, xl + 6 * mm, y + 0.6 * mm) + 1.6 * mm
-        y -= 1.8 * mm
-        # chaves de linha
+            cor_cab = COR["PAPER"] if periodo_legal != "ate_2008_07_22" else COR["INK"]
+            linha_simples(c, xl + 1.6 * mm, y - 2.2 * mm - altura_maiuscula("Sans-Sb", ANOT) / 2, cab, "Sans-Sb", ANOT,
+                          cor_cab)
+            y -= cab_grupo
+            for o, t in itens:
+                my = y - 2.1 * mm
+                if o["classe"] == "dentro":
+                    c.saveState()
+                    c.setFillColor(COR[PERIODO_COR[o["periodo_legal"]]])
+                    c.setStrokeColor(COR["INK"])
+                    c.setLineWidth(0.5)
+                    c.rect(xl + 0.2 * mm, my - 2 * mm, 4 * mm, 4 * mm, stroke=1, fill=1)
+                    c.restoreState()
+                else:
+                    marcador_numero(c, xl + 2.2 * mm, my, numero[o["id"]], COR[PERIODO_COR[o["periodo_legal"]]])
+                y -= t.desenhar(c, xl + 6.5 * mm, y + 0.4 * mm) + 1.2 * mm
+        y -= 1.6 * mm
         c.saveState()
         c.setLineCap(1)
         yy = y - 2 * mm
@@ -1255,100 +1601,103 @@ def pagina_3(c, L: Leitura, grade: bool) -> float:
         c.restoreState()
         chave_inpe.desenhar(c, xl + 9 * mm, y + 0.6 * mm)
 
-    blocos.append(Bloco("mapa", mola_min, mapa_bloco, mola=(mola_min, 100 * mm + fixo_mapa), espaco=2))
+    blocos.append(Bloco("mapa", mola_min, mapa_bloco, mola=(mola_min, 96 * mm + fixo_mapa), espaco=2))
 
-    # --- linha do tempo -------------------------------------------------------------------
+    # --- linha do tempo: uma pista para a mancha de dentro, outra para as da divisa ------------------------
     def linha_tempo(c, x, y_topo, h):
-        """Linha do tempo com a faixa dos três períodos legais nas mesmas cores das manchas do mapa."""
         ano0, ano1 = 2000, int(p["generated_at"][:4]) + 1
-        eixo_y = y_topo - 15.2 * mm
+        eixo_y = y_topo - 16.6 * mm
         faixa_h = 1.8 * mm
         faixa_topo = eixo_y - 0.9 * mm
+        cap = altura_maiuscula("Sans", ANOT)
 
         def xa(iso):
             a, m, d = (int(v) for v in iso[:10].split("-"))
             frac = (datetime(a, m, d) - datetime(a, 1, 1)).days / 365.0
             return x + (a + frac - ano0) / (ano1 - ano0) * LARG
 
-        periodos = ((f"{ano0}-01-01", "2008-07-22", "ate_2008_07_22", "até 22/07/2008"),
-                    ("2008-07-22", regra["marco"], "ate_2019_07_31", "de 23/07/2008 a 31/07/2019"),
-                    (regra["marco"], f"{ano1}-01-01", "depois_2019_07_31", "depois de 31/07/2019"))
-        for ini, fim, periodo, rot in periodos:
+        periodos = ((f"{ano0}-01-01", "2008-07-22", "ate_2008_07_22"),
+                    ("2008-07-22", regra["marco"], "ate_2019_07_31"),
+                    (regra["marco"], f"{ano1}-01-01", "depois_2019_07_31"))
+        for ini, fim, periodo_legal in periodos:
             x1, x2 = xa(ini), xa(fim)
             c.saveState()
-            c.setFillColor(COR[PERIODO_COR[periodo]])
+            c.setFillColor(COR[PERIODO_COR[periodo_legal]])
             c.rect(x1, faixa_topo - faixa_h, x2 - x1, faixa_h, stroke=0, fill=1)
             c.restoreState()
-            linha_simples(c, (x1 + x2) / 2, faixa_topo - faixa_h - 7.6 * mm, rot, "Sans-Sb", 7.8, COR["INK2"], "centro")
+            linha_simples(c, (x1 + x2) / 2, faixa_topo - faixa_h - 8 * mm, PERIODO_ROTULO[periodo_legal], "Sans-Sb",
+                          ANOT, COR["INK2"], "centro")
         c.saveState()
         c.setStrokeColor(COR["INK2"])
         c.setLineWidth(0.6)
         c.line(x, eixo_y, x + LARG, eixo_y)
         c.setStrokeColor(COR["PAPER"])
         c.setLineWidth(0.8)
-        for iso in ("2008-07-22", regra["marco"]):  # corte branco entre os períodos
+        for iso in ("2008-07-22", regra["marco"]):
             c.line(xa(iso), faixa_topo, xa(iso), faixa_topo - faixa_h)
         c.restoreState()
         for a in range(ano0, ano1 + 1, 4):
             xx = x + (a - ano0) / (ano1 - ano0) * LARG
-            alinhar = "esq" if a == ano0 else "centro"  # o primeiro ano não sai da área útil
-            linha_simples(c, xx, faixa_topo - faixa_h - 3.8 * mm, str(a), "Sans", 7.8, COR["INK2"], alinhar)
-        # marco do crédito rural: tracejado do eixo ao alto, rótulo à esquerda
+            linha_simples(c, xx, faixa_topo - faixa_h - 4 * mm, str(a), "Sans", ANOT, COR["INK2"],
+                          "esq" if a == ano0 else "centro")
         xm = xa(regra["marco"])
         c.saveState()
         c.setStrokeColor(COR["INK2"])
         c.setLineWidth(0.6)
         c.setDash(1.4, 1.2)
-        c.line(xm, faixa_topo - faixa_h, xm, y_topo - 0.6 * mm)
+        c.line(xm, faixa_topo - faixa_h, xm, y_topo - 0.4 * mm)
         c.restoreState()
-        linha_simples(c, xm - 1.4 * mm, y_topo - 3 * mm, "31/07/2019 · marco da regra do crédito rural "
-                      "(Res. CMN 5.303/2026)", "Sans", 7.8, COR["INK2"], "dir")
+        linha_simples(c, xm - 1.4 * mm, y_topo - 3.2 * mm, "31/07/2019 · marco da regra do crédito rural "
+                      "(Res. CMN 5.303/2026)", "Sans", ANOT, COR["INK2"], "dir")
+        pistas = {"dentro": eixo_y + 9.4 * mm, "divisa": eixo_y + 3.9 * mm}
         for o in sorted(occ, key=lambda o: o["image_date"]):
-            xx = xa(o["image_date"])
+            y_p = pistas[o["classe"]]
             cor = COR[PERIODO_COR[o["periodo_legal"]]]
-            if o["prev_image_date"]:  # período percebido: da imagem anterior até a data da imagem
-                c.saveState()
-                c.setStrokeColor(cor if o["periodo_legal"] != "ate_2008_07_22" else COR["SOLO_3"])
-                c.setLineWidth(2.2)
-                c.setLineCap(1)
-                c.line(xa(o["prev_image_date"]), eixo_y, xx, eixo_y)
-                c.restoreState()
+            x2 = xa(o["image_date"])
+            x1 = xa(o["prev_image_date"]) if o["prev_image_date"] else x2
+            c.saveState()
+            c.setStrokeColor(COR["RULE"])
+            c.setLineWidth(0.4)
+            for xx in {x1, x2}:
+                c.line(xx, y_p - 1.3 * mm, xx, eixo_y)
+            c.restoreState()
             c.saveState()
             if o["classe"] == "dentro":
                 c.setFillColor(cor)
                 c.setStrokeColor(COR["INK"])
                 c.setLineWidth(0.5)
-                c.circle(xx, eixo_y, 2.1 * mm, stroke=1, fill=1)
-                rot = f"{o['prev_image_date'][:4]}–{o['year']} · {f_ha(o['area_inside_ha'])} dentro"
-                nivel, fonte = 8.6 * mm, "Sans-Sb"
-            else:
+                c.roundRect(x1, y_p - 1.3 * mm, max(x2 - x1, 2.6 * mm), 2.6 * mm, 1.3 * mm, stroke=1, fill=1)
+            elif x2 > x1:
                 c.setFillColor(COR["PAPER"])
-                c.setStrokeColor(cor if o["periodo_legal"] != "ate_2008_07_22" else COR["SOLO_3"])
-                c.setLineWidth(1.6)
-                c.circle(xx, eixo_y, 1.3 * mm, stroke=1, fill=1)
-                rot = f"{o['year']} · na divisa"
-                nivel, fonte = 4.4 * mm, "Sans"
+                c.setStrokeColor(cor)
+                c.setLineWidth(1.4)
+                c.roundRect(x1, y_p - 1 * mm, x2 - x1, 2 * mm, 1 * mm, stroke=1, fill=1)
             c.restoreState()
-            c.saveState()
-            c.setStrokeColor(COR["RULE"])
-            c.setLineWidth(0.35)
-            c.line(xx, eixo_y + 2.4 * mm, xx, eixo_y + nivel - 1 * mm)
-            c.restoreState()
-            largura = pdfmetrics.stringWidth(rot, fonte, 7.8)
-            # o rótulo não atravessa o tracejado do marco nem sai da área útil
-            cx = min(max(xx, x + largura / 2), x + LARG - largura / 2)
-            if cx - largura / 2 < xm < cx + largura / 2:
-                cx = xm + 1.4 * mm + largura / 2 if xx > xm else xm - 1.4 * mm - largura / 2
-            linha_simples(c, cx, eixo_y + nivel, rot, fonte, 7.8, COR["INK"], "centro")
+            if o["classe"] == "dentro":
+                rot = f"{f_intervalo(o)} · {f_ha(o['area_inside_ha'])} dentro do imóvel"
+                largura = pdfmetrics.stringWidth(rot, "Sans-Sb", ANOT)
+                xi = x2 + 1.8 * mm if x2 + 1.8 * mm + largura < xm - 1.4 * mm else x1 - 1.8 * mm - largura
+                REGISTRO.append((3, rot))
+                linha_simples(c, xi, y_p - cap / 2, rot, "Sans-Sb", ANOT, COR["INK"])
+            else:  # chamada numerada (a mesma do mapa e da legenda): no meio da barra longa, antes da curta, no ponto
+                if x2 - x1 >= 10 * mm or x2 == x1:
+                    marcador_numero(c, (x1 + x2) / 2, y_p, numero[o["id"]], cor)
+                else:
+                    marcador_numero(c, x1 - 2.9 * mm, y_p, numero[o["id"]], cor)
+        if divisa:
+            REGISTRO.append((3, "na divisa"))
+            linha_simples(c, x + LARG, pistas["divisa"] - cap / 2, "na divisa", "Sans", ANOT, COR["INK2"], "dir")
 
-    blocos.append(Bloco("linha_tempo", 26.5 * mm, linha_tempo, espaco=2))
+    blocos.append(Bloco("linha_tempo", 28.6 * mm, linha_tempo, espaco=1))
 
     # --- alertas recentes (D9: sem nome da fonte no corpo) ---------------------------------
     lim_alerta = re.search(r"a partir de ([\d,]+) ha", " ".join(alertas["limites"]))
-    frase_alerta = texto(f"Nenhum alerta recente nem validado sobre o imóvel em "
-                         f"{f_data_brasilia(alertas['consultado_em'])}"
-                         f"{' (alertas a partir de ' + lim_alerta.group(1) + ' ha)' if lim_alerta else ''}.",
-                         "quadro_frase", LARG)
+    desde = compl.get("alertas_desde")
+    frase_alerta = texto(
+        f"Nenhum alerta de desmatamento sobre o imóvel{' desde ' + f_mes_ano(desde) if desde else ''}, nem em análise "
+        f"nem já validado (consulta de {f_data_brasilia(alertas['consultado_em'])})."
+        + (f" Só aparecem aberturas a partir de {lim_alerta.group(1)} ha." if lim_alerta else ""),
+        "quadro_frase", LARG)
     alt_alerta = 1.6 * mm + 4.8 * mm + frase_alerta.altura + 1.6 * mm
 
     def alerta(c, x, y_topo, h):
@@ -1366,31 +1715,44 @@ def pagina_3(c, L: Leitura, grade: bool) -> float:
 
     blocos.append(Bloco("alertas", alt_alerta, alerta, espaco=1))
 
-    # --- o que isso significa para você -------------------------------------------------------
+    # --- o que isso significa para você: comprar e crédito lado a lado -----------------------------------
     antes_2008 = all(o["periodo_legal"] == "ate_2008_07_22" for o in dentro)
+    emissao = p["generated_at"][:10]
+    soma_pos = sum(Decimal(str(o["area_inside_ha"])) for o in pos2019)
+    limite = LIMITE_LISTA_MMA_HA.get(bioma)
     faixa_txt = {"ate_4": "de até 4 módulos fiscais", "4_a_15": "com mais de 4 e até 15 módulos fiscais",
                  "acima_15": "com mais de 15 módulos fiscais"}[regra["faixa_modulos"]]
-    emissao = p["generated_at"][:10]
-    verbo, quando = ("vai ter de conferir", "começa em") if emissao < regra["inicio_exigencia"] else \
-        ("deve conferir", "vale desde")
-    larguras = [f_inteiro(v) for v in sorted(Decimal(str(o["inner_mean_width_m"])) for o in divisa)]
-    itens = [
+    if emissao < regra["inicio_exigencia"]:
+        credito = (f"em imóvel {faixa_txt}, o banco só confere desmatamento recente a partir de "
+                   f"{f_data(regra['inicio_exigencia'])} (Res. CMN 5.303/2026).")
+    else:
+        credito = (f"para imóvel {faixa_txt}, como este, o banco confere desmatamento recente desde "
+                   f"{f_data(regra['inicio_exigencia'])} (Resolução CMN 5.303/2026).")
+    anos_pos = " e ".join(sorted({str(o["year"]) for o in pos2019}))
+    if limite is not None and soma_pos < limite:
+        credito += (f" Pelo método da lista oficial, os {f_ha(soma_pos)} de {anos_pos} ficam abaixo do limite de "
+                    f"{_ptbr(limite)} ha do {bioma}.")
+    elif limite is not None:
+        credito += (f" Pelo mapa do INPE, os {f_ha(soma_pos)} depois de 31/07/2019 passam do limite de "
+                    f"{_ptbr(limite)} ha do {bioma}; com juros controlados, o banco pode pedir documento.")
+    comprar = ("a retirada dentro é anterior a 22/07/2008, data que a lei usa para área já em uso" if antes_2008
+               else "")
+    if comp:
+        comprar += (f"; no CAR, o dono declarou {f_ha(comp['uso_consolidado_ha'])} de uso anterior a essa data, ainda "
+                    "sem conferência"
+                    if antes_2008 else "")
+    comprar += (". " if comprar else "") + "Na divisa, confira as cercas."
+    itens_cx = [
         (None, "Estar no mapa do INPE não é multa nem prova de irregularidade: ele mostra onde a vegetação nativa "
                "foi retirada, não se havia autorização."),
-        ("Se vai comprar:", (f"a retirada dentro do imóvel é anterior a 22/07/2008. " if antes_2008 else "")
-         + f"As faixas de {larguras[0]} a {larguras[-1]} m na divisa indicam que o limite do CAR e o do INPE não "
-           "coincidem ali."),
-        ("Se vai pedir crédito rural:",
-         f"o banco {verbo}, numa lista feita com este mapa, se houve retirada depois de 31/07/2019; para imóvel "
-         f"{faixa_txt}, como este, isso {quando} {f_data_extenso(regra['inicio_exigencia'])} (Resolução CMN "
-         f"5.303/2026). Só a faixa de {recente['year']} na divisa é posterior; se aparecer, a regra prevê "
-         "documentos, como autorização de supressão."),
+        ("Se vai comprar:", comprar[0].lower() + comprar[1:]),
+        ("Se vai pedir crédito rural:", credito),
     ]
-    alt_cx, des_cx = caixa_significado(itens)
-    blocos.append(Bloco("significado", alt_cx, des_cx, espaco=2, ancorar=True))
+    alt_cx, des_cx = caixa_significado(itens_cx, colunas=True)
+    blocos.append(Bloco("significado", alt_cx, des_cx, espaco=1, ancorar=True))
 
     ocupacao = compor(c, blocos, 3, grade)
-    st.desenhar_moldura(c, 3, TOTAL_PAGINAS, "Desmatamento", rodape)
+    st.desenhar_moldura(c, 3, TOTAL_PAGINAS, "Desmatamento", rodape_capitulo(p, site))
     return ocupacao
 
 
@@ -1435,11 +1797,31 @@ APTIDAO = {
     "4": "apta só para pasto plantado", "4(p)": "apta, com restrições, só para pasto plantado",
     "5": "apta só para floresta plantada ou pasto nativo", "6": "sem aptidão agrícola, indicada para preservação",
 }
+APTIDAO_GRUPO_LAVOURA = {"1": "boa", "2": "regular", "3": "restrita"}
 SOLO_ADJETIVO = {"muito argilosa": "muito argiloso", "argilosa": "argiloso", "média": "de textura média",
                  "siltosa": "siltoso", "arenosa": "arenoso"}
-ACIDEZ = ((Decimal("4.3"), "extremamente ácido"), (Decimal("5.3"), "fortemente ácido"),
-          (Decimal("6.5"), "moderadamente ácido"), (Decimal("7.3"), "praticamente neutro"),
-          (Decimal("8.3"), "moderadamente alcalino"))
+FAIXAS_RELEVO = {"plano": (0, 3), "suave ondulado": (3, 8), "ondulado": (8, 20), "forte ondulado": (20, 45),
+                 "montanhoso": (45, 75), "escarpado": (75, 100)}
+
+
+def f_pct_exato(x) -> str:
+    """Percentual com a casa decimal da fonte (24,5%), sem arredondar para fechar 100 (revisão, item 13)."""
+    t = _ptbr(_q(x, 1))
+    return (t[:-2] if t.endswith(",0") else t) + "%"
+
+
+def classe_textural(argila, areia) -> str:
+    """Grupamento textural do SiBCS pela argila e pela areia (%)."""
+    argila, areia = Decimal(str(argila)), Decimal(str(areia))
+    if argila > 60:
+        return "muito argilosa"
+    if argila >= 35:
+        return "argilosa"
+    if areia - argila > 70:
+        return "arenosa"
+    if areia < 15:
+        return "siltosa"
+    return "média"
 
 
 def nome_solo(classe: str) -> tuple[str, str]:
@@ -1455,6 +1837,16 @@ def nome_solo(classe: str) -> tuple[str, str]:
     return curto, explica
 
 
+def componentes_lavoura(componentes: list[str]) -> list[tuple[str, str]]:
+    """'Latossolo Vermelho 2(ab)c' → ('Latossolo Vermelho', 'regular'): só os componentes com aptidão para lavoura."""
+    saida = []
+    for comp in componentes:
+        achado = re.match(r"(.+?)\s+([123])\(?[abcABC]*\)?[abcABC]*$", comp.strip())
+        if achado:
+            saida.append((achado.group(1), APTIDAO_GRUPO_LAVOURA[achado.group(2)]))
+    return saida
+
+
 def pagina_7(c, L: Leitura, grade: bool) -> float:
     _PAGINA_ATUAL[0] = 7
     p = L.p
@@ -1465,32 +1857,31 @@ def pagina_7(c, L: Leitura, grade: bool) -> float:
     apt = L.valor("aptidao")
     eros = L.valor("erosao")
     uso = L.valor("mapbiomas")
-    rodape = f"CAR {p['property']['car_code'][:11]}…{p['property']['car_code'][-8:]} · emitido em " \
-             f"{f_data_brasilia(p['generated_at'])}"
+    celulas = celulas_declividade(L)
+    site = site_do_relatorio(L)
+    geom = L.book["geometry"]
     classes = [x for x in relevo["classes_embrapa_pct"] if Decimal(str(x["pct"])) > 0]
-    pcts = f_pct_composicao([x["pct"] for x in classes])
+    pcts = [Decimal(str(x["pct"])) for x in classes]
     suave = sum(pcts[i] for i, x in enumerate(classes) if x["classe"] in ("plano", "suave ondulado"))
+    inclinado = 100 - suave
     legal = relevo["leitura_legal_graus"]
     nada_25 = Decimal(str(legal["acima_de_25_graus_pct"])) == 0
+    m_25 = f_inteiro(Decimal(math.tan(math.radians(25)) * 100))
     camada = next(x for x in textura["camadas"] if "areia_pct" in x)
     tex = f_pct_composicao([camada["argila_pct"]["mediana"], camada["silte_pct"]["mediana"],
                             camada["areia_pct"]["mediana"]])
-    argilas = sorted({x["argila_pct"]["mediana"] for x in textura["camadas"]})
-    ph = Decimal(str(sg["ph_h2o"]))
-    acidez = next((t for teto, t in ACIDEZ if ph <= teto), "fortemente alcalino")
     unidades = sorted(solo["unidades"], key=lambda u: u["pct_mapa"], reverse=True)
     solo_adj = SOLO_ADJETIVO[textura["classe_textural"]]
     blocos: list[Bloco] = []
 
-    # --- cabeça -------------------------------------------------------------------------------
-    apt_codigos = [a["codigo"] for a in apt["classes"]]
-    sem_lavoura = all(cod.startswith(("4", "5", "6")) for cod in apt_codigos)
-    frase_apt = " O mapa de aptidão indica pasto plantado ou preservação, não lavoura." if sem_lavoura else ""
-    resposta = (
-        f"O terreno é plano ou suave ondulado em {suave}% da área{', e nada passa de 25°' if nada_25 else ''}. "
-        f"O solo é {solo_adj}.{frase_apt}",
-        f"Terreno plano ou suave ondulado em {suave}% da área{'; nada passa de 25°' if nada_25 else ''}. "
-        f"Solo {solo_adj}.{frase_apt}",
+    # --- cabeça: responde à pergunta do título -----------------------------------------------------------
+    quanto = "na maior parte" if suave >= 70 else ("em parte" if suave >= 30 else "em pouca parte")
+    resposta = (  # a página está cheia: entra primeiro o modelo de 3 linhas
+        f"Pela inclinação, dá para usar máquina {quanto}: {f_pct_exato(suave)} da área é plana ou suave ondulada. "
+        f"Cuidado nas partes mais inclinadas ({f_pct_exato(inclinado)}). O solo é {solo_adj}.",
+        f"Pela inclinação, dá para usar máquina {quanto}: o terreno é plano ou suave ondulado em "
+        f"{f_pct_exato(suave)} da área{', e nada passa de 25°' if nada_25 else ''}. Cuidado nas partes mais "
+        f"inclinadas ({f_pct_exato(inclinado)}). O solo é {solo_adj}.",
     )
     consultas = sorted({f_data_brasilia(L.fato(k)["consultado_em"]) for k in
                         ("relevo", "solo_mapa", "textura_solo", "aptidao", "erosao")})
@@ -1499,119 +1890,160 @@ def pagina_7(c, L: Leitura, grade: bool) -> float:
     alt, des = cabeca_capitulo(5, "A terra", "Dá para usar máquina? Como é o solo?", resposta, nota, "broto", None)
     blocos.append(Bloco("cabeca", alt, des, espaco=0))
 
-    # --- seção relevo: rampas no ângulo real ----------------------------------------------------
+    # --- relevo: barra 100% (principal), ícones de rampa iguais e mapa de células ---------------------------
     alt, des = cabeca_secao("Quanto o terreno inclina?", "trator")
     blocos.append(Bloco("h2_relevo", alt, des, espaco=2))
 
-    faixas = {"plano": (0, 3), "suave ondulado": (3, 8), "ondulado": (8, 20), "forte ondulado": (20, 45),
-              "montanhoso": (45, 75), "escarpado": (75, 100)}
+    esq_w = G.leitura
+    gap_col = 3 * mm
     n = len(classes)
-    painel_w = (LARG - G.calha * (n - 1)) / n
-    teto_m = max(faixas[x["classe"]][1] for x in classes)
-
-    def subida(classe):
-        de, ate = faixas[classe]
-        return f"até {ate} m a cada 100 m" if de == 0 else f"{de} a {ate} m a cada 100 m"
-
-    subidas = [texto(subida(x["classe"]), "legenda", painel_w) for x in classes]
+    col_w = (esq_w - gap_col * (n - 1)) / n
+    subidas = [texto((f"até {FAIXAS_RELEVO[x['classe']][1]}&nbsp;m em 100&nbsp;m"
+                      if FAIXAS_RELEVO[x["classe"]][0] == 0 else
+                      f"{FAIXAS_RELEVO[x['classe']][0]}–{FAIXAS_RELEVO[x['classe']][1]}&nbsp;m em 100&nbsp;m"),
+                     "legenda", col_w) for x in classes]
     alt_sub = max(t.altura for t in subidas)
-    topo_fig = 3.6 * mm + 11.5 * mm   # chave "73% ..." + fio, barra da parte e número com o nome
-    pe_fig = 3.4 * mm + 1 * mm + alt_sub  # "100 m" e a subida
+    frase_lei = texto(
+        (f"Nenhuma parte passa de 25° (tracejado: cerca de {m_25} m a cada 100 m), a inclinação a partir da qual a lei "
+         "restringe o uso (Lei 12.651/2012, art. 11)."
+         if nada_25 else "Parte do terreno passa de 25°, a inclinação a partir da qual a lei restringe o uso "
+                         "(Lei 12.651/2012, art. 11)."),
+        "legenda", esq_w)
+    tri_w = col_w - 8 * mm
+    teto_m = max(max(FAIXAS_RELEVO[x["classe"]][1] for x in classes), float(m_25) if nada_25 else 0)
+    tri_h = tri_w * teto_m / 100
+    barra_h = 7 * mm
+    topo_barra = 4.4 * mm  # chave "73% plano ou suave ondulado"
+    esq_alt = (topo_barra + barra_h + 2.4 * mm + 7.5 * mm + 4.6 * mm + 0.8 * mm + tri_h + 1.6 * mm + alt_sub
+               + 2.2 * mm + frase_lei.altura)
+    cap_mapa = texto(f"Quadrados de 30 × 30 m, nos tons da barra. Altitude de "
+                     f"{f_inteiro(relevo['altitude_min_m'])} a {f_inteiro(relevo['altitude_max_m'])} m.",
+                     "legenda", G.nota)
 
-    def rampas(c, x, y_topo, h):
-        desenho_h = h - topo_fig - pe_fig
-        base_w = painel_w - 9 * mm
-        s = min(base_w / 100, desenho_h / teto_m)  # mesma escala nos dois eixos e em todos os painéis
-        yb = y_topo - topo_fig - desenho_h
-        suaves = [i for i, cl in enumerate(classes) if cl["classe"] in ("plano", "suave ondulado")]
-        for i, cl in enumerate(classes):
-            px = x + i * (painel_w + G.calha)
-            y = y_topo - 3.6 * mm
+    def relevo_bloco(c, x, y_topo, h):
+        # chave dos suaves
+        idx_suaves = [i for i, cl in enumerate(classes) if cl["classe"] in ("plano", "suave ondulado")]
+        acumulado = [Decimal(0)]
+        for v in pcts:
+            acumulado.append(acumulado[-1] + v)
+        xb = lambda v: x + esq_w * float(v) / 100  # noqa: E731
+        yb = y_topo - topo_barra
+        if len(idx_suaves) >= 2:
+            x1, x2 = xb(acumulado[idx_suaves[0]]), xb(acumulado[idx_suaves[-1] + 1])
             c.saveState()
-            c.setStrokeColor(COR["INK"])
+            c.setStrokeColor(COR["FOREST"])
             c.setLineWidth(0.8)
-            c.line(px, y, px + painel_w, y)
-            c.setFillColor(COR["SOLO_3"])
-            c.rect(px, y - 1.4 * mm, painel_w * pcts[i] / 100, 1.4 * mm, stroke=0, fill=1)
+            c.line(x1, y_topo - 2 * mm, x2, y_topo - 2 * mm)
+            c.line(x1, y_topo - 2 * mm, x1, y_topo - 3.4 * mm)
+            c.line(x2, y_topo - 2 * mm, x2, y_topo - 3.4 * mm)
             c.restoreState()
-            valor = f"{pcts[i]}%"
-            linha_simples(c, px, y - 9.6 * mm, valor, "Disp", 22, COR["INK"])
-            wv = pdfmetrics.stringWidth(valor, "Disp", 22)
-            linha_simples(c, px + wv + 1.6 * mm, y - 9.6 * mm, cl["classe"], "Sans-Sb", 10, COR["INK"])
-            # triângulo no ângulo real do limite de cima da faixa: sobe "ate" metros em 100 m
-            ate = faixas[cl["classe"]][1]
+            rot = f"{f_pct_exato(suave)} plano ou suave ondulado"
+            wl = st.largura_espacejada(rot, "kicker") + 3 * mm
             c.saveState()
-            c.setStrokeColor(COR["RULE"])
-            c.setLineWidth(0.35)
-            c.line(px, yb, px + 100 * s, yb)
-            c.setFillColor(COR["SOLO_2"])
+            c.setFillColor(COR["PAPER"])
+            c.rect((x1 + x2) / 2 - wl / 2, y_topo - 3.6 * mm, wl, 3.6 * mm, stroke=0, fill=1)
+            c.restoreState()
+            rotulo(c, (x1 + x2) / 2, y_topo - 2 * mm - altura_maiuscula("Sans-Sb", PISO_PT) / 2, rot, "kicker",
+                   COR["FOREST"], "centro")
+        # barra 100%
+        for i, cl in enumerate(classes):
+            tom = HexColor(TONS_RELEVO[cl["classe"]])
+            x0, x1 = xb(acumulado[i]), xb(acumulado[i + 1])
+            c.saveState()
+            c.setFillColor(tom)
+            c.rect(x0, yb - barra_h, x1 - x0, barra_h, stroke=0, fill=1)
+            c.restoreState()
+            rot = f_pct_exato(pcts[i])
+            if pdfmetrics.stringWidth(rot, "Sans-Sb", ANOT) + 2.4 * mm <= x1 - x0:
+                escuro = i >= 2
+                linha_simples(c, x0 + 1.2 * mm, yb - barra_h / 2 - altura_maiuscula("Sans-Sb", ANOT) / 2, rot,
+                              "Sans-Sb", ANOT, COR["PAPER"] if escuro else COR["INK"])
+        c.saveState()
+        c.setStrokeColor(COR["PAPER"])
+        c.setLineWidth(0.8)
+        for v in acumulado[1:-1]:
+            c.line(xb(v), yb - barra_h, xb(v), yb)
+        c.restoreState()
+        # colunas: tom, número, nome, ícone da rampa no ângulo real (mesma caixa e escala) e subida
+        y_col = yb - barra_h - 2.4 * mm
+        s = tri_w / 100
+        for i, cl in enumerate(classes):
+            tom = HexColor(TONS_RELEVO[cl["classe"]])
+            px = x + i * (col_w + gap_col)
+            c.saveState()
+            c.setFillColor(tom)
+            c.setStrokeColor(COR["INK"])
+            c.setLineWidth(0.4)
+            c.rect(px, y_col - 5.6 * mm, 3.2 * mm, 3.2 * mm, stroke=1, fill=1)
+            c.restoreState()
+            REGISTRO.append((7, f_pct_exato(pcts[i])))
+            linha_simples(c, px + 4.6 * mm, y_col - 5.6 * mm, f_pct_exato(pcts[i]), "Disp", 19, COR["INK"])
+            linha_simples(c, px, y_col - 7.5 * mm - 3.6 * mm, cl["classe"], "Sans-Sb", 9.6, COR["INK"])
+            base = y_col - 7.5 * mm - 4.6 * mm - 0.8 * mm - tri_h
+            ate = FAIXAS_RELEVO[cl["classe"]][1]
+            c.saveState()
+            c.setFillColor(tom)
             c.setStrokeColor(COR["INK"])
             c.setLineWidth(0.6)
             c.setLineJoin(1)
             tri = c.beginPath()
-            tri.moveTo(px, yb)
-            tri.lineTo(px + 100 * s, yb)
-            tri.lineTo(px + 100 * s, yb + ate * s)
+            tri.moveTo(px, base)
+            tri.lineTo(px + 100 * s, base)
+            tri.lineTo(px + 100 * s, base + ate * s)
             tri.close()
             c.drawPath(tri, stroke=1, fill=1)
             c.restoreState()
-            linha_simples(c, px + 100 * s + 1 * mm, yb + max(0, ate * s / 2 - 1.2 * mm), f"{ate} m", "Sans", 7.8,
-                          COR["INK2"])
-            linha_simples(c, px + 50 * s, yb - 3 * mm, "100 m", "Sans", 7.8, COR["INK2"], "centro")
-            subidas[i].desenhar(c, px, yb - 3.4 * mm - 1 * mm)
-        if len(suaves) >= 2:
-            x1 = x + suaves[0] * (painel_w + G.calha)
-            x2 = x + suaves[-1] * (painel_w + G.calha) + painel_w
-            c.saveState()
-            c.setStrokeColor(COR["FOREST"])
-            c.setLineWidth(0.8)
-            c.line(x1, y_topo - 0.2 * mm, x2, y_topo - 0.2 * mm)
-            c.line(x1, y_topo - 0.2 * mm, x1, y_topo - 1.6 * mm)
-            c.line(x2, y_topo - 0.2 * mm, x2, y_topo - 1.6 * mm)
-            c.restoreState()
-            rot = f"{suave}% plano ou suave ondulado"
-            wl = st.largura_espacejada(rot, "kicker") + 3 * mm
-            c.saveState()
-            c.setFillColor(COR["PAPER"])
-            c.rect((x1 + x2) / 2 - wl / 2, y_topo - 1.8 * mm, wl, 3.4 * mm, stroke=0, fill=1)
-            c.restoreState()
-            rotulo(c, (x1 + x2) / 2, y_topo - 1.2 * mm, rot, "kicker", COR["FOREST"], "centro")
-
-    alt_min = topo_fig + pe_fig + 13 * mm
-    blocos.append(Bloco("rampas", alt_min, rampas, mola=(alt_min, topo_fig + pe_fig + 22 * mm), espaco=1))
-
-    corpo_relevo = (("Nenhuma parte passa de 25°, inclinação a partir da qual a lei restringe o uso "
-                     "(Lei 12.651/2012, art. 11). " if nada_25 else "")
-                    + "A inclinação é um dos fatores para usar máquina; quem confirma é a visita.")
-    corpo_t = texto(corpo_relevo, "corpo", G.leitura)
-    alt_leg = texto("modelo de terreno de 30 m; não substitui levantamento topográfico", "legenda", G.nota - 3 * mm)
-    altitude = f"{f_inteiro(relevo['altitude_min_m'])} a {f_inteiro(relevo['altitude_max_m'])} m"
-    alt_relevo = max(corpo_t.altura, 4.2 * mm + 8 * mm + alt_leg.altura)
-
-    def texto_relevo(c, x, y_topo, h):
-        corpo_t.desenhar(c, x, y_topo)
-        xn = x + G.leitura + G.calha
+            linha_simples(c, px + 100 * s + 1 * mm, base + max(0, ate * s - altura_maiuscula("Sans", ANOT)), f"{ate} m",
+                          "Sans", ANOT, COR["INK2"])
+            if nada_25 and i == n - 1:
+                c.saveState()
+                c.setStrokeColor(COR["TERRA"])
+                c.setLineWidth(0.8)
+                c.setDash(1.4, 1.1)
+                c.line(px, base, px + 100 * s, base + float(m_25) * s)
+                c.restoreState()
+                linha_simples(c, px + 30 * s, base + 30 * float(m_25) / 100 * s + 1.4 * mm, "25°", "Sans-Sb", ANOT,
+                              COR["TERRA"], "dir")
+            subidas[i].desenhar(c, px, base - 1.6 * mm)
+        frase_lei.desenhar(c, x, y_topo - esq_alt + frase_lei.altura)
+        # mapa de células de 30 m (resolução honesta), nos mesmos tons
+        xn = x + esq_w + G.calha
+        rotulo(c, xn, y_topo - altura_maiuscula("Sans-Sb", PISO_PT), "Onde inclina mais", "tab_cab")
+        topo_m = y_topo - 4.6 * mm
+        disp_h = h - 4.6 * mm - 1.6 * mm - cap_mapa.altura
+        car_pts = [pt for anel in geom["car_m"]["coordinates"] for pt in anel] if geom["car_m"]["type"] == "Polygon" \
+            else [pt for poli in geom["car_m"]["coordinates"] for anel in poli for pt in anel]
+        xs = [e for cel in celulas for e, _ in cel["anel_m"]] + [e for e, _ in car_pts]
+        ys = [nn for cel in celulas for _, nn in cel["anel_m"]] + [nn for _, nn in car_pts]
+        esc = min(G.nota / (max(xs) - min(xs)), disp_h / (max(ys) - min(ys)))
+        w_m, h_m = G.nota / esc, disp_h / esc
+        cx, cy = (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2
+        mapa = Mapa(xn, topo_m - disp_h, G.nota, disp_h, (cx - w_m / 2, cy - h_m / 2, cx + w_m / 2, cy + h_m / 2))
         c.saveState()
-        c.setStrokeColor(COR["RULE"])
-        c.setLineWidth(G.fio_fino)
-        c.line(xn, y_topo, xn, y_topo - h)
+        c.setStrokeColor(COR["PAPER"])
+        c.setLineWidth(0.35)
+        for cel in celulas:
+            c.setFillColor(HexColor(TONS_RELEVO[cel["classe"]]))
+            anel = cel["anel_m"]
+            c.drawPath(caminho_geom(c, {"type": "Polygon", "coordinates": [anel + [anel[0]]]}, mapa), stroke=1, fill=1)
+        c.setStrokeColor(COR["INK"])
+        c.setLineWidth(1.1)
+        c.setLineJoin(1)
+        c.drawPath(caminho_geom(c, geom["car_m"], mapa), stroke=1, fill=0)
         c.restoreState()
-        rotulo(c, xn + 3 * mm, y_topo - altura_maiuscula("Sans-Sb", 7.8) - 0.3 * mm, "Altitude", "tab_cab")
-        linha_simples(c, xn + 3 * mm, y_topo - 4.2 * mm - 6.2 * mm, altitude, "Disp", 18, COR["INK"])
-        alt_leg.desenhar(c, xn + 3 * mm, y_topo - 4.2 * mm - 8 * mm)
+        cap_mapa.desenhar(c, xn, topo_m - disp_h - 1.6 * mm)
 
-    blocos.append(Bloco("texto_relevo", alt_relevo, texto_relevo, espaco=1))
+    rel_min = max(esq_alt, 4.6 * mm + 36 * mm + 1.6 * mm + cap_mapa.altura)
+    blocos.append(Bloco("relevo", rel_min, relevo_bloco, mola=(rel_min, rel_min + 10 * mm), espaco=1))
 
-    # --- seção solo e aptidão ---------------------------------------------------------------------
+    # --- solo e aptidão ---------------------------------------------------------------------------------
     alt, des = cabeca_secao("Como é o solo e para que serve?", "camadas")
-    blocos.append(Bloco("h2_solo", alt, des, espaco=2))
+    blocos.append(Bloco("h2_solo", alt, des, espaco=1))
 
-    # A aptidão e a erodibilidade da Embrapa usam as mesmas manchas do mapa de solos do IBGE: a linha só junta
-    # as três leituras quando a parte do mapa bate (senão a amostra para, em vez de casar errado).
     apt_por_pct = {Decimal(str(x["pct_mapa"])): x for x in apt["classes"]}
     eros_por_pct = {Decimal(str(x["pct_mapa"])): x for x in eros["erodibilidade"]}
-    colunas = (("Parte do imóvel no mapa", 47 * mm), ("Tipo de solo", 52 * mm), ("Para que serve (aptidão)", 45 * mm),
-               ("Erosão", 26 * mm))
+    colunas = (("Parte no mapa", 41 * mm), ("Tipo de solo", 47 * mm), ("Para que serve (aptidão)", 60 * mm),
+               ("Erosão", 22 * mm))
     linhas = []
     for u in unidades:
         chave = Decimal(str(u["pct_mapa"]))
@@ -1620,22 +2052,30 @@ def pagina_7(c, L: Leitura, grade: bool) -> float:
         curto, explica = nome_solo(u["classe"])
         a = apt_por_pct[chave]
         partes = int(re.search(r"(\d+) em cada 10", u["fracao_texto"]).group(1))
+        apt_txt = APTIDAO.get(a["codigo"], a["descricao"])
+        lavoura = componentes_lavoura(a.get("componentes_secundarios", []))
+        if lavoura and not a["codigo"].startswith(("1", "2", "3")):
+            nomes = " e ".join(nm for nm, _ in lavoura)
+            graus = {g for _, g in lavoura}
+            grau = graus.pop() if len(graus) == 1 else "alguma"
+            apt_txt += (f'<br/><font name="Sans" size="8.6" color="{st.HEX["INK2"]}">a mancha também tem {nomes}, '
+                        f"de aptidão {grau} para lavoura</font>")
         linhas.append({
             "partes": partes,
             "fracao": texto(u["fracao_texto"], "legenda", colunas[0][1] - 2 * mm),
             "solo": texto(f"<b>{curto}</b><br/>{explica}", "tab_cel", colunas[1][1] - 3 * mm),
-            "apt": texto(APTIDAO.get(a["codigo"], a["descricao"]), "tab_cel", colunas[2][1] - 3 * mm),
+            "apt": texto(apt_txt, "tab_cel", colunas[2][1] - 3 * mm),
             "eros": texto(f"fragilidade {eros_por_pct[chave]['classe']}", "tab_cel", colunas[3][1]),
         })
     cab_h = 5.4 * mm
-    alt_linhas = [max(6.2 * mm + l["fracao"].altura, l["solo"].altura, l["apt"].altura) + 3.4 * mm for l in linhas]
+    alt_linhas = [max(5.2 * mm + l["fracao"].altura, l["solo"].altura, l["apt"].altura) + 2.4 * mm for l in linhas]
     alt_quadro = cab_h + sum(alt_linhas)
 
     def quadro_solo(c, x, y_topo, h):
         y = y_topo
         xx = x
         for nome_col, w in colunas:
-            rotulo(c, xx, y - altura_maiuscula("Sans-Sb", 7.8) - 0.4 * mm, nome_col, "tab_cab")
+            rotulo(c, xx, y - altura_maiuscula("Sans-Sb", PISO_PT) - 0.4 * mm, nome_col, "tab_cab")
             xx += w
         y -= cab_h
         c.saveState()
@@ -1645,8 +2085,8 @@ def pagina_7(c, L: Leitura, grade: bool) -> float:
         c.restoreState()
         tons = ("SOLO_3", "SOLO_2", "SOLO_1")
         for k, (l, hl) in enumerate(zip(linhas, alt_linhas)):
-            yt = y - 1.8 * mm
-            q, gap = 3.6 * mm, 0.9 * mm  # pictograma: 10 quadrados, os da mancha preenchidos
+            yt = y - 1.6 * mm
+            q, gap = 3.2 * mm, 0.7 * mm
             for i in range(10):
                 qx = x + i * (q + gap)
                 cheio = (i < l["partes"]) if k == 0 else (i >= 10 - l["partes"])
@@ -1656,7 +2096,7 @@ def pagina_7(c, L: Leitura, grade: bool) -> float:
                 c.setFillColor(COR[tons[k % 3]] if cheio else COR["PAPER"])
                 c.rect(qx, yt - q, q, q, stroke=1, fill=1)
                 c.restoreState()
-            l["fracao"].desenhar(c, x, yt - q - 1.6 * mm)
+            l["fracao"].desenhar(c, x, yt - q - 1.4 * mm)
             xx = x + colunas[0][1]
             l["solo"].desenhar(c, xx, yt + 0.8 * mm)
             xx += colunas[1][1]
@@ -1672,55 +2112,66 @@ def pagina_7(c, L: Leitura, grade: bool) -> float:
 
     blocos.append(Bloco("quadro_solo", alt_quadro, quadro_solo, espaco=1))
 
-    # --- textura (barra) + leitura do solo, com a nota do que o mapa não diz -------------------------
-    tex_titulo = texto(f"<b>Textura da terra de cima</b> (0 a 30 cm): {textura['classe_textural']}", "tab_cel",
-                       G.leitura)
-    corpo_solo = texto(
-        f"Pelo MapBiomas Solo, a terra de cima tem de {argilas[0]}% a {argilas[-1]}% de argila: solo {solo_adj}. "
-        f"Outro modelo, em quadrados de 250 m, estima {f_pct(sg['argila_pct'])} de argila e pH "
-        f"{_ptbr(_q(ph, 1))}, solo {acidez}. Quem decide é a análise de solo.", "corpo", G.leitura)
-    nota_solo = texto("Os mapas de solo e de aptidão são regionais: descrevem a região, não medem o imóvel. Não dizem "
-                      "se o uso de hoje é permitido.", "legenda", G.nota - 3 * mm)
-    barra_h = 5.6 * mm
-    alt_tex = tex_titulo.altura + 1.2 * mm + barra_h + G.us(1) + corpo_solo.altura
-    alt_tex = max(alt_tex, 4.2 * mm + nota_solo.altura)
+    # --- leitura: o mapa regional × o terreno medido, e a textura; notas à direita ------------------------
+    maior_u = unidades[0]
+    apt_maior = apt_por_pct[Decimal(str(maior_u["pct_mapa"]))]
+    descrito = maior_u.get("relevo_descrito_no_mapa", "")
+    sem_lavoura = all(a["codigo"].startswith(("4", "5", "6")) for a in apt["classes"])
+    leitura = ""
+    if sem_lavoura and apt_maior.get("limitacoes") and ("forte" in descrito or "montanhoso" in descrito) and suave >= 50:
+        leitura = (f"Na mancha maior do mapa de aptidão, as limitações para lavoura são "
+                   f"{' e '.join(apt_maior['limitacoes'])}, num relevo descrito como {descrito}. Mas o terreno medido "
+                   f"do imóvel é {f_pct_exato(suave)} plano ou suave ondulado: vale visita de agrônomo antes de decidir "
+                   "por lavoura.")
+    leitura_t = texto(leitura, "corpo", G.leitura) if leitura else None
+    tex_titulo = texto(f"<b>Textura da terra de {camada['profundidade_cm'].replace('–', ' a ')} cm</b>: "
+                       f"{textura['classe_textural']}", "tab_cel", G.leitura)
+    barra_tex = 5.6 * mm
+    outra_classe = classe_textural(sg["argila_pct"], sg["areia_pct"])
+    nota_outra = texto("Mapas regionais não medem o imóvel nem dizem se o uso de hoje é permitido. "
+                       + (f"Outro modelo, mais grosseiro (quadrados de {f_inteiro(sg['grade_m'])} m), dá "
+                          f"{f_pct(sg['argila_pct'])} de argila, textura {outra_classe}; decide a análise de solo."
+                          if sg.get("diverge_da_textura_mapbiomas") else ""), "legenda", G.nota - 3 * mm)
+    esq = (leitura_t.altura + G.us(1) if leitura_t else 0) + tex_titulo.altura + 1.2 * mm + barra_tex
+    dir_ = 4.4 * mm + nota_outra.altura
+    alt_leitura = max(esq, dir_)
 
-    def bloco_textura(c, x, y_topo, h):
+    def leitura_bloco(c, x, y_topo, h):
         y = y_topo
+        if leitura_t:
+            y -= leitura_t.desenhar(c, x, y) + G.us(1)
         y -= tex_titulo.desenhar(c, x, y) + 1.2 * mm
         bw = G.leitura
         acumulado = 0
-        nomes = ("argila", "silte", "areia")
-        for pct_v, cor, nome in zip(tex, ("TEX_ARGILA", "TEX_SILTE", "TEX_AREIA"), nomes):
+        for pct_v, cor, nome in zip(tex, ("TEX_ARGILA", "TEX_SILTE", "TEX_AREIA"), ("argila", "silte", "areia")):
             x0 = x + bw * acumulado / 100
             w = bw * pct_v / 100
             c.saveState()
             c.setFillColor(COR[cor])
-            c.rect(x0, y - barra_h, w, barra_h, stroke=0, fill=1)
+            c.rect(x0, y - barra_tex, w, barra_tex, stroke=0, fill=1)
             c.restoreState()
             rot = f"{nome} {pct_v}%"
-            if pdfmetrics.stringWidth(rot, "Sans-Sb", 7.8) + 3 * mm <= w:
-                linha_simples(c, x0 + 1.6 * mm, y - barra_h / 2 - 1 * mm, rot, "Sans-Sb", 7.8,
-                              COR["PAPER"] if cor == "TEX_ARGILA" else COR["INK"])
+            if pdfmetrics.stringWidth(rot, "Sans-Sb", ANOT) + 3 * mm <= w:
+                linha_simples(c, x0 + 1.6 * mm, y - barra_tex / 2 - altura_maiuscula("Sans-Sb", ANOT) / 2, rot,
+                              "Sans-Sb", ANOT, COR["PAPER"] if cor == "TEX_ARGILA" else COR["INK"])
             acumulado += pct_v
         c.saveState()
         c.setStrokeColor(COR["PAPER"])
         c.setLineWidth(1)
         for corte in (tex[0], tex[0] + tex[1]):
-            c.line(x + bw * corte / 100, y - barra_h, x + bw * corte / 100, y)
+            c.line(x + bw * corte / 100, y - barra_tex, x + bw * corte / 100, y)
         c.restoreState()
-        y -= barra_h + G.us(1)
-        corpo_solo.desenhar(c, x, y)
         xn = x + G.leitura + G.calha
         c.saveState()
         c.setStrokeColor(COR["RULE"])
         c.setLineWidth(G.fio_fino)
         c.line(xn, y_topo, xn, y_topo - h)
         c.restoreState()
-        rotulo(c, xn + 3 * mm, y_topo - altura_maiuscula("Sans-Sb", 7.8) - 0.3 * mm, "O que o mapa não diz", "tab_cab")
-        nota_solo.desenhar(c, xn + 3 * mm, y_topo - 4.2 * mm)
+        yn = y_topo
+        rotulo(c, xn + 3 * mm, yn - altura_maiuscula("Sans-Sb", PISO_PT) - 0.3 * mm, "O que o mapa não diz", "tab_cab")
+        nota_outra.desenhar(c, xn + 3 * mm, yn - 4.4 * mm)
 
-    blocos.append(Bloco("textura", alt_tex, bloco_textura, espaco=2))
+    blocos.append(Bloco("leitura_solo", alt_leitura, leitura_bloco, espaco=1))
 
     # --- o que isso significa para você -------------------------------------------------------------
     classes_uso = uso["classes"]
@@ -1732,15 +2183,15 @@ def pagina_7(c, L: Leitura, grade: bool) -> float:
          f"é terra de pasto ({pcts_uso[i_pasto]}% em {uso['ano']}), em terreno pouco inclinado. Antes de plantar "
          "lavoura, faça análise de solo e fale com um agrônomo."),
         ("Se vai comprar:",
-         f"em {alta[0]['fracao_texto']}, o mapa marca o solo como muito sujeito à erosão; na visita, veja se já há "
-         "sulcos no chão." if alta else
+         f"em {alta[0]['fracao_texto']}, o solo é muito sujeito à erosão, pelo mapa. Na visita, procure sulcos nas "
+         "partes escuras do mapa de inclinação." if alta else
          "o mapa de erosão não marca fragilidade alta; a visita confirma o estado do chão."),
     ]
-    alt_cx, des_cx = caixa_significado(itens)
-    blocos.append(Bloco("significado", alt_cx, des_cx, espaco=2, ancorar=True))
+    alt_cx, des_cx = caixa_significado(itens, colunas=True)
+    blocos.append(Bloco("significado", alt_cx, des_cx, espaco=1, ancorar=True))
 
     ocupacao = compor(c, blocos, 7, grade)
-    st.desenhar_moldura(c, 7, TOTAL_PAGINAS, "A terra", rodape)
+    st.desenhar_moldura(c, 7, TOTAL_PAGINAS, "A terra", rodape_capitulo(p, site))
     return ocupacao
 
 
@@ -1863,6 +2314,7 @@ def main(argv=None) -> int:
     ap.add_argument("--grade", action="store_true", help="desenha a caixa de cada bloco (conferência)")
     args = ap.parse_args(argv)
     conferir_hash_f1()
+    aplicar_piso_de_leitura()
     payload = json.loads(FIXTURE.read_text(encoding="utf-8"))
     L = Leitura(payload, FIXTURE.parent)
     args.saida.mkdir(parents=True, exist_ok=True)

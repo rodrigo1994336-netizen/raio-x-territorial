@@ -128,3 +128,12 @@ Lista completa em `_fixture.divergencias_com_a_spec`. Os que mudam texto de ouro
    em 2005); a F1 segue o exemplo de Curvelo da SPEC (31/07/2004);
 5. embargo do ICMBio: a camada publicada é de 2022, e a frase de ausência precisa dessa data;
 6. poços: a contagem de 27 vem do filtro de distância com o ×1,15 que a P4 corrige.
+
+## Complemento da F1 · `curvelo_declividade_celulas.json`
+
+As 163 células de 30 m do Copernicus DEM dentro do CAR de Curvelo, com a inclinação em % e a classe da Embrapa,
+para o mapa "Onde inclina mais" da p. 7 da amostra. A F1 só tem as partes por classe; este arquivo diz onde cada
+parte fica. Gerado por `scripts/book_v10_celulas_declividade.py` (mesma conta da F1, limite em graus do SICAR) e
+congelado por `curvelo_declividade_celulas.sha256`. O script da amostra confere, antes de desenhar, que o total
+de células e as partes por classe batem com `productive.relief_v51` da F1. A P0 leva para a F1 gerada
+(`book_v10.relief_cells`, proposta).
