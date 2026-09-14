@@ -10,6 +10,7 @@ from PIL import Image, ImageDraw, ImageFont
 from shapely.geometry import shape
 
 from report_engine import build_premium_property_report
+from prodes_image_platform_f2 import image_row as prodes_image_row, lookup_key as prodes_lookup_key
 
 REPORT_DIR = Path('/tmp/raiox_reports')
 REPORT_DIR.mkdir(parents=True, exist_ok=True)
@@ -38,6 +39,7 @@ def _source_row(name: str, ok: bool | None, description: str):
 
 def _extract_prodes_occurrences(result: dict[str, Any]) -> list[dict[str, Any]]:
     ex = ((result.get('prodes') or {}).get('exact') or {}).get('occurrences') or []
+    lookups = result.get('prodes_image_lookups') or {}
     rows = []
     for item in ex:
         p = item.get('properties') or {}
@@ -46,9 +48,10 @@ def _extract_prodes_occurrences(result: dict[str, Any]) -> list[dict[str, Any]]:
             'year': p.get('year'),
             'class_name': p.get('class_name'),
             'image_date': p.get('image_date'),
-            'satellite': p.get('satellite'),
-            'sensor': p.get('sensor'),
+            # WFS satellite/sensor is wrong (Landsat8/OLI in 2004); only the date and the scene orbit are kept.
+            'path_row': p.get('path_row'),
         })
+        rows[-1]['image_lookup'] = lookups.get(prodes_lookup_key(rows[-1]) or '')
     rows.sort(key=lambda x: (x.get('year') or 0, x.get('area_ha') or 0))
     return rows
 
@@ -183,8 +186,7 @@ def build_live_payload(result: dict[str, Any], report_id: str, generated_at: str
         exact_rows.extend([
             ('Ano', r.get('year')),
             ('Área intersectada', f"{r.get('area_ha')} ha"),
-            ('Imagem', f"{_s(r.get('satellite'))}/{_s(r.get('sensor'))} • {_s(r.get('image_date'))}"),
-        ])
+        ] + [row for row in [prodes_image_row(r, r.get('image_lookup'))] if row])
 
     payload = {
         'report_id': report_id,
