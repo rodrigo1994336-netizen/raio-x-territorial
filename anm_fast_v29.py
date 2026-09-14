@@ -7,6 +7,7 @@ import time
 from urllib.parse import urlencode
 
 import deploy_app
+import source_layer_guard as layer_guard
 
 ANM_QUERY=deploy_app.ANM
 
@@ -33,11 +34,14 @@ def _curl_anm_bbox(bbox):
         if p.returncode:
             return {'ok':False,'source':'ANM/SIGMINE','error':'timeout_or_transport','detail':p.stderr.decode('utf-8','ignore')[:240],'elapsed_ms':ms,'state':'temporarily_unavailable'}
         data=json.loads(p.stdout.decode('utf-8'))
-        if data.get('error'):
-            return {'ok':False,'source':'ANM/SIGMINE','error':'arcgis','detail':str(data.get('error'))[:300],'elapsed_ms':ms,'state':'temporarily_unavailable'}
+        problem=layer_guard.arcgis_answer_problem(None,data)
+        if problem:
+            return {'ok':False,'source':'ANM/SIGMINE','error':'arcgis','detail':f'consulta_pendente:{problem}','elapsed_ms':ms,'state':'temporarily_unavailable'}
         fs=data.get('features') or []
         print(f'RX_ANM_FAST={ms}ms:features={len(fs)}',flush=True)
-        return {'ok':True,'status':200,'feature_count':len(fs),'features':fs,'source':'ANM/SIGMINE','transport':'curl-bounded','elapsed_ms':ms}
+        out={'ok':True,'status':200,'feature_count':len(fs),'features':fs,'source':'ANM/SIGMINE','transport':'curl-bounded','elapsed_ms':ms}
+        # H1: an empty envelope only means "no mining process" when the layer is alive.
+        return layer_guard.apply_verdict(out,layer_guard.zero_verdict('anm_sigmine',zero=not fs))
     except Exception as e:
         ms=round((time.monotonic()-t0)*1000)
         print(f'RX_ANM_FAST_FAIL={ms}ms:{type(e).__name__}',flush=True)

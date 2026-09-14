@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import time
 
+import deploy_app
 import report_api as base
+import source_layer_guard as layer_guard
 
 
 async def _bounded(label,coro,timeout_s:float):
@@ -28,16 +30,20 @@ async def _retry_failed_core_v30(result:dict):
     # Retry only sources where a second short attempt has historically recovered.
     # ANM is deliberately excluded: it already receives one bounded attempt in the
     # core analysis and a second attempt was adding ~14 s with no useful result.
-    if not (result.get('sigef') or {}).get('ok'):
+    # H1: a base known to be empty, below its floor or stopped is not retried (its answer
+    # cannot change in seconds); a PRODES reading with a failed yearly layer is.
+    if layer_guard.worth_retry(result.get('sigef')):
         keys.append('sigef');jobs.append(_bounded('SIGEF',base.query_sigef(bbox),8))
-    if not (result.get('embargos_ibama') or {}).get('ok'):
-        keys.append('embargos_ibama');jobs.append(_bounded('IBAMA_embargos',base.query_embargos(bbox),8))
-    if not (result.get('prodes') or {}).get('ok'):
+    if layer_guard.worth_retry(result.get('embargos_ibama')):
+        keys.append('embargos_ibama');jobs.append(_bounded('IBAMA_embargos',base.query_embargos(bbox,car.get('geometry')),8))
+    if layer_guard.worth_retry(result.get('prodes')):
         keys.append('prodes');jobs.append(_bounded('PRODES',base.query_prodes(bbox),10))
 
     if jobs:
         vals=await asyncio.gather(*jobs,return_exceptions=False)
-        for k,v in zip(keys,vals):result[k]=v
+        for k,v in zip(keys,vals):
+            if k=='prodes':v=deploy_app.finalize_prodes(v,car.get('geometry'))
+            result[k]=layer_guard.keep_better(result.get(k),v)
 
     if not (result.get('anm') or {}).get('ok'):
         anm=result.setdefault('anm',{})

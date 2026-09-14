@@ -49,7 +49,8 @@ def build_narrative(payload: dict[str,Any]) -> dict[str,Any]:
     pd=env.get('prodes') or {}; lens=pd.get('lens') or {}; hist=lens.get('historical') or {}; post=lens.get('post_2019_07_31') or {}; credit=lens.get('credit_screening') or {}
     prodes_n=_n(hist.get('occurrence_count',pd.get('count'))); prodes_area=_f(hist.get('area_unique_ha',pd.get('area_ha'))); prodes_pct=hist.get('pct_car')
     post_n=_n(post.get('occurrence_count')); post_area=_f(post.get('area_unique_ha')); post_pct=post.get('pct_car')
-    emb=_n(enf.get('embargo_count')); anm=_n(mining.get('process_count')); rare=str(mining.get('rare_earth_signal') or '').upper()=='SIM'
+    prodes_pending=bool(pd.get('pending'))
+    emb=_n(enf.get('embargo_count')); emb_pending=bool(enf.get('embargo_pending')); anm=_n(mining.get('process_count')); rare=str(mining.get('rare_earth_signal') or '').upper()=='SIM'
     area=_s(prop.get('area_ha')); city=f"{_s(prop.get('municipality'))}/{_s(prop.get('uf'))}"
 
     if emb:
@@ -59,7 +60,9 @@ def build_narrative(payload: dict[str,Any]) -> dict[str,Any]:
     elif prodes_n:
         one=f"O imóvel de {area} ha em {city} tem {prodes_n} ocorrência(s) PRODES históricas, sem detecção pós-31/07/2019 entre as ocorrências retornadas nesta consulta."
     elif anm or rare:
-        one=f"O imóvel de {area} ha em {city} não mostrou embargo na leitura atual, mas há interesse mineral que merece ser entendido antes de qualquer decisão patrimonial."
+        one=(f"O imóvel de {area} ha em {city} tem interesse mineral que merece ser entendido antes de qualquer decisão patrimonial." if emb_pending else f"O imóvel de {area} ha em {city} não mostrou embargo na leitura atual, mas há interesse mineral que merece ser entendido antes de qualquer decisão patrimonial.")
+    elif emb_pending or prodes_pending:
+        one=f"O imóvel de {area} ha em {city} ainda tem consulta pendente em fonte principal ({', '.join(x for x, on in (('embargos do IBAMA', emb_pending), ('PRODES', prodes_pending)) if on)}); a leitura desta emissão não é conclusiva."
     else:
         one=f"O imóvel de {area} ha em {city} não apresentou alerta crítico nas principais fontes que responderam, mas a conclusão continua condicionada às bases efetivamente consultadas."
 
@@ -68,9 +71,21 @@ def build_narrative(payload: dict[str,Any]) -> dict[str,Any]:
         years=', '.join(str(x) for x in hist.get('years') or []) or 'anos não informados'
         found.append(f"PRODES histórico: {prodes_n} ocorrência(s), {prodes_area:.6f} ha de interseção única ({_pct(prodes_pct)} do CAR); anos identificados: {years}.")
         found.append(f"Recorte pós-31/07/2019: {post_n} ocorrência(s), {post_area:.6f} ha de interseção única ({_pct(post_pct)} do CAR), calculada pela união das interseções exatas com o CAR.")
+    elif prodes_pending:
+        found.append('PRODES: a consulta ficou pendente nesta emissão.')
     else:
         found.append('PRODES: nenhuma ocorrência intersectante foi localizada na consulta que respondeu.')
-    found.append(f"Fiscalização ambiental: {emb} embargo(s) intersectante(s) identificado(s)." if emb else 'Fiscalização ambiental: nenhum embargo intersectante apareceu nas fontes que responderam.')
+    emb_detail=[]
+    for x in (enf.get('embargo_items') or [])[:3]:
+        parts=[f"TAD {x.get('tad')}" if x.get('tad') else 'embargo IBAMA']
+        if x.get('date'): parts.append(f"de {x.get('date')}")
+        kind=', '.join(k for k in (x.get('type'), 'com desmatamento' if x.get('deforestation') is True and 'desmat' not in str(x.get('type') or '').lower() else None) if k)
+        if kind: parts.append(f"({kind})")
+        if x.get('area_in_property_ha'): parts.append(f"{round(float(x.get('area_in_property_ha')),2)} ha dentro do imóvel")
+        elif x.get('geometry_origin')=='ponto': parts.append('ponto do embargo dentro do imóvel')
+        emb_detail.append(' '.join(parts))
+    emb_suffix=(' IBAMA: '+'; '.join(emb_detail)+'.') if emb_detail else ''
+    found.append(f"Fiscalização ambiental: {emb} embargo(s) intersectante(s) identificado(s).{emb_suffix}" if emb else ('Fiscalização ambiental: a consulta de embargos do IBAMA ficou pendente nesta emissão.' if emb_pending else 'Fiscalização ambiental: nenhum embargo intersectante apareceu nas fontes que responderam.'))
     if anm: found.append(f"Mineração: {anm} processo(s) ANM intersectam o imóvel.")
     if rare: found.append('Terras raras: existe sinal de interesse mineral em processo ANM e/ou camada pública do SGB; isso é triagem, não prova de jazida.')
     if water.get('grant_count') not in (None,'NÃO CONSULTADO'): found.append(f"Água: {_s(water.get('grant_count'))} outorga(s) intersectante(s) localizada(s) nas fontes consultadas.")
@@ -114,8 +129,8 @@ def build_narrative(payload: dict[str,Any]) -> dict[str,Any]:
 
     good=[]
     good.append('CAR localizado com geometria real.')
-    if _consulted(sources,'ibama') and not emb: good.append('Nenhum embargo ambiental intersectante foi localizado nas fontes de fiscalização que responderam.')
-    if _consulted(sources,'anm') and not anm: good.append('Nenhum processo ANM intersectante foi localizado na consulta atual.')
+    if _consulted(sources,'ibama') and not emb and not emb_pending: good.append('Nenhum embargo ambiental intersectante foi localizado nas fontes de fiscalização que responderam.')
+    if _consulted(sources,'anm') and not anm and not mining.get('pending'): good.append('Nenhum processo ANM intersectante foi localizado na consulta atual.')
     if _consulted(sources,'outorgas'): good.append('A situação hídrica foi efetivamente consultada, em vez de inferida por ausência de informação.')
 
     money=[]

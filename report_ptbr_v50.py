@@ -190,9 +190,15 @@ def normalize_text(text):
     return "".join(part if part.startswith("<") and part.endswith(">") else _normalize_segment(part) for part in _TAG.split(out))
 
 
-_PENDING_TEXT = "A fonte não respondeu nesta emissão. Isso não é tratado como ausência de ocorrência; a consulta é refeita na próxima emissão."
+_PENDING_TEXT = "Esta consulta não pôde ser confirmada nesta emissão. Isso não é tratado como ausência de ocorrência; a consulta é refeita na próxima emissão."
 _LAND_SUMMARY = (
     "SIGEF público consultado nesta emissão: {n} parcela(s) candidata(s) no entorno do imóvel. "
+    "Matrícula, ônus e titularidade dependem de certidão do cartório de registro de imóveis e não são inferidos do CAR."
+)
+
+
+_LAND_PENDING = (
+    "SIGEF público: consulta pendente nesta emissão. "
     "Matrícula, ônus e titularidade dependem de certidão do cartório de registro de imóveis e não são inferidos do CAR."
 )
 
@@ -228,6 +234,31 @@ def client_payload(payload: dict) -> dict:
         sources.append(src)
     if "sources" in out:
         out["sources"] = sources
+    # H1: a layer or check that did not answer (or whose base cannot prove absence)
+    # reads as a quiet pending consultation, never as a loud "fonte indisponível".
+    env = out.get("environment")
+    if isinstance(env, dict) and isinstance(env.get("layer_rows"), list):
+        env["layer_rows"] = [
+            [r[0], "CONSULTA PENDENTE", *r[2:]] if isinstance(r, (list, tuple)) and len(r) > 1 and "FONTE INDISPONÍVEL" in str(r[1]).upper() else r
+            for r in env["layer_rows"]
+        ]
+    for item in out.get("compliance") or []:
+        if isinstance(item, dict) and "fonte indisponível" in str(item.get("text") or "").lower():
+            item["text"] = "Consulta pendente."
+            item["badge"] = "CONSULTA PENDENTE"
+            item["level"] = "neutral"
+    enf = out.get("enforcement")
+    if isinstance(enf, dict):
+        icmbio_pending = any(isinstance(i, dict) and i.get("label") == "Embargos ICMBio" and i.get("badge") == "CONSULTA PENDENTE" for i in out.get("compliance") or [])
+        ibama_pending = bool(enf.get("embargo_pending"))
+        if ibama_pending and str(enf.get("embargo_count") or 0) == "0":
+            enf["embargo_count"] = "PENDENTE"
+        if ibama_pending and icmbio_pending:
+            enf["embargo_sources_label"] = "consulta pendente"
+        elif ibama_pending:
+            enf["embargo_sources_label"] = "ICMBio · IBAMA pendente"
+        elif icmbio_pending:
+            enf["embargo_sources_label"] = "IBAMA · ICMBio pendente"
     car = out.get("car")
     if isinstance(car, dict) and isinstance(car.get("fields"), list):
         # An empty field is not shown.
@@ -241,7 +272,8 @@ def client_payload(payload: dict) -> dict:
         summary = str(land.get("summary") or "")
         if "permanecem preparadas para ativação" in summary:
             m = re.search(r"(\d+) parcela", summary)
-            land["summary"] = _LAND_SUMMARY.format(n=m.group(1) if m else "0")
+            # H1: no parcel number in the source text means the consultation is pending, never "0".
+            land["summary"] = _LAND_SUMMARY.format(n=m.group(1)) if m else _LAND_PENDING
     return out
 
 

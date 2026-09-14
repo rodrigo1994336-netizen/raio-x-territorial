@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 import httpx
+import source_layer_guard as layer_guard
 from shapely.geometry import shape
 
 IBAMA_AUTOS = 'https://pamgia.ibama.gov.br/server/rest/services/app_dadosabertos/adm_auto_infracao_p/FeatureServer/0/query'
@@ -56,8 +57,10 @@ def _money(v: Any):
 def _public_auto(props: dict[str, Any]):
     number = _pick(props, 'num_auto_infracao','numero_auto_infracao','num_auto','numero_auto','auto_infracao','nu_auto_infracao')
     process = _pick(props, 'num_processo','numero_processo','processo','nu_processo')
-    date = _pick(props, 'dat_auto_infracao','data_auto_infracao','dt_auto_infracao','data_auto','dat_lavratura','data_lavratura')
-    value = _pick(props, 'valor_multa','vlr_multa','valor_auto','valor_infracao','multa')
+    # H1: the published IBAMA layer names them dat_hora_auto_infracao / val_auto_infracao;
+    # without the exact names the fuzzy match picked 'tipo_multa' and every fine became R$ 0,00.
+    date = _pick(props, 'dat_hora_auto_infracao','dat_auto_infracao','data_auto_infracao','dt_auto_infracao','data_auto','dat_lavratura','data_lavratura')
+    value = _pick(props, 'val_auto_infracao','valor_multa','vlr_multa','valor_auto','valor_infracao','multa')
     description = _pick(props, 'des_infracao','descricao_infracao','descricao','infracao')
     status = _pick(props, 'situacao','status','situacao_auto','status_auto')
     return {
@@ -91,7 +94,14 @@ async def query_ibama_autos(car_geometry: dict[str, Any], bbox: list[float]):
     try:
         async with httpx.AsyncClient(timeout=40, follow_redirects=True, headers={'User-Agent':'Raio-X-Territorial/0.14.8'}) as client:
             r = await client.get(IBAMA_AUTOS, params=params)
-        data = r.json()
+        try:
+            data = r.json()
+        except Exception:
+            data = None
+        problem = layer_guard.arcgis_answer_problem(r.status_code, data)
+        if problem:
+            return layer_guard.apply_verdict({'ok': False, 'status': r.status_code, 'source': 'IBAMA/PAMGIA - autos de infração ambiental'},
+                                             {'answer': False, 'state': 'pending', 'reason': problem})
         features = data.get('features') or []
         car = shape(car_geometry)
         kept = []
@@ -110,8 +120,8 @@ async def query_ibama_autos(car_geometry: dict[str, Any], bbox: list[float]):
             seen.add(key)
             kept.append(item)
         total = round(sum(x.get('fine_value') or 0 for x in kept), 2)
-        return {
-            'ok': r.status_code == 200 and 'error' not in data,
+        out = {
+            'ok': True,
             'status': r.status_code,
             'feature_count_bbox': len(features),
             'occurrence_count': len(kept),
@@ -120,5 +130,8 @@ async def query_ibama_autos(car_geometry: dict[str, Any], bbox: list[float]):
             'source': 'IBAMA/PAMGIA - autos de infração ambiental',
             'deduplicated': True,
         }
+        # H1: a zero from an empty or broken layer is pending, never "nenhum auto".
+        verdict = await layer_guard.zero_verdict_async('ibama_autos', zero=not kept)
+        return layer_guard.apply_verdict(out, verdict)
     except Exception as e:
         return {'ok':False,'error':type(e).__name__,'detail':str(e)[:300],'source':'IBAMA/PAMGIA - autos de infração ambiental'}

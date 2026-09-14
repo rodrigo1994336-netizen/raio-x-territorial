@@ -39,7 +39,8 @@ def comprehensive_truth_guard(payload:dict[str,Any],result:dict[str,Any],base_gu
     # Fundiário: keep the limitation, but stop presenting restricted connectors as forgotten work.
     land=payload.setdefault('land',{})
     sigef_count=int(sigef.get('feature_count') or 0)
-    land['summary']=(f'SIGEF público consultado nesta emissão: {sigef_count} parcela(s) candidata(s) no envelope do imóvel. '
+    # H1: the SIGEF mirror stopped in 2022; a pending consultation has no parcel count.
+    land['summary']=((f'SIGEF público consultado nesta emissão: {sigef_count} parcela(s) candidata(s) no envelope do imóvel. ' if sigef.get('ok') is True else 'SIGEF público: consulta pendente nesta emissão. ')+
                      'SNCI/CCIR, matrícula, ônus e titularidade são integrações registrais/cadastrais separadas e permanecem preparadas para ativação por fonte legalmente habilitada; não são inferidas do CAR.')
     cert=[]
     for row in land.get('certifications') or []:
