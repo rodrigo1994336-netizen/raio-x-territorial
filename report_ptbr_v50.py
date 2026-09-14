@@ -258,6 +258,10 @@ def install() -> None:
     original = rl_paragraph.Paragraph.__init__
 
     def __init__(self, text, *args, **kwargs):
+        # The v10 book draws with report_book_v10_style.Paragrafo, whose text is already
+        # pt-BR from its own formatter; normalising it again breaks "1.500 ha" into "1,50 ha".
+        if getattr(self, "__rx_ptbr_skip__", False):
+            return original(self, text, *args, **kwargs)
         return original(self, normalize_text(text), *args, **kwargs)
 
     rl_paragraph.Paragraph.__init__ = __init__
