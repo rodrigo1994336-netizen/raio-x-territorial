@@ -1267,7 +1267,10 @@ def pagina_1(c, L: Leitura, grade: bool) -> float:
                       if respondidos[chave]]
     amplitude = ""
     if respondidos["alertas_mensais"] and em_volta_itens:
-        amplitude = f"Vimos ainda alertas recentes (pág. 3), {' e '.join(em_volta_itens)} (pág. 10). "
+        # "Vimos alertas" soa como "achamos alertas": o estado decide a frase
+        alerta_txt = ("Sem alerta recente (pág. 3)" if L.fato("alertas_mensais")["estado"] == "nao_encontrado"
+                      else "Veja os alertas recentes (pág. 3)")
+        amplitude = f"{alerta_txt}; {' e '.join(em_volta_itens)} na pág. 10. "
     alt_cx, des_cx = caixa_significado([
         (None, f"Comece pelo desmatamento (pág. 3): {lei_2008}{depois}{amplitude}"
                f"Consultas de {f_data_brasilia(emitido)} em bases públicas oficiais; não substituem certidão de "
@@ -1696,7 +1699,8 @@ def pagina_3(c, L: Leitura, grade: bool) -> float:
     frase_alerta = texto(
         f"Nenhum alerta de desmatamento sobre o imóvel{' desde ' + f_mes_ano(desde) if desde else ''}, nem em análise "
         f"nem já validado (consulta de {f_data_brasilia(alertas['consultado_em'])})."
-        + (f" Só aparecem aberturas a partir de {lim_alerta.group(1)} ha." if lim_alerta else ""),
+        # o limite de área é do aviso rápido do INPE, não da checagem validada
+        + (f" O aviso rápido do INPE só pega aberturas a partir de {lim_alerta.group(1)} ha." if lim_alerta else ""),
         "quadro_frase", LARG)
     alt_alerta = 1.6 * mm + 4.8 * mm + frase_alerta.altura + 1.6 * mm
 
