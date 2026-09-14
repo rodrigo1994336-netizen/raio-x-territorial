@@ -16,7 +16,7 @@ const ASSET_CACHE=RX_VERSION+'-assets';
 self.addEventListener('install',event=>{
   self.skipWaiting();
   event.waitUntil(caches.open(SHELL_CACHE).then(async cache=>{
-    try{const r=await fetch('/',{cache:'no-store'});if(r&&r.ok)await cache.put('/',r.clone())}catch(e){}
+    try{const r=await fetch('/',{cache:'no-store'});if(r&&r.ok&&r.headers.get('X-RaioX-Boot')!=='pending'&&r.headers.get('X-RaioX-Boot')!=='failed')await cache.put('/',r.clone())}catch(e){}
   }));
 });
 
@@ -40,7 +40,9 @@ async function networkFirst(req,cacheName,timeoutMs,maxEntries=180){
     const timed=new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('timeout')),timeoutMs)});
     const res=await Promise.race([fetch(req),timed]);
     clearTimeout(timer);
-    if(res&&(res.ok||res.type==='opaque')){await cache.put(req,res.clone()).catch(()=>{});await trimCache(cacheName,maxEntries).catch(()=>{})}
+    // W1a: never keep the temporary boot page as the offline shell.
+    const boot=res&&res.type!=='opaque'?res.headers.get('X-RaioX-Boot'):null;
+    if(res&&(res.ok||res.type==='opaque')&&boot!=='pending'&&boot!=='failed'){await cache.put(req,res.clone()).catch(()=>{});await trimCache(cacheName,maxEntries).catch(()=>{})}
     return res;
   }catch(e){
     clearTimeout(timer);
@@ -60,11 +62,11 @@ async function staleWhileRevalidate(event,req,cacheName,maxEntries=180){
   return await update;
 }
 
-async function cacheFirst(req,cacheName){
+async function cacheFirst(req,cacheName,maxEntries=0){
   const cache=await caches.open(cacheName),hit=await cache.match(req);
   if(hit)return hit;
   const res=await fetch(req);
-  if(res&&(res.ok||res.type==='opaque'))await cache.put(req,res.clone()).catch(()=>{});
+  if(res&&(res.ok||res.type==='opaque')){await cache.put(req,res.clone()).catch(()=>{});if(maxEntries)await trimCache(cacheName,maxEntries).catch(()=>{})}
   return res;
 }
 
@@ -75,6 +77,12 @@ self.addEventListener('fetch',event=>{
 
   if(u.origin===location.origin&&u.pathname==='/'){
     event.respondWith(networkFirst(req,SHELL_CACHE,2400,4));
+    return;
+  }
+
+  // W1a: hashed page assets and vendored Leaflet never change under the same URL.
+  if(u.origin===location.origin&&(u.pathname.startsWith('/static/rx/')||u.pathname.startsWith('/static/vendor/'))){
+    event.respondWith(cacheFirst(req,ASSET_CACHE,60));
     return;
   }
 
