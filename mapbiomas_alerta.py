@@ -20,6 +20,9 @@ Estados da consulta:
 * ``pending``   erro, prazo, limite, cancelamento, resposta estranha, alerta
   ilegível sem outro legível, ou CAR fora da base. Nunca vira "nenhum alerta".
 
+``needs_retry`` vem ligado na pendência e na resposta com parte ilegível
+(``incomplete``): as duas pedem nova tentativa e nenhuma fica no cache.
+
 ``combine_deforestation_alerts`` junta alertas validados, DETER e PRODES pela
 regra da seção 5 do relatório 03: corte na data do último ano PRODES publicado,
 uma abertura vista por várias fontes é um evento só, e a área é a união das
@@ -31,6 +34,7 @@ from __future__ import annotations
 import json
 import math
 import re
+import socket
 import threading
 import time
 from collections import OrderedDict
@@ -45,13 +49,14 @@ try:
     from shapely import wkt as _wkt
     from shapely.geometry import shape as _shape
     from shapely.geometry.base import BaseGeometry
+    from shapely.geometry.polygon import orient as _orient
     from shapely.ops import unary_union
     from shapely.validation import make_valid
 
     _GEOD = Geod(ellps="GRS80")
     GEO_AVAILABLE = True
 except Exception:  # pragma: no cover - produção e CI têm shapely/pyproj
-    _GEOD = _wkt = _shape = BaseGeometry = unary_union = make_valid = None
+    _GEOD = _wkt = _shape = BaseGeometry = _orient = unary_union = make_valid = None
     GEO_AVAILABLE = False
 
 SOURCE_ID = "mapbiomas_alerta"  # só servidor: registro de fontes e log
@@ -90,8 +95,11 @@ _HEADERS = {
 TIMEOUT = httpx.Timeout(16.0, connect=6.0, read=16.0, write=10.0, pool=8.0)
 # Prazo total da consulta, todas as tentativas somadas. Medido deste computador em
 # 13/09/2026: 1,1 a 4,0 s, arranque frio incluído. Do Render ainda não foi medido;
-# só mudar depois de medir de lá.
+# só mudar depois de medir de lá. É teto rígido: quem chama volta no prazo (mais um
+# passo do vigia) mesmo com a fonte muda ou mandando aos pingos.
 DEADLINE_SECONDS = 20.0
+_WATCH_STEP_SECONDS = 0.05  # de quanto em quanto o vigia olha prazo e cancelamento
+_WORKER_NAME = "rx-mapbiomas-alerta-leitura"
 MIN_RETRY_SECONDS = 2.0  # com menos prazo que isso, não abre nova tentativa
 MAX_ATTEMPTS = 2  # uma nova tentativa só para falha rápida (rede ou 5xx)
 RETRY_PAUSE_SECONDS = 0.5
@@ -105,8 +113,18 @@ CACHE_MAX_ENTRIES = 512
 # o chamador não informa o corte.
 PRODES_CUTOFF_FALLBACK = date(2025, 7, 31)
 MIN_AREA_HA = 0.0001  # 1 m²: abaixo disso é ruído numérico de borda
-SIGNIFICANT_OVERLAP = 0.5  # nota PRODES só com metade do alerta ou do polígono em comum
+# Lasca: interseção com o desenho atual abaixo de 0,01 ha (100 m²) não é área medida.
+# É o tamanho de um pixel de 10 m do Sentinel-2 (abaixo disso a borda do desenho não
+# se distingue da imagem) e a menor área que o texto escreve com duas casas (abaixo
+# disso sairia "0,00 ha", e zero não é ausência).
+# Alerta que a fonte liga ao CAR e só toca a borda do desenho atual fica fora do
+# desenho, com o sinal de versão anterior; feição DETER nessa condição é borda.
+SLIVER_HA = 0.01
+# Nota PRODES só com metade do alerta INTEIRO ou do polígono PRODES INTEIRO em comum
+# dentro do imóvel: medir contra a parte recortada deixaria uma lasca virar "coincide".
+SIGNIFICANT_OVERLAP = 0.5
 _PRODES_ANNUAL_LAYER = "yearly_deforestation"
+PRODES_WFS_COUNT_LIMIT = 2000  # o prodes_fast_v24 pede count=2000: chegar nisso não é "todos"
 
 # "published" é o único estado visto nas respostas reais (13/09/2026). A plataforma
 # avisa que alerta revisto depois de publicado fica CANCELADO e continua consultável
@@ -236,10 +254,23 @@ def _credit(text: str, url: str) -> dict[str, str]:
 
 
 # ---------------------------------------------------------------- geometria
+def _polygons(geom: Any) -> Any:
+    if geom.geom_type == "Polygon":
+        yield geom
+    elif hasattr(geom, "geoms"):
+        for part in geom.geoms:
+            yield from _polygons(part)
+
+
 def _area_ha(geom: Any) -> float:
+    """Área geodésica. Cada polígono é orientado antes (casca anti-horária, furos horários):
+    a área do pyproj tem sinal, então um MultiPolygon com partes em sentidos opostos (o
+    alerta 1349329 vem assim) somaria uma parte contra a outra (7,42 ha em vez de 13,16 ha)
+    e um furo no mesmo sentido da casca seria somado em vez de descontado."""
     if not GEO_AVAILABLE or geom is None or geom.is_empty:
         return 0.0
-    return abs(_GEOD.geometry_area_perimeter(geom)[0]) / 10000.0
+    total = sum(abs(_GEOD.geometry_area_perimeter(_orient(p, 1.0))[0]) for p in _polygons(geom))
+    return total / 10000.0
 
 
 def _valid(geom: Any) -> Any:
@@ -290,6 +321,7 @@ def _pending(code: str | None, reason: str, **extra: Any) -> dict[str, Any]:
         "answered": False,
         "car_code": code,
         "pending_reason": reason,
+        "needs_retry": True,
         "alert_count": None,
         "alerts": [],
         "text": {"summary": PENDING_TEXT, "items": []},
@@ -384,14 +416,16 @@ def _parse_response(body: Any, car_code: str, car_geometry: Any, car_updated_at:
         for row in rows:
             if isinstance(row, dict) and normalize_car_code(row.get("code")) == code:
                 crossing = _num(row.get("alertAreaInCar"))
-        outside = False
+        outside = edge = False
         if car is not None:
             area_in_car = _area_ha(car.intersection(geom))
             method = "intersecao_raio_x"
-            if area_in_car < MIN_AREA_HA:
-                # A fonte liga o alerta a este CAR, mas ele não cruza o desenho atual
-                # (retificação ou outra versão): continua listado, com marca.
+            if area_in_car < SLIVER_HA:
+                # A fonte liga o alerta a este CAR, mas ele não cruza o desenho atual ou
+                # só deixa uma lasca nele (retificação ou outra versão): continua
+                # listado, com marca, e nunca como "0,00 ha dentro do imóvel".
                 outside = True
+                edge = area_in_car >= MIN_AREA_HA
                 area_in_car, method = None, None
         elif crossing is not None and crossing > 0:
             area_in_car, method = crossing, "cruzamento_da_fonte"
@@ -406,6 +440,7 @@ def _parse_response(body: Any, car_code: str, car_geometry: Any, car_updated_at:
             "area_in_car_method": method,
             "area_in_car_source_ha": round(crossing, 4) if crossing is not None else None,
             "outside_current_geometry": True if outside else None,
+            "current_geometry_edge_only": True if edge else None,
             "on_previous_car_version": True if outside and version_older else None,
             "biomes": lists["crossedBiomes"],
             "municipalities": lists["crossedCities"],
@@ -439,6 +474,7 @@ def _parse_response(body: Any, car_code: str, car_geometry: Any, car_updated_at:
         "alerts": alerts,
         "ignored": ignored,
         "incomplete": incomplete,
+        "needs_retry": True if incomplete else None,
         "outside_current_geometry_count": outside_count or None,
         "last_publication_date": last_pub.isoformat() if last_pub else None,
         "max_detected_date": max_detected.isoformat() if max_detected else None,
@@ -457,6 +493,12 @@ def _outside_phrase(res: dict[str, Any] | None) -> str:
     if res.get("source_car_version_older") and res.get("source_car_version_date"):
         return f"sobre versão anterior do CAR ({_br_date(res['source_car_version_date'])})"
     return "ligado a este CAR"
+
+
+def _outside_detail(item: dict[str, Any]) -> str:
+    if item.get("current_geometry_edge_only"):
+        return "só toca a borda do desenho atual do imóvel"
+    return "não cruza o desenho atual do imóvel"
 
 
 def _source_text(res: dict[str, Any]) -> dict[str, Any]:
@@ -479,7 +521,7 @@ def _source_text(res: dict[str, Any]) -> dict[str, Any]:
                 when += f" e publicado em {_br_date(a['published_at'])}"
             biomes = f" ({', '.join(a['biomes'])})" if a.get("biomes") else ""
             if a.get("outside_current_geometry"):
-                line = f"Alerta de desmatamento validado {_outside_phrase(res)}, {when}{biomes}; não cruza o desenho atual do imóvel."
+                line = f"Alerta de desmatamento validado {_outside_phrase(res)}, {when}{biomes}; {_outside_detail(a)}."
             else:
                 parts = ["Alerta de desmatamento validado"]
                 if a.get("area_in_car_ha") is not None:
@@ -595,24 +637,76 @@ class _Abort(Exception):
         self.reason = reason
 
 
-def _post(http: httpx.Client, code: str, remaining: float, deadline: float, cancel_event: Any) -> tuple[int, bytes, Any]:
+def _read_attempt(http: httpx.Client, code: str, timeout: httpx.Timeout, box: dict[str, Any],
+                  stop: threading.Event) -> tuple[int, bytes, Any]:
+    """Roda na thread ajudante: faz o pedido e lê a resposta."""
     payload = {"query": QUERY, "variables": {"c": code}}
-    with http.stream("POST", _ENDPOINT, json=payload, timeout=_attempt_timeout(remaining)) as resp:
+    with http.stream("POST", _ENDPOINT, json=payload, timeout=timeout) as resp:
+        box["response"] = resp
         if resp.status_code != 200:
             return resp.status_code, b"", resp.headers.get("Retry-After")
         chunks: list[bytes] = []
         size = 0
         for chunk in resp.iter_bytes():
+            if stop.is_set():
+                raise _Abort("stopped")  # quem esperava já voltou: não segue lendo
             size += len(chunk)
             if size > MAX_RESPONSE_BYTES:
                 raise _Abort("response_too_large")
             chunks.append(chunk)
-            # Resposta que chega aos pingos não segura a thread além do prazo total.
-            if _is_set(cancel_event):
-                raise _Abort("cancelled")
-            if time.monotonic() > deadline:
-                raise _Abort("deadline")
         return 200, b"".join(chunks), None
+
+
+def _interrupt(box: dict[str, Any]) -> None:
+    """Desliga o socket da resposta em leitura: o recv parado acorda na hora (Linux e Windows).
+
+    Antes de a resposta existir (conexão ou espera do cabeçalho) não há socket à mão;
+    a ajudante termina sozinha no timeout da tentativa, já limitado ao prazo restante.
+    """
+    resp = box.get("response")
+    try:
+        stream = resp.extensions.get("network_stream") if resp is not None else None
+        sock = stream.get_extra_info("socket") if stream is not None else None
+        if sock is not None:
+            sock.shutdown(socket.SHUT_RDWR)
+    except Exception:
+        pass
+
+
+def _post(http: httpx.Client, code: str, deadline: float, cancel_event: Any) -> tuple[int, bytes, Any]:
+    """Uma tentativa com teto rígido.
+
+    O timeout do httpx vale por operação (cada recv), então uma fonte muda ou que manda
+    aos pingos seguraria a thread além do prazo. Aqui a leitura roda numa ajudante e
+    esta thread só vigia: sai no prazo ou no cancelamento mesmo sem nenhum byte chegar.
+    """
+    box: dict[str, Any] = {}
+    done = threading.Event()
+    stop = threading.Event()
+    timeout = _attempt_timeout(deadline - time.monotonic())
+
+    def work() -> None:
+        try:
+            box["value"] = _read_attempt(http, code, timeout, box, stop)
+        except BaseException as exc:  # entregue a quem vigia, que decide
+            box["error"] = exc
+        finally:
+            done.set()
+
+    threading.Thread(target=work, name=_WORKER_NAME, daemon=True).start()
+    while not done.wait(max(0.0, min(_WATCH_STEP_SECONDS, deadline - time.monotonic()))):
+        if _is_set(cancel_event):
+            why = "cancelled"
+        elif time.monotonic() >= deadline:
+            why = "deadline"
+        else:
+            continue
+        stop.set()
+        _interrupt(box)
+        raise _Abort(why)
+    if "error" in box:
+        raise box["error"]
+    return box["value"]
 
 
 def _fetch(code: str, cancel_event: Any, client: httpx.Client | None, deadline: float) -> tuple[Any, int, str | None]:
@@ -633,13 +727,12 @@ def _fetch(code: str, cancel_event: Any, client: httpx.Client | None, deadline: 
                 if _is_set(cancel_event):
                     reason = "cancelled"
                     break
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
+            if deadline - time.monotonic() <= 0:
                 reason = reason or "deadline"
                 break
             attempts += 1
             try:
-                status, raw, retry_after = _post(http, code, remaining, deadline, cancel_event)
+                status, raw, retry_after = _post(http, code, deadline, cancel_event)
             except _Abort as exc:
                 reason = exc.reason
                 break
@@ -722,8 +815,8 @@ def _query(car_code: Any, car_geometry: Any, car_updated_at: Any, cancel_event: 
     else:
         result = parse_response(body, code, car_geometry, car_updated_at)
         result.update(meta)
-        if result["answered"] and not cached and use_cache:
-            _cache_put(code, body)  # só resposta válida entra no cache; pendência tenta de novo
+        if result["answered"] and not result.get("incomplete") and not cached and use_cache:
+            _cache_put(code, body)  # só resposta completa entra no cache; pendência e parte ilegível tentam de novo
     print(
         f"RX_MAPBIOMAS_ALERTA={result['state']}:{elapsed}ms:attempts={attempts}:cached={cached}"
         + (f":reason={result.get('pending_reason')}" if result["state"] == "pending" else ""),
@@ -792,11 +885,31 @@ def _deter_status(deter: Any) -> str:
 
 
 def _prodes_checked(prodes: Any) -> bool:
-    """PRODES só conta como consultado com resposta completa e camadas identificadas."""
-    if not isinstance(prodes, dict) or not prodes.get("ok") or prodes.get("failed_layers"):
+    """PRODES só conta como consultado no formato do ``prodes_fast_v24``, completo.
+
+    Formato legado (falha dentro de ``hits``), catálogo sem camada anual, camada com
+    falha ou camada que bateu no limite do WFS não provam consulta completa: nesses
+    casos nada se afirma sobre PRODES (nem zero).
+    """
+    if not isinstance(prodes, dict) or prodes.get("ok") is not True:
         return False
+    failed = prodes.get("failed_layers")
+    if not isinstance(failed, list) or failed:
+        return False  # sem failed_layers é o formato legado, que esconde falha em hits
+    catalog = prodes.get("candidate_layers")
+    if not isinstance(catalog, list) or not any(isinstance(c, str) and _PRODES_ANNUAL_LAYER in c for c in catalog):
+        return False  # catálogo vazio ou sem mapa anual: nada foi conferido
     hits = prodes.get("hits")
-    return isinstance(hits, list) and all(isinstance(h, dict) and isinstance(h.get("layer"), str) for h in hits)
+    if not isinstance(hits, list):
+        return False
+    for h in hits:
+        if not isinstance(h, dict) or not isinstance(h.get("layer"), str) or not isinstance(h.get("features"), list):
+            return False
+        if h.get("error"):
+            return False  # falha escondida dentro de hits
+        if max(len(h["features"]), _num(h.get("count")) or 0) >= PRODES_WFS_COUNT_LIMIT:
+            return False  # limite do WFS: 2000 não é todos
+    return True
 
 
 def combine_deforestation_alerts(
@@ -833,20 +946,36 @@ def _combine(car_geometry: Any, mapbiomas: Any, deter: Any, prodes: Any, prodes_
         "validated_alerts": "not_queried" if mapbiomas is None else ("answered" if mb_readable else "pending"),
         "inpe_deter": _deter_status(deter),
     }
+    validated_reasons: list[str] = []
+    version_date = None
     if mb_readable:
         ignored = mb.get("ignored") if isinstance(mb.get("ignored"), dict) else {}
         if mb.get("incomplete") or _num(ignored.get("malformed")):
             # Parte da resposta ilegível: o que foi lido conta, mas "nenhum" não se afirma.
-            status["validated_alerts"] = "pending"
+            validated_reasons.append("incomplete")
+        if mb.get("source_car_version_older"):
+            # A fonte cruzou versão anterior do CAR: alerta na área que a retificação
+            # acrescentou não fica ligado ao código. O que foi achado conta; "nenhum", não.
+            validated_reasons.append("previous_car_version")
+            version_date = _iso_date(mb.get("source_car_version_date"))
+        max_detected = _iso_date(mb.get("max_detected_date"))
+        if max_detected is None or max_detected <= cutoff:
+            # Cobertura que não entra na janela recente não responde por ela.
+            validated_reasons.append("coverage_before_recent_window")
+    if validated_reasons:
+        status["validated_alerts"] = "pending"
     base = {
         "cut_date": cutoff.isoformat(),
         "cut_date_origin": cutoff_origin,
         "recent_after": (cutoff + timedelta(days=1)).isoformat(),
         "sources": status,
+        "validated_alerts_car_version_date": version_date.isoformat() if version_date else None,
+        "_validated_alerts_pending_reasons": validated_reasons or None,
     }
     if car is None:
-        return {**base, "state": "pending", "pending_reason": "car_geometry_missing", "events": [],
-                "text": {"summary": COMBINED_PENDING_TEXT, "items": []}}
+        out = {**base, "state": "pending", "pending_reason": "car_geometry_missing", "events": [],
+               "text": {"summary": COMBINED_PENDING_TEXT, "items": []}}
+        return {k: v for k, v in out.items() if v is not None}
 
     witnesses: list[dict[str, Any]] = []
     outside: list[dict[str, Any]] = []
@@ -861,11 +990,14 @@ def _combine(car_geometry: Any, mapbiomas: Any, deter: Any, prodes: Any, prodes_
                 status["validated_alerts"] = "pending"
                 continue
             inside = car.intersection(geom)
+            inside_ha = _area_ha(inside)
             ident = str(a.get("_alert_code") or "")
-            if a.get("outside_current_geometry") or _area_ha(inside) < MIN_AREA_HA:
-                outside.append({"source": "validated_alert", "id": ident, "date": d})
+            if a.get("outside_current_geometry") or inside_ha < SLIVER_HA:
+                edge = bool(a.get("current_geometry_edge_only")) or inside_ha >= MIN_AREA_HA
+                outside.append({"source": "validated_alert", "id": ident, "date": d, "edge": edge})
                 continue
-            witnesses.append({"source": "validated_alert", "id": ident, "date": d, "geom": inside})
+            witnesses.append({"source": "validated_alert", "id": ident, "date": d, "geom": inside,
+                              "full_ha": _area_ha(geom)})
     deter_used = False
     if status["inpe_deter"] == "answered":
         deter_used = True
@@ -879,14 +1011,16 @@ def _combine(car_geometry: Any, mapbiomas: Any, deter: Any, prodes: Any, prodes_
                 malformed += 1
                 continue
             inside = car.intersection(geom)
-            if _area_ha(inside) < MIN_AREA_HA:
-                continue
-            witnesses.append({"source": "inpe_deter", "id": str(props.get("gid") or f.get("id") or ""), "date": d, "geom": inside})
+            if _area_ha(inside) < SLIVER_HA:
+                continue  # borda do desenho, não área medida (e nunca "0,00 ha")
+            witnesses.append({"source": "inpe_deter", "id": str(props.get("gid") or f.get("id") or ""), "date": d,
+                              "geom": inside, "full_ha": _area_ha(geom)})
         if malformed:
             status["inpe_deter"] = "pending"  # feição ilegível: "nenhum" não se afirma
 
     prodes_checked = _prodes_checked(prodes)
-    prodes_geoms: list[tuple[Any, int | None]] = []
+    # (parte dentro do imóvel, ano, área do polígono PRODES inteiro)
+    prodes_geoms: list[tuple[Any, int | None, float]] = []
     if prodes_checked:
         for hit in prodes["hits"]:
             if _PRODES_ANNUAL_LAYER not in hit["layer"]:
@@ -899,22 +1033,24 @@ def _combine(car_geometry: Any, mapbiomas: Any, deter: Any, prodes: Any, prodes_
                 inside = car.intersection(geom)
                 if _area_ha(inside) >= MIN_AREA_HA:
                     props = f.get("properties") if isinstance(f.get("properties"), dict) else {}
-                    prodes_geoms.append((inside, _prodes_year(props)))
+                    prodes_geoms.append((inside, _prodes_year(props), _area_ha(geom)))
 
-    def prodes_overlap(geom: Any, only_years: set[int] | None = None) -> tuple[float, list[int], bool]:
+    def prodes_overlap(geom: Any, only_years: set[int] | None = None,
+                       full_ha: float | None = None) -> tuple[float, list[int], bool]:
+        """Área comum dentro do imóvel; ``significant`` compara com o alerta e o polígono INTEIROS."""
         touched = []
-        for g, y in prodes_geoms:
+        for g, y, g_full_ha in prodes_geoms:
             if (only_years is None or y in only_years) and g.intersects(geom):
                 common = _area_ha(g.intersection(geom))
                 if common >= MIN_AREA_HA:
-                    touched.append((g, y, common))
+                    touched.append((g, y, common, g_full_ha))
         if not touched:
             return 0.0, [], False
-        area = _area_ha(unary_union([g for g, _, _ in touched]).intersection(geom))
-        base_area = _area_ha(geom)
-        of_alert = base_area > 0 and area / base_area >= SIGNIFICANT_OVERLAP
-        of_polygon = [(g, y) for g, y, c in touched if _area_ha(g) > 0 and c / _area_ha(g) >= SIGNIFICANT_OVERLAP]
-        years = sorted({y for _, y, _ in touched if y})
+        area = _area_ha(unary_union([t[0] for t in touched]).intersection(geom))
+        alert_ha = full_ha if full_ha is not None else _area_ha(geom)
+        of_alert = alert_ha > 0 and area / alert_ha >= SIGNIFICANT_OVERLAP
+        of_polygon = any(p_ha > 0 and c / p_ha >= SIGNIFICANT_OVERLAP for _, _, c, p_ha in touched)
+        years = sorted({t[1] for t in touched if t[1]})
         return area, years, bool(of_alert or of_polygon)
 
     recent = [w for w in witnesses if w["date"] > cutoff]
@@ -963,7 +1099,8 @@ def _combine(car_geometry: Any, mapbiomas: Any, deter: Any, prodes: Any, prodes_
         events.append({
             "first_seen": w["date"].isoformat(), "last_seen": w["date"].isoformat(),
             "area_in_car_ha": None, "sources": [VALIDATED_LABEL], "validated": True,
-            "outside_current_geometry": True, "area_already_in_prodes_ha": None,
+            "outside_current_geometry": True, "current_geometry_edge_only": True if w["edge"] else None,
+            "area_already_in_prodes_ha": None,
             "_validated_alert_codes": [w["id"]],
             "_witnesses": [{"source": w["source"], "id": w["id"], "date": w["date"].isoformat()}],
         })
@@ -979,7 +1116,7 @@ def _combine(car_geometry: Any, mapbiomas: Any, deter: Any, prodes: Any, prodes_
             # Alerta antigo só coincide com a ocorrência PRODES do ano que contém a
             # data dele (ou do ano seguinte, quando o mapa anual pegou a abertura depois).
             n = _prodes_year_of(w["date"])
-            area_p, years, significant = prodes_overlap(w["geom"], {n, n + 1})
+            area_p, years, significant = prodes_overlap(w["geom"], {n, n + 1}, w["full_ha"])
             row.update(prodes_overlap_ha=round(area_p, 4), prodes_years=years, coincides_with_prodes=significant)
         before.append(row)
     for w in outside:
@@ -1024,11 +1161,13 @@ def _combine(car_geometry: Any, mapbiomas: Any, deter: Any, prodes: Any, prodes_
         "event_count": event_count,
         "event_count_is_minimum": True if events and pending else None,
         "area_union_ha": area_union,
+        # Fonte pendente pode ter área que ainda não entrou na união: só o mínimo.
+        "area_union_is_minimum": True if area_union is not None and events and pending else None,
         "_audit_sum_of_sources_ha": round(sum(_area_ha(w["geom"]) for w in recent), 4),
         "before_cutoff": before,
         "prodes_checked": prodes_checked,
         # Sinal de corte vencido (ex.: saiu PRODES novo e o chamador não informou a data).
-        "prodes_newer_than_cut": (any(y and date(y, 7, 31) > cutoff for _, y in prodes_geoms) or None) if prodes_checked else None,
+        "prodes_newer_than_cut": (any(y and date(y, 7, 31) > cutoff for _, y, _ in prodes_geoms) or None) if prodes_checked else None,
         "credit_note": credit_note,
         "sources_page_credits": credits or None,
     }
@@ -1055,20 +1194,27 @@ def _combined_text(res: dict[str, Any], mb: dict[str, Any] | None, deter: Any) -
             parts.append("alertas validados" + (f" (detecções até {_br_date(max_detected)})" if _iso_date(max_detected) else ""))
         return " e ".join(parts)
 
-    labels = {"inpe_deter": "INPE", "validated_alerts": "Alertas validados"}
-    pending_line = " ".join(f"{labels[k]}: consulta pendente." for k, v in st.items() if v == "pending")
+    def pending_of(key: str) -> str:
+        if key == "validated_alerts" and res.get("validated_alerts_car_version_date"):
+            return (f"Alertas validados: consulta pendente para o desenho atual (consideram a versão do CAR "
+                    f"de {_br_date(res['validated_alerts_car_version_date'])}).")
+        return {"inpe_deter": "INPE", "validated_alerts": "Alertas validados"}[key] + ": consulta pendente."
+
+    pending_line = " ".join(pending_of(k) for k, v in st.items() if v == "pending")
     state = res["state"]
     if state == "found":
         events = res["events"]
         inside = [e for e in events if not e.get("outside_current_geometry")]
         outside = [e for e in events if e.get("outside_current_geometry")]
         lead = "Ao menos " if res.get("event_count_is_minimum") else ""
+        at_least_area = "ao menos " if res.get("area_union_is_minimum") else ""
         chunks = []
         if inside:
             n = len(inside)
             chunks.append(
                 f"{lead}{n} {_plural(n, 'alerta recente', 'alertas recentes')} de desmatamento sobre o imóvel, "
-                f"com {_br_ha(res['area_union_ha'])} ha (a mesma abertura vista por mais de uma fonte conta uma vez)."
+                f"com {at_least_area}{_br_ha(res['area_union_ha'])} ha "
+                "(a mesma abertura vista por mais de uma fonte conta uma vez)."
             )
             lead = ""
         if outside:
@@ -1081,9 +1227,10 @@ def _combined_text(res: dict[str, Any], mb: dict[str, Any] | None, deter: Any) -
         for e in events:
             if e.get("outside_current_geometry"):
                 line = (f"Alerta de desmatamento validado {_outside_phrase(mb)}, visto por satélite em "
-                        f"{_br_date(e['first_seen'])}; não cruza o desenho atual do imóvel.")
+                        f"{_br_date(e['first_seen'])}; {_outside_detail(e)}.")
             else:
-                line = f"{_br_ha(e['area_in_car_ha'])} ha, visto por satélite em {_br_date(e['first_seen'])}"
+                line = (("Ao menos " if at_least_area else "") + f"{_br_ha(e['area_in_car_ha'])} ha, "
+                        f"visto por satélite em {_br_date(e['first_seen'])}")
                 if DETER_LABEL in e["sources"]:
                     line += " (INPE)"
                 if e.get("validated"):

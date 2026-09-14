@@ -20,14 +20,15 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import socket
 import threading
 import time
 from pathlib import Path
 
 import httpx
 from shapely import wkt as shapely_wkt
-from shapely.geometry import mapping
-from shapely.ops import transform
+from shapely.geometry import MultiPolygon, Polygon, box, mapping
+from shapely.ops import transform, unary_union
 
 import mapbiomas_alerta as m
 
@@ -131,6 +132,20 @@ def parse_real() -> dict:
     assert "_geometry_wkt" in a, "combinação precisa da geometria interna"
     ok("controle_1349329=found_texto_neutro_laudo_so_interno")
 
+    # Área geodésica de MultiPolygon com partes em sentidos opostos (o alerta 1349329 vem
+    # assim): cada parte orientada, bate com a área publicada pela fonte (13,1558 ha).
+    raw_alert = shapely_wkt.loads(body["data"]["ruralProperty"]["alerts"][0]["geometryWkt"])
+    assert {p.exterior.is_ccw for p in raw_alert.geoms} == {True, False}, "fixture precisa ter as duas orientações"
+    assert abs(m._area_ha(m._geometry(raw_alert)) - 13.1558) < 0.01, m._area_ha(m._geometry(raw_alert))
+    # Furo no mesmo sentido da casca (GeoJSON e WKT não garantem sentido): é descontado, não somado.
+    outer = box(-44.36, -18.94, -44.32, -18.90)
+    inner = box(-44.35, -18.93, -44.33, -18.91)
+    holed = Polygon(outer.exterior.coords, [inner.exterior.coords])
+    assert holed.is_valid and holed.exterior.is_ccw == holed.interiors[0].is_ccw, "cenário de furo no mesmo sentido"
+    expected = m._area_ha(outer) - m._area_ha(inner)
+    assert abs(m._area_ha(holed) - expected) < 0.01 * expected, (m._area_ha(holed), expected)
+    ok("area_de_multipoligono_e_furo_em_qualquer_sentido=area_geodesica_certa")
+
     no_geom = m.parse_response(body, code)
     b = no_geom["alerts"][0]
     assert b["area_in_car_method"] == "cruzamento_da_fonte" and b["area_in_car_ha"] == 11.8437, b
@@ -229,6 +244,7 @@ def parse_rules() -> None:
     partial["data"]["ruralProperty"]["alerts"].append(extra)
     r = m.parse_response(partial, code, CARS["controle_pre_corte"]["geometry"])
     assert r["state"] == "found" and r["incomplete"] is True and "alert_count" not in r and r["alert_count_min"] == 1, r
+    assert r["needs_retry"] is True and "needs_retry" not in m.parse_response(body, code, CARS["controle_pre_corte"]["geometry"]), r
     assert r["text"]["summary"].startswith("Ao menos 1 alerta"), r["text"]
     alone = m.combine_deforestation_alerts(CARS["controle_pre_corte"]["geometry"], r, None, None)
     assert alone["sources"]["validated_alerts"] == "pending" and alone["state"] == "pending", alone
@@ -272,8 +288,14 @@ def parse_rules() -> None:
 
 
 # ------------------------------------------------------------------ rede simulada
+def new_workers(before: set) -> list[threading.Thread]:
+    return [t for t in threading.enumerate() if t not in before and t.name == m._WORKER_NAME]
+
+
 def transport_rules() -> None:
-    m.RETRY_PAUSE_SECONDS = 0.0
+    # A pausa entre tentativas fica no valor de produção: zerar apagaria a janela em
+    # que o cancelamento precisa ser visto (controle N26b).
+    assert m.RETRY_PAUSE_SECONDS > 0
     code, body = body_of("controle_pre_corte")
     geom = CARS["controle_pre_corte"]["geometry"]
     seen: list[httpx.Request] = []
@@ -332,7 +354,7 @@ def transport_rules() -> None:
     stop = threading.Event()
     stop.set()
     r = run([good], cancel_event=stop)
-    assert r["pending_reason"] == "cancelled" and len(seen) == 0, r
+    assert r["pending_reason"] == "cancelled" and len(seen) == 0 and r["attempts"] == 0, r
 
     between = threading.Event()
 
@@ -343,6 +365,28 @@ def transport_rules() -> None:
     r = run([fail_and_cancel, good], cancel_event=between)
     assert r["pending_reason"] == "cancelled" and len(seen) == 1, r
     ok("cancel_event=nao_consulta_nem_repete")
+
+    # Cancelamento NO MEIO da pausa entre tentativas (pausa de produção, não zero):
+    # a guarda depois da pausa impede a segunda tentativa.
+    class CancelDuringPause(threading.Event):
+        def __init__(self) -> None:
+            super().__init__()
+            self.pauses: list = []
+
+        def wait(self, timeout=None):
+            self.pauses.append(timeout)
+            time.sleep(timeout / 2)  # metade da pausa passa de verdade
+            self.set()  # o usuário cancela aqui
+            return super().wait(timeout / 2)
+
+    mid_pause = CancelDuringPause()
+    t0 = time.monotonic()
+    r = run([httpx.Response(502), good], cancel_event=mid_pause)
+    took = time.monotonic() - t0
+    assert mid_pause.pauses == [m.RETRY_PAUSE_SECONDS] and mid_pause.pauses[0] > 0, mid_pause.pauses
+    assert r["pending_reason"] == "cancelled" and len(seen) == 1 and r["attempts"] == 1, (r, len(seen))
+    assert took >= m.RETRY_PAUSE_SECONDS / 2, took
+    ok("cancelamento_no_meio_da_pausa=sem_segunda_tentativa")
 
     for res in (run([httpx.ReadTimeout("t")]), run([httpx.Response(500), httpx.Response(500)])):
         assert res["state"] == "pending" and res["alert_count"] is None
@@ -360,21 +404,58 @@ def transport_rules() -> None:
 
         return httpx.Response(200, content=chunks())
 
+    before = set(threading.enumerate())
     t0 = time.monotonic()
     r = run([trickle], deadline_s=0.4)
     took = time.monotonic() - t0
-    assert r["state"] == "pending" and r["pending_reason"] == "deadline" and took < 1.2, (r, took)
+    assert r["state"] == "pending" and r["pending_reason"] == "deadline" and took < 0.7, (r, took)
     assert seen[0].extensions["timeout"]["read"] <= 0.4, seen[0].extensions["timeout"]
+    # A leitora não segue consumindo a resposta depois que a consulta voltou (os pingos
+    # continuariam por ~2 s).
+    for worker in new_workers(before):
+        worker.join(0.5)
+        assert not worker.is_alive(), "leitura seguiu depois do prazo"
     mid = threading.Event()
     threading.Timer(0.3, mid.set).start()
     t0 = time.monotonic()
     r = run([trickle], cancel_event=mid)
     took = time.monotonic() - t0
-    assert r["pending_reason"] == "cancelled" and took < 1.2 and len(seen) == 1, (r, took)
+    assert r["pending_reason"] == "cancelled" and took < 0.7 and len(seen) == 1, (r, took)
     r = run([httpx.Response(502), good], deadline_s=1.0)
     assert r["pending_reason"] == "http_5xx" and len(seen) == 1, r
     assert m.DEADLINE_SECONDS <= 30 and m.MIN_RETRY_SECONDS > 0
     ok("prazo_total_monotonico=tentativa_limitada_ao_restante")
+
+    # Teto rígido: o timeout do httpx vale por leitura, então pingo a cada 1 s ou fonte
+    # muda seguravam a thread além do prazo e do cancelamento.
+    def drip(request):
+        def chunks():
+            yield payload[:10]
+            for i in range(10, len(payload), 4096):
+                time.sleep(1.0)
+                yield payload[i:i + 4096]
+
+        return httpx.Response(200, content=chunks())
+
+    def mute(request):
+        time.sleep(1.5)
+        return httpx.Response(200, json=body)
+
+    t0 = time.monotonic()
+    r = run([drip], deadline_s=0.5)
+    took = time.monotonic() - t0
+    assert r["pending_reason"] == "deadline" and took < 0.8, (r, took)
+    t0 = time.monotonic()
+    r = run([mute], deadline_s=0.3)
+    took = time.monotonic() - t0
+    assert r["pending_reason"] == "deadline" and took < 0.6, (r, took)
+    silent = threading.Event()
+    threading.Timer(0.2, silent.set).start()
+    t0 = time.monotonic()
+    r = run([mute], cancel_event=silent)
+    took = time.monotonic() - t0
+    assert r["pending_reason"] == "cancelled" and took < 0.6, (r, took)
+    ok("prazo_e_cancelamento=teto_rigido_sem_esperar_byte")
 
     # Versão async (asyncio.gather do analyze_car): cancelar a tarefa avisa a thread.
     async def cancel_async() -> threading.Event:
@@ -447,15 +528,101 @@ def transport_rules() -> None:
         return httpx.Response(200, json=body)
 
     with client(once_timeout) as c:
-        assert m.query_mapbiomas_alerta(code, geom, client=c)["state"] == "pending"
+        first = m.query_mapbiomas_alerta(code, geom, client=c)
+        assert first["state"] == "pending" and first["needs_retry"] is True, first
         assert m.query_mapbiomas_alerta(code, geom, client=c)["state"] == "found"
     assert len(calls) == 2
     assert 0 < m.CACHE_TTL_SECONDS <= 6 * 3600
+    # Resposta com parte ilegível: pede nova tentativa e não fica no cache.
     m.clear_cache()
-    ok("cache_curto_por_car=so_resposta_valida")
+    calls.clear()
+    partial_body = copy.deepcopy(body)
+    extra = copy.deepcopy(partial_body["data"]["ruralProperty"]["alerts"][0])
+    extra.update(alertCode=1999999, detectedAt="2026-03-01", geometryWkt=None)
+    partial_body["data"]["ruralProperty"]["alerts"].append(extra)
+    replies = [partial_body, body]
+
+    def incomplete_then_good(request):
+        calls.append(1)
+        return httpx.Response(200, json=replies.pop(0) if replies else body)
+
+    with client(incomplete_then_good) as c:
+        r1 = m.query_mapbiomas_alerta(code, geom, client=c)
+        r2 = m.query_mapbiomas_alerta(code, geom, client=c)
+    assert r1["state"] == "found" and r1["incomplete"] is True and r1["needs_retry"] is True, r1
+    assert len(calls) == 2 and r2["cached"] is False and r2["incomplete"] is False and "needs_retry" not in r2, (calls, r2)
+    m.clear_cache()
+    ok("cache_curto_por_car=so_resposta_valida_e_completa")
 
     assert m.query_mapbiomas_alerta("nao-e-car")["pending_reason"] == "invalid_car_code"
     ok("codigo_invalido=sem_rede")
+
+
+def real_socket_rules() -> None:
+    """Socket TCP de verdade em 127.0.0.1: o prazo corta a espera e a leitura parada acorda na hora."""
+    code, _ = body_of("controle_pre_corte")
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+    srv.settimeout(5.0)
+    port = srv.getsockname()[1]
+    client_hung_up: list[bool] = []
+
+    def serve() -> None:
+        try:
+            conn, _ = srv.accept()
+        except OSError:
+            srv.close()
+            return
+        try:
+            conn.settimeout(5.0)
+            data = b""
+            while b"\r\n\r\n" not in data:
+                data += conn.recv(65536)
+            conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n")
+            for _ in range(3):  # pingos em 0; 0,4; 0,8 s, depois fica mudo
+                conn.sendall(b"1\r\n \r\n")
+                time.sleep(0.4)
+            conn.settimeout(3.0)
+            hung_up = False
+            while True:  # descarta o resto do pedido até o cliente desligar
+                try:
+                    chunk = conn.recv(65536)
+                except TimeoutError:
+                    break
+                except OSError:
+                    hung_up = True
+                    break
+                if not chunk:
+                    hung_up = True
+                    break
+            client_hung_up.append(hung_up)
+        finally:
+            conn.close()
+            srv.close()
+
+    server = threading.Thread(target=serve, daemon=True)
+    server.start()
+    real_endpoint = m._ENDPOINT
+    m._ENDPOINT = f"http://127.0.0.1:{port}/api/v2/graphql"
+    m.clear_cache()
+    m.reset_rate_limit()
+    before = set(threading.enumerate())
+    try:
+        with httpx.Client(trust_env=False) as c:
+            t0 = time.monotonic()
+            r = m.query_mapbiomas_alerta(code, client=c, use_cache=False, deadline_s=1.0)
+            took = time.monotonic() - t0
+            # Sem desligar o socket, a leitura parada em 0,8 s só acordaria no timeout (1,8 s).
+            for worker in new_workers(before):
+                worker.join(0.4)
+                assert not worker.is_alive(), "leitura presa no socket depois do prazo"
+    finally:
+        m._ENDPOINT = real_endpoint
+    server.join(3.0)
+    assert r["state"] == "pending" and r["pending_reason"] == "deadline" and took < 1.4, (r, took)
+    assert client_hung_up == [True], client_hung_up
+    ok("socket_real=prazo_rigido_e_leitura_parada_acorda")
 
 
 def production_path() -> None:
@@ -499,11 +666,19 @@ def production_path() -> None:
 
 
 # ------------------------------------------------------------------ combinação
+PRODES_CATALOG = ["prodes-cerrado-nb:yearly_deforestation", "prodes-cerrado-nb:accumulated_deforestation_2000"]
+
+
+def prodes_answer(hits: list, **extra) -> dict:
+    """Formato do prodes_fast_v24: catálogo, hits com count e failed_layers separado."""
+    rows = [dict(h, count=len(h.get("features") or [])) for h in hits]
+    return {"ok": True, "candidate_layers": list(PRODES_CATALOG), "hits": rows, "failed_layers": [], **extra}
+
+
 def inpe(name: str, **deter_extra):
     fx = load(f"inpe_{name}.json")
     deter = {"state": "answered", "features": fx["deter_features"], "min_area_ha": 3.0, **deter_extra}
-    prodes = {"ok": True, "hits": fx["prodes_hits"], "failed_layers": []}
-    return deter, prodes
+    return deter, prodes_answer(fx["prodes_hits"])
 
 
 def area_of(geom) -> float:
@@ -566,14 +741,48 @@ def combination_rules(parsed: dict) -> None:
     # Sobreposição mínima (anel de ~5 m na borda do alerta) não gera nota.
     alert_in = m._geometry(hit["alerts"][0]["_geometry_wkt"]).intersection(m._geometry(car_ctrl))
     ring = m._geometry(car_ctrl).difference(alert_in.buffer(-0.00005))
-    sliver = {"ok": True, "failed_layers": [], "hits": [{"layer": "prodes-cerrado-nb:yearly_deforestation", "features": [
-        {"type": "Feature", "properties": {"year": 2025}, "geometry": mapping(ring)}]}]}
+    sliver = prodes_answer([{"layer": "prodes-cerrado-nb:yearly_deforestation", "features": [
+        {"type": "Feature", "properties": {"year": 2025}, "geometry": mapping(ring)}]}])
     common = m._area_ha(ring.intersection(alert_in))
     assert 0 < common / m._area_ha(alert_in) < 0.5 and common / m._area_ha(ring) < 0.5, "cenário de borda precisa ser borda"
     s = m.combine_deforestation_alerts(car_ctrl, hit, deter, sliver)
     srow = {r["_id"]: r for r in s["before_cutoff"]}["1349329"]
     assert srow["coincides_with_prodes"] is False and not [i for i in s["text"]["items"] if i.get("section") == "prodes"], s
     ok("sobreposicao_de_borda=sem_nota_prodes")
+
+    # Polígono PRODES grande (~720 ha fora do imóvel) que deixa só uma lasca de ~5 m² dentro
+    # do imóvel, e a lasca cai no alerta: contra a parte recortada daria "coincide".
+    car_shape = m._geometry(car_ctrl)
+    spot = alert_in.representative_point()
+    tiny = box(spot.x - 1e-5, spot.y - 1e-5, spot.x + 1e-5, spot.y + 1e-5)
+    minx, miny, _, maxy = car_shape.bounds
+    far = box(minx - 0.03, miny, minx - 0.01, maxy)
+    big_prodes = MultiPolygon([far, tiny])
+    clipped = big_prodes.intersection(car_shape)
+    assert m.MIN_AREA_HA <= m._area_ha(clipped) < 0.001 and m._area_ha(big_prodes) > 500, "cenário de lasca"
+    assert m._area_ha(clipped.intersection(alert_in)) / m._area_ha(clipped) >= 0.5, "recortado diria coincide"
+    lasca = prodes_answer([{"layer": "prodes-cerrado-nb:yearly_deforestation", "features": [
+        {"type": "Feature", "properties": {"year": 2025}, "geometry": mapping(big_prodes)}]}])
+    lp = m.combine_deforestation_alerts(car_ctrl, hit, deter, lasca)
+    lrow = {r["_id"]: r for r in lp["before_cutoff"]}["1349329"]
+    assert lrow["coincides_with_prodes"] is False and lrow["prodes_overlap_ha"] < 0.001, lrow
+    assert not [i for i in lp["text"]["items"] if i.get("section") == "prodes"], lp["text"]
+    ok("lasca_de_poligono_prodes_grande=sem_nota_medida_no_poligono_inteiro")
+
+    # Alerta grande (~730 ha) com só 11,84 ha dentro do imóvel, coberto por um polígono PRODES
+    # do tamanho do imóvel: contra o alerta recortado daria "coincide"; contra o inteiro, não.
+    wide = copy.deepcopy(hit)
+    wide_geom = unary_union([m._geometry(hit["alerts"][0]["_geometry_wkt"]), far])
+    wide["alerts"][0]["_geometry_wkt"] = wide_geom.wkt
+    whole_car = prodes_answer([{"layer": "prodes-cerrado-nb:yearly_deforestation", "features": [
+        {"type": "Feature", "properties": {"year": 2025}, "geometry": mapping(car_shape)}]}])
+    in_car = m._area_ha(wide_geom.intersection(car_shape))
+    assert in_car > 10 and in_car / m._area_ha(wide_geom) < 0.5 and in_car / m._area_ha(car_shape) < 0.5, "cenário"
+    wp = m.combine_deforestation_alerts(car_ctrl, wide, None, whole_car)
+    wrow = {r["_id"]: r for r in wp["before_cutoff"]}["1349329"]
+    assert wrow["prodes_overlap_ha"] > 10 and wrow["coincides_with_prodes"] is False, wrow
+    assert not [i for i in wp["text"]["items"] if i.get("section") == "prodes"], wp["text"]
+    ok("alerta_grande_com_parte_no_imovel=sem_nota_medida_no_alerta_inteiro")
 
     # 3) O corte anda quando sai o próximo PRODES: o evento de 2025-09 deixa de ser recente.
     deter, prodes = inpe("recente_pos_corte")
@@ -594,11 +803,22 @@ def combination_rules(parsed: dict) -> None:
     assert oldest["event_count"] == 1
     ok("corte_informado_anda_discordancia_usa_o_mais_antigo")
 
-    # 4) PRODES não consultado, com falha ou com camada sem nome: nenhuma afirmação sobre PRODES.
-    unnamed = {"ok": True, "failed_layers": [], "hits": [{k: v for k, v in prodes["hits"][0].items() if k != "layer"}]}
+    # 4) PRODES não consultado, com falha, com camada sem nome ou em formato que não prova
+    #    consulta completa: nenhuma afirmação sobre PRODES (nem zero).
+    unnamed = prodes_answer([{k: v for k, v in prodes["hits"][0].items() if k != "layer"}])
+    legacy_ok = {"ok": True, "candidate_layers": list(PRODES_CATALOG), "hits": prodes["hits"]}  # deploy_app.query_prodes
+    legacy_err = {"ok": True, "candidate_layers": list(PRODES_CATALOG),
+                  "hits": prodes["hits"] + [{"layer": "prodes-cerrado-nb:accumulated_deforestation_2000", "error": "ReadTimeout"}]}
+    error_in_hits = prodes_answer(prodes["hits"])
+    error_in_hits["hits"].append({"layer": "prodes-cerrado-nb:yearly_deforestation", "count": 0, "features": [],
+                                  "error": "ReadTimeout"})
+    empty_catalog = {"ok": True, "hits": [], "failed_layers": [], "candidate_layers": []}
+    no_annual = {"ok": True, "hits": [], "failed_layers": [], "candidate_layers": [PRODES_CATALOG[1]]}
+    at_limit = prodes_answer(prodes["hits"])
+    at_limit["hits"][0]["count"] = m.PRODES_WFS_COUNT_LIMIT
     for bad_prodes in (None, {"ok": False, "failed_layers": [{"layer": "x"}], "hits": []},
                        {"ok": True, "failed_layers": [{"layer": "x", "error": "ReadTimeout"}], "hits": prodes["hits"]},
-                       unnamed):
+                       unnamed, legacy_ok, legacy_err, error_in_hits, empty_catalog, no_annual, at_limit):
         n = m.combine_deforestation_alerts(car_recent, recent, deter, bad_prodes)
         assert n["state"] == "found" and n["prodes_checked"] is False, n
         ev = n["events"][0]
@@ -615,7 +835,8 @@ def combination_rules(parsed: dict) -> None:
     k = m.combine_deforestation_alerts(car_recent, recent, deter, mask)
     assert k["prodes_checked"] is True and k["events"][0]["area_already_in_prodes_ha"] == 0.0, k
     assert "já constavam" not in text_of(k)
-    ok("prodes_falhou_ou_mascara=nenhuma_afirmacao_prodes")
+    assert m._prodes_checked(prodes) is True, "formato completo do prodes_fast_v24 precisa valer"
+    ok("prodes_falhou_legado_catalogo_vazio_limite_ou_mascara=nenhuma_afirmacao_prodes")
 
     # 5) Sem módulo DETER: só alertas validados, sem citar o INPE.
     only = m.combine_deforestation_alerts(car_recent, recent, None, prodes)
@@ -701,11 +922,92 @@ def combination_rules(parsed: dict) -> None:
     assert_clean_public(solo)
     ok("evento_so_deter=aviso_inpe")
 
+    # 11) A fonte cruzou uma versão ANTERIOR do CAR: o que achou conta, mas "nenhum" não se afirma
+    #     para o desenho atual (alerta na área acrescentada não fica ligado ao código).
+    code_v, body_v = body_of("curvelo_vazio")
+    old_empty = m.parse_response(body_v, code_v, car_empty, car_updated_at="2026-09-01")
+    assert old_empty["state"] == "not_found" and old_empty["source_car_version_older"] is True, old_empty
+    v_alone = m.combine_deforestation_alerts(car_empty, old_empty, None, None)
+    assert v_alone["state"] == "pending" and v_alone["sources"]["validated_alerts"] == "pending", v_alone
+    v_deter = m.combine_deforestation_alerts(car_empty, old_empty, empty_deter, None)
+    vs = v_deter["text"]["summary"]
+    assert v_deter["state"] == "partial" and "Conferido em" not in vs and "event_count" not in v_deter, v_deter
+    assert ("Alertas validados: consulta pendente para o desenho atual (consideram a versão do CAR de 27/09/2025)."
+            in vs), vs
+    assert v_deter["validated_alerts_car_version_date"] == "2025-09-27", v_deter
+    code_r, body_r = body_of("recente_pos_corte")
+    old_recent = m.parse_response(body_r, code_r, car_recent, car_updated_at="2026-09-01")
+    vf = m.combine_deforestation_alerts(car_recent, old_recent, *inpe("recente_pos_corte"))
+    assert vf["state"] == "found" and vf["event_count_is_minimum"] is True, vf
+    assert vf["text"]["summary"].startswith("Ao menos 1") and "consideram a versão do CAR de 27/09/2025" in vf["text"]["summary"], vf
+    for res in (v_alone, v_deter, vf):
+        assert_clean_public(res)
+    ok("versao_anterior_do_car_sem_achado=nunca_nenhum_e_ressalva_no_combinado")
+
+    # 12) Retificação que deixa só uma lasca do alerta no desenho atual (abaixo de 0,01 ha):
+    #     fora do desenho, com o sinal de versão anterior, e nunca "0,00 ha".
+    alert_shape = m._geometry(hit["alerts"][0]["_geometry_wkt"])
+    spot = alert_shape.intersection(m._geometry(car_ctrl)).representative_point()
+    crumb = box(spot.x - 1.85e-5, spot.y - 1.85e-5, spot.x + 1.85e-5, spot.y + 1.85e-5)
+    car_crumb = m._geometry(car_ctrl).difference(alert_shape).union(crumb)
+    crumb_ha = m._area_ha(car_crumb.intersection(alert_shape))
+    assert m.MIN_AREA_HA <= crumb_ha < m.SLIVER_HA and round(crumb_ha, 2) == 0, crumb_ha
+    lr = m.parse_response(body_ctrl, code_ctrl, car_crumb, car_updated_at="2026-01-10")
+    la = lr["alerts"][0]
+    assert la.get("outside_current_geometry") and la.get("on_previous_car_version") and la.get("current_geometry_edge_only"), la
+    assert "area_in_car_ha" not in la, la
+    t = text_of(lr)
+    assert "0,00" not in t and "versão anterior do CAR" in t and "só toca a borda do desenho atual do imóvel" in t, t
+    recent_crumb = m.parse_response(moved_alert, code_ctrl, car_crumb, car_updated_at="2026-01-10")
+    # Sem geometria na leitura (área pelo cruzamento da fonte), a combinação mede e marca do mesmo jeito.
+    blind_crumb = m.parse_response(moved_alert, code_ctrl, car_updated_at="2026-01-10")
+    assert not blind_crumb["alerts"][0].get("outside_current_geometry"), blind_crumb
+    for parsed_crumb in (recent_crumb, blind_crumb):
+        cc = m.combine_deforestation_alerts(car_crumb, parsed_crumb, empty_deter, None)
+        assert cc["state"] == "found" and cc["events"][0].get("outside_current_geometry") is True, cc
+        assert cc["events"][0].get("current_geometry_edge_only") is True and "area_union_ha" not in cc, cc
+        ct = text_of(cc)
+        assert "0,00" not in ct and "versão anterior do CAR" in ct and "só toca a borda" in ct, ct
+        assert_clean_public(cc)
+    # Feição do INPE que só toca a borda do imóvel também não vira "0,00 ha".
+    edge_deter = {"state": "answered", "features": [{"type": "Feature", "properties": {"gid": "borda", "view_date": "2025-10-01"},
+                                                     "geometry": mapping(MultiPolygon([box(*far.bounds), crumb]))}]}
+    ed = m.combine_deforestation_alerts(car_ctrl, hit, edge_deter, None)
+    assert ed["events"] == [] and "0,00" not in text_of(ed), ed
+    ok("lasca_de_retificacao=fora_do_desenho_com_versao_sem_0_00_ha")
+
+    # 13) Fonte pendente com evento achado: contagem E área só como mínimo.
+    blind_min = m.combine_deforestation_alerts(car_recent, m.public_view(recent), inpe("recente_pos_corte")[0], None)
+    bs = blind_min["text"]["summary"]
+    assert blind_min["state"] == "found" and blind_min["area_union_is_minimum"] is True, blind_min
+    assert bs.startswith("Ao menos 1") and f"com ao menos {m._br_ha(blind_min['area_union_ha'])} ha" in bs, bs
+    assert all(i["text"].startswith("Ao menos ") for i in blind_min["text"]["items"]), blind_min["text"]["items"]
+    assert "ao menos" not in text_of(c).lower() and "area_union_is_minimum" not in c, c["text"]
+    ok("fonte_pendente=area_como_minimo")
+
+    # 14) Cobertura dos alertas validados que não chega à janela recente não responde por ela.
+    for date_range in ({"maxDetectedAt": "2025-06-30", "maxPublishedAt": "2025-07-15"},
+                       {"maxDetectedAt": "2025-07-31", "maxPublishedAt": "2025-08-15"}, None):
+        stale = copy.deepcopy(body_v)
+        if date_range is None:
+            stale["data"].pop("alertDateRange")
+        else:
+            stale["data"]["alertDateRange"] = date_range
+        sp = m.parse_response(stale, code_v, car_empty)
+        assert sp["state"] == "not_found", sp
+        s_alone = m.combine_deforestation_alerts(car_empty, sp, None, None)
+        s_deter = m.combine_deforestation_alerts(car_empty, sp, empty_deter, None)
+        assert s_alone["state"] == "pending" and s_deter["state"] == "partial", (date_range, s_alone, s_deter)
+        assert "Alertas validados: consulta pendente." in s_deter["text"]["summary"], s_deter["text"]
+        assert "Conferido em" not in s_deter["text"]["summary"] and "alertas validados (" not in s_deter["text"]["summary"]
+    ok("cobertura_antes_da_janela_recente=nao_responde_por_nenhum")
+
 
 if __name__ == "__main__":
     parsed = parse_real()
     parse_rules()
     transport_rules()
+    real_socket_rules()
     production_path()
     combination_rules(parsed)
     for name in CHECKS:

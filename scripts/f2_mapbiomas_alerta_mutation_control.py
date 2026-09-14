@@ -38,7 +38,7 @@ MUTATIONS: dict[str, list[tuple[str, str]]] = {
         '        result = parse_response({"data": {"ruralProperty": {"propertyCode": code, "alerts": []}}}, code)\n'
         '        result.update(meta)')],
     "M06_nota_no_ano_prodes_errado": [(
-        'prodes_overlap(w["geom"], {n, n + 1})', 'prodes_overlap(w["geom"], {n - 1})')],
+        'prodes_overlap(w["geom"], {n, n + 1}', 'prodes_overlap(w["geom"], {n - 1}')],
     "M07_lista_do_deter_vale_resposta": [(
         '    if not isinstance(deter, dict):\n        return "pending"',
         '    if isinstance(deter, list):\n        return "answered"\n    if not isinstance(deter, dict):\n        return "pending"')],
@@ -80,7 +80,7 @@ MUTATIONS: dict[str, list[tuple[str, str]]] = {
         '        "source_label": _SOURCE_LABEL,\n        "state": state,')],
     # --- 2) resposta parcialmente ilegível
     "N06_incompleto_ignorado_na_combinacao": [(
-        '            status["validated_alerts"] = "pending"\n    base = {', '            pass\n    base = {')],
+        '            validated_reasons.append("incomplete")', '            pass')],
     "N07_deter_parcial_vira_resposta": [(
         '        if malformed:\n            status["inpe_deter"] = "pending"',
         '        if malformed and False:\n            status["inpe_deter"] = "pending"')],
@@ -105,12 +105,12 @@ MUTATIONS: dict[str, list[tuple[str, str]]] = {
         '    return geom if geom is not None and _area_ha(geom) >= MIN_AREA_HA else None', '    return geom')],
     # --- 5) alerta da fonte fora do desenho atual
     "N15_alerta_fora_do_desenho_descartado": [(
-        '                outside = True\n                area_in_car, method = None, None', '                continue')],
+        '                outside = True\n                edge = area_in_car >= MIN_AREA_HA\n', '                continue\n')],
     "N16_evento_fora_do_desenho_descartado": [(
         '    for w in outside:\n        if w["date"] <= cutoff:\n            continue\n        events.append({',
         '    for w in []:\n        if w["date"] <= cutoff:\n            continue\n        events.append({')],
     # --- 6) nota pré-corte
-    "N17_nota_sem_limiar_de_sobreposicao": [('SIGNIFICANT_OVERLAP = 0.5 ', 'SIGNIFICANT_OVERLAP = 0.0 ')],
+    "N17_nota_sem_limiar_de_sobreposicao": [('SIGNIFICANT_OVERLAP = 0.5\n', 'SIGNIFICANT_OVERLAP = 0.0\n')],
     "N18_nota_atribui_validacao": [(
         ': coincide com alerta de desmatamento validado (detectado em', ': validada pelo alerta de desmatamento (detectado em')],
     # --- 7) PRODES não consultado
@@ -123,18 +123,22 @@ MUTATIONS: dict[str, list[tuple[str, str]]] = {
         '        event_count, area_union = None, None  # parcial ou pendente', '        event_count, area_union = 0, 0.0  # parcial ou pendente')],
     "N22_auditoria_publica": [('        "_audit_sum_of_sources_ha": round(', '        "audit_sum_of_sources_ha": round(')],
     # --- 9) prazo total e cancelamento
-    "N23_sem_prazo_total_na_leitura": [(
-        '            if time.monotonic() > deadline:\n                raise _Abort("deadline")\n', '')],
-    "N24_tentativa_ignora_prazo_restante": [('timeout=_attempt_timeout(remaining)', 'timeout=TIMEOUT')],
-    "N25_cancelamento_ignorado_na_leitura": [(
-        '            if _is_set(cancel_event):\n                raise _Abort("cancelled")\n', '')],
-    "N26_cancelamento_ignorado_entre_tentativas": [
-        ('            if _is_set(cancel_event):\n                reason = "cancelled"\n                break\n            if attempts:',
-         '            if attempts:'),
-        ('                _pause(cancel_event, RETRY_PAUSE_SECONDS)\n                if _is_set(cancel_event):\n'
-         '                    reason = "cancelled"\n                    break\n',
-         '                _pause(cancel_event, RETRY_PAUSE_SECONDS)\n'),
-    ],
+    "N23_sem_prazo_total": [(
+        '        elif time.monotonic() >= deadline:\n            why = "deadline"\n',
+        '        elif False:\n            why = "deadline"\n')],
+    "N24_tentativa_ignora_prazo_restante": [(
+        '    timeout = _attempt_timeout(deadline - time.monotonic())', '    timeout = TIMEOUT')],
+    "N25_cancelamento_ignorado_durante_a_tentativa": [(
+        '        if _is_set(cancel_event):\n            why = "cancelled"\n', '        if False:\n            why = "cancelled"\n')],
+    # Cada guarda de cancelamento do laço de tentativas tem o seu controle. A pausa do gate
+    # é a de produção: zerar a pausa apagava a janela e escondia N26b.
+    "N26_cancelamento_ignorado_antes_da_tentativa": [(
+        '            if _is_set(cancel_event):\n                reason = "cancelled"\n                break\n            if attempts:',
+        '            if attempts:')],
+    "N26b_cancelamento_ignorado_depois_da_pausa": [(
+        '                _pause(cancel_event, RETRY_PAUSE_SECONDS)\n                if _is_set(cancel_event):\n'
+        '                    reason = "cancelled"\n                    break\n',
+        '                _pause(cancel_event, RETRY_PAUSE_SECONDS)\n')],
     "N27_async_nao_avisa_a_thread": [('        cancel.set()\n        raise', '        raise')],
     # --- 10) caminho de produção
     "N28_consulta_com_token": [(
@@ -154,6 +158,57 @@ MUTATIONS: dict[str, list[tuple[str, str]]] = {
     "N35_cobertura_pela_data_de_publicacao": [(
         "        if res.get(\"max_detected_date\"):\n            summary += f\" (detecções até {_br_date(res['max_detected_date'])})\"",
         "        if res.get(\"last_publication_date\"):\n            summary += f\" (publicações até {_br_date(res['last_publication_date'])})\"")],
+    # --- revisão 2: versão anterior do CAR sem achado
+    "N36_versao_anterior_responde_por_nenhum": [(
+        '            validated_reasons.append("previous_car_version")', '            pass')],
+    "N37_combinado_sem_ressalva_de_versao": [(
+        '        if key == "validated_alerts" and res.get("validated_alerts_car_version_date"):',
+        '        if False:')],
+    # --- nota PRODES contra o alerta e o polígono INTEIROS
+    "N38_nota_prodes_contra_poligono_recortado": [(
+        'prodes_geoms.append((inside, _prodes_year(props), _area_ha(geom)))',
+        'prodes_geoms.append((inside, _prodes_year(props), _area_ha(inside)))')],
+    "N39_nota_prodes_contra_alerta_recortado": [(
+        '        alert_ha = full_ha if full_ha is not None else _area_ha(geom)', '        alert_ha = _area_ha(geom)')],
+    "N40_area_sem_orientar_poligonos": [('_orient(p, 1.0)', 'p')],
+    "N40b_area_do_multipoligono_de_uma_vez": [(
+        '    total = sum(abs(_GEOD.geometry_area_perimeter(_orient(p, 1.0))[0]) for p in _polygons(geom))',
+        '    total = abs(_GEOD.geometry_area_perimeter(geom)[0])')],
+    # --- lasca de retificação
+    "N41_lasca_vira_0_00_ha_na_leitura": [('            if area_in_car < SLIVER_HA:', '            if area_in_car < MIN_AREA_HA:')],
+    "N42_lasca_vira_evento_na_combinacao": [(
+        '            if a.get("outside_current_geometry") or inside_ha < SLIVER_HA:',
+        '            if a.get("outside_current_geometry") or inside_ha < MIN_AREA_HA:')],
+    "N43_lasca_do_inpe_vira_evento": [(
+        '            if _area_ha(inside) < SLIVER_HA:\n                continue  # borda',
+        '            if _area_ha(inside) < MIN_AREA_HA:\n                continue  # borda')],
+    "N44_lasca_dita_como_nao_cruza": [('    if item.get("current_geometry_edge_only"):', '    if False:')],
+    # --- prazo total rígido e leitura parada
+    "N45_sem_vigia_leitura_na_mesma_thread": [(
+        '    threading.Thread(target=work, name=_WORKER_NAME, daemon=True).start()\n', '    work()\n')],
+    "N46_nao_desliga_o_socket": [('        stop.set()\n        _interrupt(box)\n', '        stop.set()\n')],
+    "N47_leitora_segue_lendo_depois_de_voltar": [(
+        '            if stop.is_set():\n                raise _Abort("stopped")',
+        '            if False:\n                raise _Abort("stopped")')],
+    # --- resposta incompleta
+    "N48_incompleto_entra_no_cache": [(
+        'if result["answered"] and not result.get("incomplete") and not cached and use_cache:',
+        'if result["answered"] and not cached and use_cache:')],
+    "N49_incompleto_sem_pedir_nova_tentativa": [('        "needs_retry": True if incomplete else None,', '        "needs_retry": None,')],
+    # --- área como mínimo
+    "N50_area_sem_ao_menos_no_texto": [(
+        '        at_least_area = "ao menos " if res.get("area_union_is_minimum") else ""', '        at_least_area = ""')],
+    "N51_area_minima_sem_marca": [(
+        '"area_union_is_minimum": True if area_union is not None and events and pending else None,',
+        '"area_union_is_minimum": None,')],
+    # --- cobertura dos alertas validados
+    "N52_cobertura_antes_da_janela_responde": [('        if max_detected is None or max_detected <= cutoff:', '        if False:')],
+    # --- PRODES só com formato novo e completo
+    "N53_prodes_formato_legado_aceito": [('    if not isinstance(failed, list) or failed:', '    if failed:')],
+    "N54_prodes_falha_dentro_de_hits_aceita": [(
+        '        if h.get("error"):\n            return False', '        if False:\n            return False')],
+    "N55_prodes_catalogo_vazio_aceito": [('    if not isinstance(catalog, list) or not any(', '    if False and not any(')],
+    "N56_prodes_limite_do_wfs_aceito": [('>= PRODES_WFS_COUNT_LIMIT:', '>= 10**9:')],
 }
 
 
