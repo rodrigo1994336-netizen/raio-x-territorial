@@ -44,6 +44,10 @@ async def _retry_failed_core_v30(result:dict):
         for k,v in zip(keys,vals):
             if k=='prodes':v=deploy_app.finalize_prodes(v,car.get('geometry'))
             result[k]=layer_guard.keep_better(result.get(k),v)
+    if 'prodes' in keys:
+        # F2: a resposta nova do PRODES vem crua (sem 'exact' nem 'reading'). Sem refazer a
+        # leitura aqui, o relatório calcula o risco geral com contagem zero.
+        await base._reapply_prodes_reading(result)
 
     if not (result.get('anm') or {}).get('ok'):
         anm=result.setdefault('anm',{})

@@ -83,6 +83,7 @@ def _load_portal_deferred():
                 import portal_experience_v43  # noqa: F401
                 import portal_map_panel_v45  # noqa: F401
                 import portal_conformity_mte_v48  # noqa: F401
+                import portal_prodes_card_f2  # noqa: F401  (F2: linha PRODES do cartão = leitura do relatório)
                 import portal_car_integrity_v47  # noqa: F401
                 import portal_car_integrity_ui_v47  # noqa: F401
                 import portal_map_stability_v43  # noqa: F401

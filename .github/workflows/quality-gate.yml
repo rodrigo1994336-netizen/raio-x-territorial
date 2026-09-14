@@ -45,6 +45,13 @@ jobs:
         env:
           RX_RELEASE: OFF
         run: PYTHONPATH=. python scripts/f2_incra_sigef_snci_gate.py
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: F2 PRODES reading gate
+        env:
+          RX_RELEASE: OFF
+        run: PYTHONPATH=. python scripts/f2_prodes_leitura_gate.py
       - name: Import standalone engines
         env:
           RX_RELEASE: OFF
@@ -290,8 +297,9 @@ jobs:
           assert 'ThreadPoolExecutor' in car and 'CAP_TTL=21600' in car and "'share_pct'" in car
           assert 'asyncio.wait_for' in extras and "_timed('visual_hybrid'" in extras and ',34)' in extras
           assert "car['environmental_composition']" in adapter and 'passivo/excedente legal' in adapter
-          for required in ('Histórico PRODES completo','Recorte pós-31/07/2019','ha únicos','% do CAR','Interseção geométrica exata'):
-              assert required in prodes_report, required
+          # F2: the PRODES report rows come from the single reading; the rule itself is proven by
+          # scripts/f2_prodes_leitura_gate.py (step above), never by legacy strings kept alive in code.
+          assert 'apply_reading_to_report_payload' in prodes_report and 'LEGACY_ROW_MARKERS' not in prodes_report
 
           # Deterministic regression: overlapping recent polygons must be unioned, never summed.
           from prodes_lens import derive_prodes_lens

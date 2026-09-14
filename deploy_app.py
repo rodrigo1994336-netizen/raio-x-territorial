@@ -300,7 +300,21 @@ async def analyze_car(car_code:str):
         elif anm.get('ok') is not True:
             layer_guard.blank_counts(anm)
     prodes=finalize_prodes(prodes,car.get('geometry'))
-    return {'car':car,'sigef':sigef,'embargos_ibama':emb,'anm':anm,'prodes':prodes}
+    result={'car':car,'sigef':sigef,'embargos_ibama':emb,'anm':anm,'prodes':prodes}
+    # Geometria é CPU: fora do laço de eventos para não travar os outros usuários.
+    await asyncio.to_thread(_apply_prodes_reading,result)
+    return result
+
+def _apply_prodes_reading(result):
+    # F2: uma leitura só do PRODES para portal, relatório e alertas (prodes_reading_f2).
+    # 'exact' passa a contar só o que está dentro do imóvel; o bruto fica em 'exact_raw'.
+    # Roda depois do finalize_prodes (H1), que decide resposta/pendência pelo catálogo.
+    # Se a leitura falhar, a análise segue com o cálculo bruto (nunca some ocorrência).
+    try:
+        import prodes_reading_f2
+        prodes_reading_f2.apply_reading_to_result(result)
+    except Exception as e:
+        print(f'RX_PRODES_READING_FAIL={type(e).__name__}:{str(e)[:160]}',flush=True)
 
 def _exact_summary(r):
     ex=(r or {}).get('exact') or {}
@@ -316,7 +330,8 @@ def _safe_summary(result):
         if r.get('features'):
             f=r['features'][0];item['sample_properties']=f.get('properties') or f.get('attributes') or {}
         summary[key]=item
-    p=result.get('prodes') or {};summary['prodes']={'ok':p.get('ok'),'feature_count_bbox':p.get('feature_count'),'exact':_exact_summary(p),'candidate_layers':p.get('candidate_layers'),'hit_layers':[{'layer':h.get('layer'),'count':h.get('count')} for h in p.get('hits',[]) if h.get('count')]}
+    if isinstance(result.get('prodes'),dict) and 'reading' not in result['prodes']:_apply_prodes_reading(result)
+    p=result.get('prodes') or {};summary['prodes']={'reading':p.get('reading'),'ok':p.get('ok'),'feature_count_bbox':p.get('feature_count'),'exact':_exact_summary(p),'candidate_layers':p.get('candidate_layers'),'hit_layers':[{'layer':h.get('layer'),'count':h.get('count')} for h in p.get('hits',[]) if h.get('count')]}
     ex=(p.get('exact') or {}).get('occurrences') or []
     if ex:
         summary['prodes']['exact_occurrences']=[{'area_intersection_ha':x.get('area_intersection_ha'),'year':(x.get('properties') or {}).get('year'),'class_name':(x.get('properties') or {}).get('class_name'),'image_date':(x.get('properties') or {}).get('image_date')} for x in ex]
