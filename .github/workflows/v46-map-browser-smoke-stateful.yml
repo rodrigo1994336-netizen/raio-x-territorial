@@ -55,6 +55,8 @@ jobs:
           fi
       - name: Selection card panel and 10-movement visual gate
         run: python .github/scripts/v46_browser_smoke.py
+      - name: W1a property link and share buttons (375 and 1440, SICAR mocked)
+        run: python .github/scripts/w1a_link_imovel_smoke.py
       - name: Enforce browser smoke execution
         if: always()
         run: |

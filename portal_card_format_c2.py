@@ -159,7 +159,8 @@ HEAD = r'''<style id="rxCardFormatC2">
    const car=btn?btn.dataset.rxCopyCar:retry.dataset.rxCopyRetry,scope=(btn||retry).closest('[data-rx-copy-scope]');
    copy(car).then(ok=>{if(!ok)selectFallback(scope,car)});
  },true);
- window.rxCopyCarC2={copy,button,code:codeHtml};
+ // write(text) -> true only when the clipboard really took the text (W1a "Copiar link" uses it).
+ window.rxCopyCarC2={copy,button,code:codeHtml,write};
 })();
 </script>
 <script id="rxSigefRefScriptC2">
