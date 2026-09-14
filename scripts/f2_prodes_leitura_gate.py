@@ -8,11 +8,18 @@ deploy_app.fetch_car_live + prodes_fast_v24.query_prodes_fast em 13/09/2026):
   * curvelo_mg.json        — 1 desmatamento dentro (PRODES 2006) + 3 faixas de divisa
   * sao_desiderio_ba.json  — desmatamento interno grande (2022–2024), faixa de divisa 2021
                               e máscara acumulada até 2000 cruzando o imóvel
+  * novo_progresso_pa.json — imóvel real da Amazônia (14/09/2026): as duas camadas anuais
+                              devolvem as mesmas manchas
+  * amazonia_duas_camadas_quase_iguais.json — feições reais das duas camadas da Amazônia com
+                              geometria igual e WKB diferente; CAR sintético em volta
 
 Parte A roda o caminho que o cliente vê (analyze_car offline → resumo do portal →
 renderAnalysis no Node; build_live_payload → patch_prodes_lens → narrativa do relatório)
 e por isso reprova o código antigo pelo defeito, não por falta de módulo.
 Parte B confere o contrato do módulo prodes_reading_f2 (estados, critério, formatação).
+Parte C cobre as correções da revisão (nova tentativa, Amazônia, faixa longa, WFS cortado,
+consulta incompleta, ano 2019, laço de eventos e cache, cartão do mapa, CI); cada caso roda
+também com a regra desligada e tem de reprovar (CTRL.*).
 """
 from __future__ import annotations
 
@@ -330,13 +337,373 @@ def part_b() -> None:
 
     # B6 · LGPD: nada de pessoa nas fixtures nem na leitura.
     personal = re.compile(r'"[^"]*(cpf|cnpj|nome|propriet|respons|titular)[^"]*"\s*:', re.I)
-    blob = (FIX / "curvelo_mg.json").read_text(encoding="utf-8") + (FIX / "sao_desiderio_ba.json").read_text(encoding="utf-8") + json.dumps(rs, ensure_ascii=False)
+    blob = "".join(p.read_text(encoding="utf-8") for p in sorted(FIX.glob("*.json"))) + json.dumps(rs, ensure_ascii=False)
     check("B.lgpd_sem_dado_pessoal", not personal.search(blob), personal.search(blob))
+
+
+# ------------------------------------------------------------------ correções pós-revisão
+#
+# Cada caso roda duas vezes: com a regra (tem de passar) e com a regra desligada por monkeypatch
+# (tem de reprovar). O segundo é o controle positivo: prova que o caso pega o defeito, não só que
+# o código atual passa.
+
+def control(name: str, detects: bool, detail: object = "") -> None:
+    check(f"CTRL.{name}.reprova_sem_a_regra", detects, detail)
+
+
+class patched:
+    """Troca atributos de módulo durante um bloco e restaura sempre."""
+
+    def __init__(self, target, **attrs):
+        self.target, self.attrs, self.saved = target, attrs, {}
+
+    def __enter__(self):
+        for k, v in self.attrs.items():
+            self.saved[k] = getattr(self.target, k)
+            setattr(self.target, k, v)
+        return self
+
+    def __exit__(self, *exc):
+        for k, v in self.saved.items():
+            setattr(self.target, k, v)
+        return False
+
+
+def _square(lon0: float, lat0: float, dlon: float, dlat: float) -> dict:
+    return {"type": "Polygon", "coordinates": [[[lon0, lat0], [lon0 + dlon, lat0], [lon0 + dlon, lat0 + dlat], [lon0, lat0 + dlat], [lon0, lat0]]]}
+
+
+def _synthetic(car_geom: dict, features: list[dict], layer: str = "prodes-cerrado-nb:yearly_deforestation", **hit_extra) -> dict:
+    import prodes_reading_f2 as f2
+
+    area = f2._area_ha(f2._valid(f2.shape(car_geom)))
+    hit = {"layer": layer, "count": len(features), "features": features, **hit_extra}
+    return {
+        "car": {"ok": True, "properties": {"cod_imovel": "BA-0000000-SINTETICO", "area": round(area, 4)}, "geometry": car_geom},
+        "prodes": {"ok": True, "candidate_layers": [layer], "hits": [hit], "failed_layers": []},
+    }
+
+
+def part_c() -> None:
+    print("== C · correções pós-revisão (cada caso com controle positivo)")
+    import deploy_app
+    import live_report_adapter
+    import prodes_reading_f2 as f2
+    import prodes_truth_v44
+    import report_api
+    import report_narrative
+
+    original_retry = report_api._retry_failed_core
+    import core_retry_fast_v29
+
+    sd, curvelo = load("sao_desiderio_ba.json"), load("curvelo_mg.json")
+
+    # C1 · nova tentativa do PRODES (alta): capa nunca BAIXO com desmatamento dentro.
+    def retry_case(retry_fn) -> tuple[dict, dict]:
+        failed = copy.deepcopy(sd)
+        failed["prodes"] = {"ok": False, "error": "ReadTimeout", "source": "INPE/TerraBrasilis WFS"}
+        result = run_analyze_car(failed)
+
+        async def answered(_bbox):
+            return copy.deepcopy(sd["prodes"])
+
+        with patched(report_api, query_prodes=answered):
+            asyncio.run(retry_fn(result))
+        # Estado logo depois da nova tentativa (o patch do relatório refaz a leitura por conta própria).
+        after = copy.deepcopy({k: result["prodes"].get(k) for k in ("exact", "reading", "exact_raw") if k in result["prodes"]})
+        with tempfile.TemporaryDirectory() as tmp:
+            payload = live_report_adapter.build_live_payload(result, "RX-GATE-F2-RETRY", "2026-09-14T09:00:00+00:00", str(Path(tmp) / "m.png"))
+            payload = prodes_truth_v44.patch_prodes_lens(payload, result)
+            payload["narrative"] = report_narrative.build_narrative(payload)
+        return after, payload
+
+    def retry_ok(after: dict, payload: dict) -> bool:
+        ex = after.get("exact") or {}
+        return (after.get("reading") or {}).get("state") == "found" and ex.get("occurrence_count") == 9 and ex.get("reading_version") == "f2-prodes-leitura-2"
+
+    for label, fn in (("v30", core_retry_fast_v29._retry_failed_core_v30), ("report_api", original_retry)):
+        result, payload = retry_case(fn)
+        con = payload.get("conclusion") or {}
+        check(f"C.retry_{label}.leitura_refeita_no_resultado", retry_ok(result, payload), (result.get("exact"), (result.get("reading") or {}).get("state")))
+        check(f"C.retry_{label}.capa_nunca_baixo_com_desmatamento_dentro", con.get("overall_risk") == "MODERADO" and payload["environment"]["prodes"]["count"] == 9, (con.get("overall_risk"), payload["environment"]["prodes"]["count"]))
+
+    async def no_reapply(_result):
+        return _result
+
+    with patched(report_api, _reapply_prodes_reading=no_reapply):
+        result, payload = retry_case(core_retry_fast_v29._retry_failed_core_v30)
+    control("retry_sem_refazer_leitura", not retry_ok(result, payload), result.get("exact"))
+
+    # Mesmo sem a leitura refeita no resultado, o relatório corrige o risco nos dois sentidos.
+    def old_reconcile(con, payload, inside_count, pending, old_count):
+        if con.get("overall_risk") == "MODERADO" and old_count and not inside_count:
+            con["overall_risk"] = "NÃO CLASSIFICADO" if pending else "BAIXO"
+        elif con.get("overall_risk") == "BAIXO" and pending:
+            con["overall_risk"] = "NÃO CLASSIFICADO"
+
+    for label, mods in (("regra", {}), ("sem_regra", {"_reconcile_overall_risk": old_reconcile})):
+        with patched(report_api, _reapply_prodes_reading=no_reapply), patched(f2, **mods):
+            _, payload = retry_case(core_retry_fast_v29._retry_failed_core_v30)
+        ok = (payload.get("conclusion") or {}).get("overall_risk") == "MODERADO"
+        if label == "regra":
+            check("C.relatorio_sobe_baixo_para_moderado_quando_ha_desmatamento_dentro", ok, (payload.get("conclusion") or {}).get("overall_risk"))
+        else:
+            control("risco_so_em_dois_sentidos", not ok, (payload.get("conclusion") or {}).get("overall_risk"))
+
+    # C2 · Amazônia: a mesma mancha nas duas camadas anuais conta uma vez (real, WKB diferente).
+    amz = load("amazonia_duas_camadas_quase_iguais.json")
+    one_layer = copy.deepcopy(amz["prodes"])
+    one_layer["hits"] = one_layer["hits"][:1]
+
+    def amz_counts():
+        both = f2.classify_prodes(amz["prodes"], amz["car"]["geometry"], amz["car"]["properties"]["area"])
+        single = f2.classify_prodes(one_layer, amz["car"]["geometry"], amz["car"]["properties"]["area"])
+        return both, single
+
+    both, single = amz_counts()
+    same = (both["inside"]["count"], both["post_cutoff_inside"]["count"]) == (single["inside"]["count"], single["post_cutoff_inside"]["count"])
+    check("C.amazonia.duas_camadas_contam_uma_vez", same and single["inside"]["count"] == 20 and both["duplicates_removed"] == 4, (both["inside"]["count"], single["inside"]["count"], both["duplicates_removed"]))
+    with patched(f2, DUPLICATE_IOU=1.01):
+        both_off, single_off = amz_counts()
+    control("amazonia_dedup_so_por_wkb", both_off["inside"]["count"] != single_off["inside"]["count"], (both_off["inside"]["count"], single_off["inside"]["count"]))
+    novo = load("novo_progresso_pa.json")
+    with tempfile.TemporaryDirectory() as tmp:
+        payload_np, result_np = run_report_payload(novo, Path(tmp))
+    single_np = copy.deepcopy(novo)
+    single_np["prodes"]["hits"] = single_np["prodes"]["hits"][:1]
+    expected_np = f2.classify_prodes(single_np["prodes"], novo["car"]["geometry"], novo["car"]["properties"]["area"])["inside"]["count"]
+    check("C.novo_progresso_real.relatorio_e_portal_contam_uma_vez", payload_np["environment"]["prodes"]["count"] == expected_np == deploy_app._safe_summary(result_np)["prodes"]["exact"]["occurrence_count"], (payload_np["environment"]["prodes"]["count"], expected_np))
+
+    # C3 · faixa de divisa longa (média): estreita, mas com hectares dentro, conta como dentro.
+    lon0, lat0 = -45.9, -12.2
+    m_lon = 1 / (111_320 * math.cos(math.radians(lat0)))
+    m_lat = 1 / 110_600
+    car_geom = _square(lon0, lat0, 3000 * m_lon, 3000 * m_lat)
+
+    def strip(length_m: float) -> dict:
+        return {"id": f"faixa_{int(length_m)}m", "geometry": _square(lon0 - 500 * m_lon, lat0, 529 * m_lon, length_m * m_lat),
+                "properties": {"year": 2023, "image_date": "2023-08-10", "main_class": "DESMATAMENTO", "class_name": "d2023"}}
+
+    long_fx = _synthetic(car_geom, [strip(3000)])
+    short_fx = _synthetic(car_geom, [strip(200)])
+
+    def long_ok():
+        r = f2.prodes_reading_payload(long_fx)
+        return r, (r["inside"]["count"] == 1 and r["risk"]["status"] == "ATENÇÃO" and "nenhum" not in r["headline"].lower()
+                   and r["panel"]["dot"] == "diligence" and r["inside"]["occurrences"][0]["narrow_strip"])
+
+    r_long, ok = long_ok()
+    check("C.faixa_longa_com_hectares_conta_dentro", ok, (r_long["headline"], r_long["inside"]["occurrences"][:1]))
+    check("C.faixa_longa_linha_diz_que_e_faixa", any("faixa de até 29 m de largura na divisa" in str(row[1]) for row in r_long["rows"]), [row[1] for row in r_long["rows"] if str(row[0]).startswith("PRODES 20")])
+    r_short = f2.prodes_reading_payload(short_fx)
+    check("C.faixa_curta_abaixo_de_1_ha_continua_divisa", r_short["inside"]["count"] == 0 and r_short["boundary"]["count"] == 1 and r_short["state"] == "not_found", (r_short["inside"]["count"], r_short["boundary"]["count"], r_short["boundary"].get("area_ha")))
+    with patched(f2, BOUNDARY_MAX_HA=math.inf):
+        r_off, ok_off = long_ok()
+    control("faixa_so_por_largura", not ok_off, r_off["headline"])
+
+    # C4 · camada cortada no limite do WFS (baixa-média): sem achado vira pendente, nunca "nenhum".
+    far = [{"id": f"longe_{i}", "geometry": _square(lon0 + 0.2 + (i % 50) * 0.001, lat0 + 0.2 + (i // 50) * 0.001, 0.0005, 0.0005),
+            "properties": {"year": 2022, "image_date": "2022-08-01", "main_class": "DESMATAMENTO"}} for i in range(2000)]
+    cut = _synthetic(car_geom, far)
+    cut_matched = _synthetic(car_geom, far[:782], number_matched=2479)
+    below = _synthetic(car_geom, far[:1999], number_matched=1999)
+
+    def cut_ok():
+        rs = [f2.prodes_reading_payload(x) for x in (cut, cut_matched)]
+        return rs, all(r["state"] == "pending" and r["panel"]["audit_state"] == "FAILED" and "nenhum" not in (r["headline"] + r["inside_text"] + r["credit_text"]).lower() for r in rs)
+
+    rs, ok = cut_ok()
+    check("C.camada_no_limite_do_wfs_fica_pendente", ok, [(r["state"], r["headline"]) for r in rs])
+    r_below = f2.prodes_reading_payload(below)
+    check("C.camada_abaixo_do_limite_responde", r_below["state"] == "not_found", r_below["state"])
+    import prodes_fast_v24
+
+    dsrc = (ROOT / "deploy_app.py").read_text(encoding="utf-8")
+    check("C.limite_do_wfs_igual_nas_duas_consultas", prodes_fast_v24.FEATURE_LIMIT == f2.WFS_FEATURE_LIMIT and "'count':'2000'" in dsrc and f2.WFS_FEATURE_LIMIT == 2000, (prodes_fast_v24.FEATURE_LIMIT, f2.WFS_FEATURE_LIMIT))
+    with patched(f2, _hit_truncated=lambda _hit: False):
+        rs_off, ok_off = cut_ok()
+    control("camada_cortada_tratada_como_completa", not ok_off, [r["state"] for r in rs_off])
+
+    # C5 · consulta incompleta com achado (baixa): nenhuma frase fecha o total.
+    part_curvelo = copy.deepcopy(curvelo)
+    part_curvelo["prodes"]["failed_layers"] = [{"layer": "prodes-caatinga-nb:yearly_deforestation", "error": "ReadTimeout"}]
+    part_sd = copy.deepcopy(sd)
+    part_sd["prodes"]["failed_layers"] = [{"layer": "prodes-caatinga-nb:yearly_deforestation", "error": "ReadTimeout"}]
+
+    def incomplete_ok():
+        rc, rs_ = f2.prodes_reading_payload(part_curvelo), f2.prodes_reading_payload(part_sd)
+        texts_c = [rc["inside_text"], rc["credit_text"], rc["narrative"]["one_sentence"], rc["panel"]["reason"]] + [str(r[1]) for r in rc["rows"]]
+        bare = [t for t in texts_c if "todo anterior a 31/07/2019" in t or re.search(r"Nenhum[^.;]*31/07/2019(?! nas camadas que responderam)", t)]
+        ok_ = (not bare and "nas camadas que responderam" in rc["credit_text"] and "pode haver mais" in rc["credit_text"]
+               and "pode haver mais" in rc["panel"]["reason"] and "pode haver mais" in rs_["credit_text"])
+        return (bare, rc["credit_text"], rc["narrative"]["one_sentence"]), ok_
+
+    detail, ok = incomplete_ok()
+    check("C.incompleta_com_achado_nao_fecha_total", ok, detail)
+    real_texts = f2._texts
+    with patched(f2, _texts=lambda reading: real_texts({**reading, "complete": True})):
+        detail_off, ok_off = incomplete_ok()
+    control("incompleta_tratada_como_completa", not ok_off, detail_off)
+
+    # C6 · ano PRODES 2019 com imagem depois de 31/07/2019 (baixa): "detectado em imagem posterior".
+    straddle = copy.deepcopy(curvelo)
+    straddle["prodes"]["hits"] = [h for h in straddle["prodes"]["hits"] if "yearly" in h["layer"]]
+    for h in straddle["prodes"]["hits"]:
+        h["features"] = [f for f in h["features"] if f["properties"].get("year") == 2006]
+        for f in h["features"]:
+            f["properties"].update(year=2019, image_date="2019-08-20", class_name="d2019")
+        h["count"] = len(h["features"])
+
+    def straddle_ok():
+        r = f2.prodes_reading_payload(straddle)
+        nar = r["narrative"]
+        lines = [str(row[1]) for row in r["rows"]] + [r["inside_text"], r["credit_text"], nar["one_sentence"], r["panel"]["reason"]] + nar["attention"] + nar["next_steps"] + nar["money"]
+        bare = [t for t in lines if re.search(r"(?<!imagem )posterior a 31/07/2019", t) or "depois de 31/07/2019 (" in t]
+        return (r["post_cutoff_inside"]["count"], bare[:3]), r["post_cutoff_inside"]["count"] == 1 and not bare and any("detectado em imagem posterior" in t for t in lines)
+
+    detail, ok = straddle_ok()
+    check("C.prodes_2019_com_imagem_de_agosto_tem_ressalva", ok, detail)
+    with patched(f2, _straddles_cutoff=lambda _props: False):
+        detail_off, ok_off = straddle_ok()
+    control("prodes_2019_afirmado_posterior", not ok_off, detail_off)
+
+    # C7 · geometria fora do laço de eventos e sem recalcular a mesma leitura (baixa).
+    import threading
+
+    seen_threads: list[bool] = []
+    real_apply = f2.apply_reading_to_result
+
+    def spy(result):
+        seen_threads.append(threading.current_thread() is threading.main_thread())
+        return real_apply(result)
+
+    with patched(f2, apply_reading_to_result=spy):
+        run_analyze_car(curvelo)
+    check("C.leitura_fora_do_laco_de_eventos", seen_threads == [False], seen_threads)
+
+    async def inline(fn, *args, **kwargs):
+        return fn(*args, **kwargs)
+
+    seen_threads.clear()
+    with patched(f2, apply_reading_to_result=spy), patched(asyncio, to_thread=inline):
+        run_analyze_car(curvelo)
+    control("leitura_no_laco_de_eventos", seen_threads != [False], seen_threads)
+
+    calls = {"n": 0}
+    real_payload = f2.prodes_reading_payload
+
+    def counting(result):
+        calls["n"] += 1
+        return real_payload(result)
+
+    def cache_case():
+        calls["n"] = 0
+        f2._CACHE.clear()
+        with patched(f2, prodes_reading_payload=counting):
+            res = copy.deepcopy(sd)
+            f2.apply_reading_to_result(res)
+            f2.apply_reading_to_result(res)
+            first_calls = calls["n"]
+            # Outra resposta com o MESMO número de feições (nova tentativa): tem de reclassificar.
+            other = copy.deepcopy(res)
+            for h in other["prodes"]["hits"]:
+                for feat in h["features"]:
+                    if feat["properties"].get("year") in (2022, 2023, 2024):
+                        feat["properties"]["main_class"] = "RESERVATORIO"
+            f2.apply_reading_to_result(other)
+        return first_calls, other["prodes"]["exact"]["occurrence_count"], res
+
+    first_calls, other_count, res = cache_case()
+    serializable = True
+    try:
+        json.dumps(res["prodes"])
+    except Exception:
+        serializable = False
+    check("C.mesma_leitura_nao_recalcula", first_calls == 1, first_calls)
+    check("C.cache_por_conteudo_nunca_por_identidade", other_count == 1 and "_reading_cache" not in res["prodes"] and serializable, (other_count, sorted(res["prodes"])))
+    with patched(f2, _reading_key=lambda _result: "mesma-chave", _CACHE=type(f2._CACHE)()):
+        _, other_off, _ = cache_case()
+    control("cache_por_chave_fraca", other_off != 1, other_off)
+
+    # C8 · cartão do mapa (média): a linha PRODES recebe a leitura, só do mesmo imóvel.
+    card_src = (ROOT / "portal_prodes_card_f2.py").read_text(encoding="utf-8")
+    script = card_src.split("<script>", 1)[1].split("</script>", 1)[0]
+    summaries = {}
+    for label, fx in (("curvelo", curvelo), ("sao_desiderio", sd)):
+        summaries[label] = deploy_app._safe_summary(run_analyze_car(fx))
+    down = copy.deepcopy(curvelo)
+    down["prodes"] = {"ok": False, "error": "ReadTimeout"}
+    summaries["pendente"] = deploy_app._safe_summary(run_analyze_car(down))
+
+    def run_card(js: str) -> dict | None:
+        node = shutil.which("node")
+        if not node:
+            return None
+        harness = (
+            "const calls=[];const card={querySelector:()=>el},el={dataset:{},querySelector:()=>null};"
+            "global.CSS={escape:s=>s};global.setTimeout=()=>0;"
+            "global.window={current:{},renderAnalysis(){},rxV48UpdateComplianceSource:(id,u)=>calls.push([id,u])};"
+            "global.document={readyState:'complete',getElementById:()=>null,"
+            "querySelector:s=>s.includes('data-car=\"'+String(window.current.car_code||'').toUpperCase()+'\"')?card:null};\n"
+            + js + "\nconst S=JSON.parse(require('fs').readFileSync(0,'utf8'));const out={pure:{},dom:{}};"
+            "for(const [k,a] of Object.entries(S)){const car=a.car.properties.cod_imovel;out.pure[k]=window.rxProdesCardUpdate(a,car);"
+            "out.pure[k+'_outro_imovel']=window.rxProdesCardUpdate(a,'MG-0000000-OUTRO');"
+            "calls.length=0;el.dataset={};window.current={car_code:car};window.renderAnalysis({analysis:a});out.dom[k]=calls.slice();"
+            "calls.length=0;el.dataset={};window.current={car_code:'MG-0000000-OUTRO'};window.renderAnalysis({analysis:a});out.dom[k+'_outro_imovel']=calls.slice();}"
+            "process.stdout.write(JSON.stringify(out));"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "card.js"
+            path.write_text(harness, encoding="utf-8")
+            res_ = subprocess.run([node, str(path)], input=json.dumps(summaries, ensure_ascii=False), capture_output=True, text=True, encoding="utf-8", timeout=60)
+        if res_.returncode != 0:
+            raise RuntimeError(res_.stderr[:400])
+        return json.loads(res_.stdout)
+
+    def card_ok(out: dict) -> tuple[bool, object]:
+        good = True
+        for label in ("curvelo", "sao_desiderio", "pendente"):
+            panel = summaries[label]["prodes"]["reading"]["panel"]
+            u = out["pure"][label] or {}
+            dom = out["dom"][label]
+            good &= u.get("status") == panel["status"] and u.get("reason") == panel["reason"] and u.get("state") == panel["dot"]
+            good &= len(dom) == 1 and dom[0][0] == "prodes" and dom[0][1].get("status") == panel["status"]
+            good &= out["pure"][label + "_outro_imovel"] is None and out["dom"][label + "_outro_imovel"] == []
+        return good, {k: (v or {}).get("status") if isinstance(v, dict) or v is None else v for k, v in out["pure"].items()}
+
+    out = run_card(script)
+    if out is None:
+        check("C.cartao_node_disponivel", False, "node não encontrado: o cartão do mapa precisa ser conferido")
+    else:
+        ok, detail = card_ok(out)
+        pend = out["pure"]["pendente"] or {}
+        check("C.cartao_mostra_a_leitura_do_mesmo_imovel", ok, detail)
+        check("C.cartao_pendente_nunca_nenhum", pend.get("state") == "source_failed" and not pend.get("answered") and "nenhum" not in (pend.get("status", "") + pend.get("reason", "")).lower(), pend)
+        cu = out["pure"]["curvelo"] or {}
+        check("C.cartao_curvelo_texto", cu.get("status") == "Desmatamento dentro do imóvel" and cu.get("reason", "").startswith("1 desmatamento • 14,28 ha (97% do CAR). Nenhum é posterior a 31/07/2019."), cu)
+        sabotaged = script.replace("if(!car||car!==norm(cardCar))return null;", "")
+        control("cartao_de_outro_imovel", sabotaged != script and not card_ok(run_card(sabotaged))[0], "guarda do mesmo imóvel removida")
+    # O portal proíbe observador global de DOM e polling (gate V46 do quality-gate.yml).
+    check("C.cartao_sem_observador_nem_polling", "MutationObserver" not in script and "setInterval(" not in script, "portal_prodes_card_f2")
+    site = (ROOT / "sitecustomize.py").read_text(encoding="utf-8")
+    check("C.cartao_carregado_no_portal", re.search(r"^\s+import portal_prodes_card_f2\b", site, re.M) is not None and "RX_PRODES_CARD_F2" in card_src, "sitecustomize")
+
+    # C9 · CI: o gate roda no quality-gate.yml e não sobra texto morto que só mantinha asserção verde.
+    wf = (ROOT / ".github" / "workflows" / "quality-gate.yml").read_text(encoding="utf-8")
+
+    def wired(text: str) -> bool:
+        return re.search(r"run:\s*PYTHONPATH=\. python scripts/f2_prodes_leitura_gate\.py", text) is not None and "actions/setup-node" in text
+
+    check("C.ci_roda_o_gate_f2", wired(wf), "quality-gate.yml")
+    control("ci_sem_o_passo", not wired(wf.replace("scripts/f2_prodes_leitura_gate.py", "scripts/outro.py")), "")
+    dead = [p.name for p in ROOT.glob("*.py") if "LEGACY_ROW_MARKERS" in p.read_text(encoding="utf-8", errors="ignore")]
+    check("C.sem_tupla_morta_legacy_row_markers", not dead and "Histórico PRODES completo','Recorte pós-31/07/2019','ha únicos'" not in wf, dead)
 
 
 def main() -> int:
     part_a()
     part_b()
+    part_c()
     print(f"RESULT pass={PASSES} fail={len(FAILS)}")
     if FAILS:
         print("RX_F2_PRODES_LEITURA_GATE=failed:" + ",".join(FAILS[:12]))

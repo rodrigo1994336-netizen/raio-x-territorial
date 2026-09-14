@@ -164,7 +164,8 @@ async def analyze_car(car_code:str):
         for h in prodes.get('hits') or []:pfs.extend(h.get('features') or [])
         prodes['exact']=_exact_geojson_intersections(car['geometry'],pfs)
     result={'car':car,'sigef':sigef,'embargos_ibama':emb,'anm':anm,'prodes':prodes}
-    _apply_prodes_reading(result)
+    # Geometria é CPU: fora do laço de eventos para não travar os outros usuários.
+    await asyncio.to_thread(_apply_prodes_reading,result)
     return result
 
 def _apply_prodes_reading(result):

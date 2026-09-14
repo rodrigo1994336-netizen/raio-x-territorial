@@ -2,20 +2,9 @@ from __future__ import annotations
 
 from prodes_reading_f2 import apply_reading_to_report_payload
 
-# Apresentação antiga do PRODES (V44): "Histórico PRODES completo" / "Recorte pós-31/07/2019"
-# com "ha únicos", "% do CAR" em 4 casas, anos soltos e "Interseção geométrica exata" somando
-# faixas de divisa. Nenhum destes rótulos ou trechos pode sobreviver nas linhas do PRODES do
-# relatório; o gate F2 (scripts/f2_prodes_leitura_gate.py) confere isso no payload gerado.
-LEGACY_ROW_MARKERS = (
-    'Histórico PRODES completo',
-    'Recorte pós-31/07/2019',
-    'ha únicos',
-    '% do CAR •',
-    'Interseção geométrica exata com o CAR + união das geometrias por lente',
-    'Ocorrências exatas',
-    'Área intersectada',
-    'Imagem',
-)
+# A apresentação antiga do PRODES (V44: "Histórico PRODES completo", "ha únicos", faixas de
+# divisa somadas) não pode voltar; o gate F2 (scripts/f2_prodes_leitura_gate.py) confere isso
+# no payload gerado, e o quality-gate.yml roda esse gate.
 
 
 def patch_prodes_lens(payload:dict,result:dict):

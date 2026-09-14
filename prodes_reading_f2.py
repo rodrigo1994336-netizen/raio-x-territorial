@@ -7,17 +7,25 @@ assim entravam na contagem, no risco e na frase da capa.
 
 Critério declarado (medido, não nota):
   * conta como DENTRO DO IMÓVEL a mancha que está inteira dentro do CAR, ou cuja parte
-    dentro do CAR comporta um pixel do Landsat (círculo de 30 m de diâmetro);
-  * o resto é TOQUE NA DIVISA: aparece numa linha à parte, com área, e não entra em
-    contagem, área, risco nem frase de capa.
+    dentro do CAR comporta um pixel do Landsat (círculo de 30 m de diâmetro), ou cuja parte
+    dentro do CAR tem 1 ha ou mais, mesmo sendo uma faixa estreita;
+  * o resto é TOQUE NA DIVISA (mais estreita que um pixel E com menos de 1 ha dentro do CAR):
+    aparece numa linha à parte, com área, e não entra em contagem, área, risco nem frase.
 Medições (fixtures em tests/fixtures/f2_prodes_leitura): faixas de divisa reais têm
-largura máxima (maior círculo inscrito) de 8,1 a 14,9 m; a menor parte interna que não
-está inteira no CAR tem 69,8 m. O limiar de 30 m fica no meio, com folga dos dois lados.
+largura máxima (maior círculo inscrito) de 8,1 a 14,9 m e área de 0,03 a 0,16 ha; a menor
+parte interna que não está inteira no CAR tem 69,8 m. O limiar de 30 m fica no meio, com
+folga dos dois lados. O teto de 1 ha é 6 vezes a maior faixa medida e é a menor mancha que o
+PRODES mapeia sozinha nos biomas fora da Amazônia: uma faixa longa com hectares de
+desmatamento dentro do CAR não pode virar "nenhum desmatamento dentro do imóvel".
 
 Outras regras:
   * camada acumulada (accumulated_deforestation_*) nunca vira ocorrência anual;
   * classe do PRODES que não é desmatamento (reservatório, queimada) não entra na contagem;
-  * o recorte pós-31/07/2019 continua separado;
+  * a mesma mancha devolvida por duas camadas (Amazônia Legal e bioma Amazônia) conta uma vez:
+    mesmo ano e interseção com sobreposição acima de 95 % (não só geometria idêntica byte a byte);
+  * camada anual que voltou no limite de feições do WFS está cortada: sem achado vira pendente;
+  * o recorte pós-31/07/2019 continua separado; mancha do ano PRODES 2019 ou anterior com imagem
+    depois de 31/07/2019 é "detectada em imagem posterior", nunca "posterior" sem ressalva;
   * área em ha com 2 casas ("< 0,01 ha" quando menor); percentual inteiro;
   * fonte que não respondeu por completo e nada achado = consulta pendente, nunca "nenhum".
 
@@ -30,11 +38,15 @@ Funções públicas:
 """
 from __future__ import annotations
 
+import copy
+import hashlib
+import json
 import math
 import re
+import threading
+from collections import OrderedDict
 from datetime import date, datetime
 from decimal import ROUND_HALF_UP, Decimal
-from functools import lru_cache
 from typing import Any
 
 try:
@@ -49,8 +61,14 @@ except Exception:  # pragma: no cover - runtime sem motor geométrico
     _GEO_OK = False
     shapely = shape = transform = unary_union = Transformer = _GEOD = None
 
-READING_VERSION = "f2-prodes-leitura-1"
+READING_VERSION = "f2-prodes-leitura-2"
 PIXEL_M = 30.0
+# Teto de área da faixa de divisa (ver docstring): 1 ha ou mais dentro do CAR conta como dentro.
+BOUNDARY_MAX_HA = 1.0
+# Duas camadas anuais que devolvem a mesma mancha: mesmo ano e sobreposição (IoU) acima disto.
+DUPLICATE_IOU = 0.95
+# Limite de feições pedido por camada em prodes_fast_v24 (count=2000). Resposta nesse limite está cortada.
+WFS_FEATURE_LIMIT = 2000
 _HALF_PIXEL_M = PIXEL_M / 2.0
 # Uma forma que comporta um círculo de 30 m tem pelo menos pi * 15^2 m² de área.
 _MIN_PIXEL_AREA_M2 = math.pi * _HALF_PIXEL_M ** 2
@@ -73,14 +91,17 @@ PENDING_TEXT = "Consulta ao PRODES pendente nesta emissão; a leitura é refeita
 MCR_BASIS = "MCR 2-9: verificação de supressão de vegetação nativa após 31/07/2019."
 METHOD_TEXT = (
     "Interseção geométrica exata com o CAR. Conta como dentro do imóvel a mancha que está "
-    "inteira no CAR ou cuja parte interna comporta um pixel do satélite (30 m). Faixas mais "
-    "estreitas na divisa aparecem à parte e não entram na contagem, na área nem no risco."
+    "inteira no CAR, cuja parte interna comporta um pixel do satélite (30 m) ou tem 1 ha ou mais. "
+    "Faixas na divisa mais estreitas que um pixel e com menos de 1 ha aparecem à parte e não "
+    "entram na contagem, na área nem no risco. A mesma mancha em duas camadas conta uma vez."
 )
 RULE_TEXT = (
-    "PRODES: conta como desmatamento dentro do imóvel só a mancha inteira no CAR ou cuja parte "
-    "interna comporta um pixel do satélite (30 m). Faixas de divisa mais estreitas aparecem à "
-    "parte. Máscara de desmatamento acumulado nunca conta como ocorrência anual."
+    "PRODES: conta como desmatamento dentro do imóvel só a mancha inteira no CAR, cuja parte "
+    "interna comporta um pixel do satélite (30 m) ou tem 1 ha ou mais. Faixas de divisa mais "
+    "estreitas e menores aparecem à parte. Máscara de desmatamento acumulado nunca conta como "
+    "ocorrência anual."
 )
+INCOMPLETE_TEXT = "A consulta ao PRODES não veio completa nesta emissão; pode haver mais."
 
 
 # ---------------------------------------------------------------- formatação pt-BR
@@ -166,6 +187,30 @@ def _post_cutoff(props: dict[str, Any]) -> bool:
     return bool(y and y >= 2020)
 
 
+def _straddles_cutoff(props: dict[str, Any]) -> bool:
+    # O ano PRODES N vai de agosto de N-1 a julho de N. Mancha do ano 2019 (ou anterior) com
+    # imagem depois de 31/07/2019 foi detectada depois do corte, mas pode ter ocorrido antes.
+    y = _year(props)
+    return bool(_post_cutoff(props) and y is not None and y <= CREDIT_CUTOFF.year)
+
+
+def _hit_truncated(hit: dict[str, Any]) -> bool:
+    """200 não é todos: camada que voltou no limite de feições do WFS está cortada."""
+    features = hit.get("features") or []
+    try:
+        returned = max(int(hit.get("count") or 0), len(features))
+    except Exception:
+        returned = len(features)
+    try:
+        limit = int(hit.get("limit") or WFS_FEATURE_LIMIT)
+    except Exception:
+        limit = WFS_FEATURE_LIMIT
+    matched = hit.get("number_matched")
+    if isinstance(matched, (int, float)) and not isinstance(matched, bool) and matched > returned:
+        return True
+    return returned >= limit
+
+
 def layer_kind(layer: Any) -> str:
     name = str(layer or "").lower()
     if "accumulated" in name or "acumulad" in name:
@@ -226,11 +271,24 @@ def _polygonal(geom):
     return parts[0] if len(parts) == 1 else shapely.union_all(parts)
 
 
-@lru_cache(maxsize=256)
+_THREAD = threading.local()
+
+
 def _local_metric(lon: float, lat: float):
     # Transversa de Mercator centrada no imóvel: distorção desprezível na escala de uma fazenda.
-    proj = f"+proj=tmerc +lat_0={lat} +lon_0={lon} +k=1 +x_0=0 +y_0=0 +ellps=GRS80 +units=m +no_defs"
-    return Transformer.from_crs("EPSG:4674", proj, always_xy=True).transform
+    # A leitura roda em asyncio.to_thread e o Transformer do pyproj não é seguro entre threads:
+    # um cache por thread.
+    cache = getattr(_THREAD, "metric", None)
+    if cache is None:
+        cache = _THREAD.metric = {}
+    key = (lon, lat)
+    fn = cache.get(key)
+    if fn is None:
+        if len(cache) >= 64:
+            cache.clear()
+        proj = f"+proj=tmerc +lat_0={lat} +lon_0={lon} +k=1 +x_0=0 +y_0=0 +ellps=GRS80 +units=m +no_defs"
+        fn = cache[key] = Transformer.from_crs("EPSG:4674", proj, always_xy=True).transform
+    return fn
 
 
 def _max_width_m(metric_geom) -> float | None:
@@ -255,8 +313,10 @@ def _pending(reason: str, **extra) -> dict[str, Any]:
 def _criterion() -> dict[str, Any]:
     return {
         "pixel_m": PIXEL_M,
-        "inside_when": "mancha inteira no CAR ou parte interna com largura máxima >= 30 m (maior círculo inscrito)",
-        "boundary_when": "parte interna com largura máxima < 30 m",
+        "inside_when": "mancha inteira no CAR, parte interna com largura máxima >= 30 m (maior círculo inscrito) ou parte interna >= 1 ha",
+        "boundary_when": "parte interna com largura máxima < 30 m e área < 1 ha",
+        "boundary_max_ha": BOUNDARY_MAX_HA,
+        "duplicate_iou": DUPLICATE_IOU,
         "credit_cutoff": CREDIT_CUTOFF.isoformat(),
     }
 
@@ -296,11 +356,29 @@ def classify_prodes(prodes: dict[str, Any] | None, car_geometry: dict[str, Any] 
     failed_accumulated = sorted({x for x in failed if layer_kind(x) == "accumulated"})
     if failed_annual:
         pending_reasons.append("camada_anual_sem_resposta")
+    truncated_annual = sorted({str(h.get("layer") or "") for h in (p.get("hits") or [])
+                               if isinstance(h, dict) and layer_kind(h.get("layer")) == "annual" and _hit_truncated(h)})
+    truncated_accumulated = [h for h in (p.get("hits") or [])
+                             if isinstance(h, dict) and layer_kind(h.get("layer")) == "accumulated" and _hit_truncated(h)]
+    if truncated_annual:
+        pending_reasons.append("camada_anual_truncada")
 
     buckets: dict[str, list[dict[str, Any]]] = {"inside": [], "boundary": [], "accumulated": [], "other_classes": []}
     geoms: dict[str, list] = {k: [] for k in ("inside", "post", "boundary", "accumulated", "other_classes")}
     seen: set = set()
+    kept: dict[tuple, list] = {}
+    duplicates = 0
     geometry_errors = 0
+
+    def near_duplicate(group: tuple, geom) -> bool:
+        for other in kept.get(group, ()):
+            if not other.intersects(geom):
+                continue
+            common = other.intersection(geom).area
+            union = other.area + geom.area - common
+            if union > 0 and common / union > DUPLICATE_IOU:
+                return True
+        return False
 
     for hit in p.get("hits") or []:
         if not isinstance(hit, dict):
@@ -331,7 +409,14 @@ def classify_prodes(prodes: dict[str, Any] | None, car_geometry: dict[str, Any] 
             key = (kind, year, inter.wkb_hex)
             if key in seen:
                 continue
-            seen.add(key)
+            group = (kind, year)
+            try:
+                if near_duplicate(group, inter):
+                    duplicates += 1
+                    continue
+            except Exception:
+                geometry_errors += 1
+                continue
             feature_area = _area_ha(_polygonal(src))
             contained = feature_area > 0 and area >= feature_area * _CONTAINED_SHARE
             fits_pixel = False
@@ -345,10 +430,21 @@ def classify_prodes(prodes: dict[str, Any] | None, car_geometry: dict[str, Any] 
             except Exception:
                 geometry_errors += 1
                 continue
-            inside = bool(contained or fits_pixel)
+            seen.add(key)
+            kept.setdefault(group, []).append(inter)
+            large_strip = not (contained or fits_pixel) and area >= BOUNDARY_MAX_HA
+            inside = bool(contained or fits_pixel or large_strip)
             img = _parse_date(props.get("image_date") or props.get("data_imagem") or props.get("date"))
             post = _post_cutoff(props)
             main_class = str(props.get("main_class") or "").strip().upper()
+            if contained:
+                reason = "mancha inteira dentro do CAR"
+            elif fits_pixel:
+                reason = "parte interna comporta um pixel de 30 m"
+            elif large_strip:
+                reason = "faixa estreita na divisa com 1 ha ou mais dentro do CAR"
+            else:
+                reason = "faixa na divisa mais estreita que um pixel de 30 m e menor que 1 ha"
             item = {
                 "id": feature.get("id"),
                 "layer": layer,
@@ -360,9 +456,11 @@ def classify_prodes(prodes: dict[str, Any] | None, car_geometry: dict[str, Any] 
                 "feature_area_ha": round(feature_area, 6),
                 "share_of_feature_pct": round(area / feature_area * 100.0, 1) if feature_area > 0 else None,
                 "placement": "inside" if inside else "boundary",
-                "reason": "mancha inteira dentro do CAR" if contained else ("parte interna comporta um pixel de 30 m" if fits_pixel else "faixa na divisa mais estreita que um pixel de 30 m"),
+                "reason": reason,
+                "narrow_strip": large_strip,
                 "max_width_m": round(max_width, 1) if max_width is not None else None,
                 "post_cutoff": post,
+                "post_cutoff_straddles": _straddles_cutoff(props),
             }
             if kind == "accumulated":
                 item["until_year"] = _accumulated_until(layer) or year
@@ -415,6 +513,8 @@ def classify_prodes(prodes: dict[str, Any] | None, car_geometry: dict[str, Any] 
         "state": state(bool(inside_items), not complete),
         "complete": complete,
         "pending_reasons": pending_reasons,
+        "truncated_layers": truncated_annual,
+        "duplicates_removed": duplicates,
         "criterion": _criterion(),
         "car_area_ha": round(total_ha, 6),
         "inside": {
@@ -444,7 +544,7 @@ def classify_prodes(prodes: dict[str, Any] | None, car_geometry: dict[str, Any] 
             "occurrences": boundary_items,
         },
         "accumulated": {
-            "state": state(bool(accumulated_items), bool(failed_accumulated) or bool(geometry_errors)),
+            "state": state(bool(accumulated_items), bool(failed_accumulated) or bool(truncated_accumulated) or bool(geometry_errors)),
             "count": len(accumulated_items),
             "area_ha": accumulated_area,
             "pct_car": round(accumulated_area / total_ha * 100.0, 4) if total_ha > 0 else None,
@@ -470,7 +570,11 @@ def _occurrence_line(item: dict[str, Any], total_ha: float) -> str:
     if pct:
         parts[-1] += f" ({pct} do CAR)"
     img = _parse_date(item.get("image_date"))
-    if item["post_cutoff"]:
+    if item.get("narrow_strip") and item.get("max_width_m") is not None:
+        parts.append(f"faixa de até {_grouped(Decimal(str(item['max_width_m'])), 0)} m de largura na divisa")
+    if item["post_cutoff"] and item.get("post_cutoff_straddles"):
+        parts.append(f"detectado em imagem posterior a 31/07/2019; o período PRODES {item['year']} começa antes dessa data")
+    elif item["post_cutoff"]:
         parts.append("posterior a 31/07/2019")
     elif img and img < MARCO_2008:
         parts.append("anterior a 22/07/2008")
@@ -484,6 +588,16 @@ def _texts(reading: dict[str, Any]) -> dict[str, Any]:
     n, m, k = ins["count"], post["count"], bnd["count"]
     pending = reading["state"] == "pending"
     incomplete = not reading.get("complete", False)
+    # Tentar não é responder: "nenhum" só vale para as camadas que responderam por completo.
+    scope = " nas camadas que responderam" if incomplete else ""
+    straddling = sorted({x["year"] for x in post["occurrences"] if x.get("post_cutoff_straddles") and x.get("year")})
+    after_cutoff = "em imagem posterior a 31/07/2019" if straddling else "depois de 31/07/2019"
+    straddle_note = (
+        f" A de PRODES {_years_text(straddling)} foi detectada em imagem posterior a 31/07/2019,"
+        " mas o período do PRODES começa antes dessa data." if len(straddling) == 1 else
+        (f" As de PRODES {_years_text(straddling)} foram detectadas em imagem posterior a 31/07/2019,"
+         " mas o período do PRODES começa antes dessa data." if straddling else "")
+    )
 
     if n:
         # "d2006" é o período entre a imagem anterior e a de 2006, não "desmatado em 2006".
@@ -493,11 +607,15 @@ def _texts(reading: dict[str, Any]) -> dict[str, Any]:
             f" ({when}), {format_ha(ins['area_ha'])} ({format_pct(ins['area_ha'], total)} do CAR)."
         )
         if m:
-            inside_text += f" {_plural(m, 'Um é posterior', f'{m} são posteriores')} a 31/07/2019 (PRODES {_years_text(post['years'])}; {format_ha(post['area_ha'])})."
+            if straddling:
+                inside_text += f" {_plural(m, 'Um tem imagem posterior', f'{m} têm imagem posterior')} a 31/07/2019 (PRODES {_years_text(post['years'])}; {format_ha(post['area_ha'])})."
+            else:
+                inside_text += f" {_plural(m, 'Um é posterior', f'{m} são posteriores')} a 31/07/2019 (PRODES {_years_text(post['years'])}; {format_ha(post['area_ha'])})."
+            inside_text += straddle_note
         else:
-            inside_text += " Nenhum é posterior a 31/07/2019."
+            inside_text += f" Nenhum é posterior a 31/07/2019{scope}."
         if incomplete:
-            inside_text += " Parte das camadas não respondeu nesta emissão; pode haver mais."
+            inside_text += " " + INCOMPLETE_TEXT
         headline = f"PRODES: {n} {_plural(n, 'desmatamento', 'desmatamentos')} dentro do imóvel • {format_ha(ins['area_ha'])}"
         summary_short = f"{n} {_plural(n, 'desmatamento', 'desmatamentos')} dentro do imóvel • {format_ha(ins['area_ha'])}"
     elif pending:
@@ -560,26 +678,32 @@ def _texts(reading: dict[str, Any]) -> dict[str, Any]:
         credit_text = "Triagem pós-31/07/2019 pendente: o PRODES não respondeu por completo nesta emissão."
     elif m:
         credit_text = (
-            f"Há desmatamento PRODES dentro do imóvel depois de 31/07/2019 (PRODES {_years_text(post['years'])}; {format_ha(post['area_ha'])})."
+            f"Há desmatamento PRODES dentro do imóvel {after_cutoff} (PRODES {_years_text(post['years'])}; {format_ha(post['area_ha'])})."
+            f"{straddle_note}"
             " Para crédito rural, isso deve ser conferido conforme o MCR vigente e a documentação ambiental;"
             " não equivale automaticamente a impedimento."
         )
+        if incomplete:
+            credit_text += " " + INCOMPLETE_TEXT
     elif bnd["post_cutoff_count"]:
         credit_text = (
-            "Nenhum desmatamento PRODES dentro do imóvel depois de 31/07/2019. "
+            f"Nenhum desmatamento PRODES dentro do imóvel depois de 31/07/2019{scope}. "
             f"A faixa de divisa de {_years_text(bnd['post_cutoff_years'])} é posterior a essa data e pode aparecer em"
             " checagem automática de crédito que cruza o CAR com o PRODES."
         )
+        if incomplete:
+            credit_text += " " + INCOMPLETE_TEXT
     else:
         credit_text = (
-            "Nenhum desmatamento PRODES dentro do imóvel depois de 31/07/2019 nas camadas consultadas."
-            " Isso não substitui a verificação da instituição financeira."
+            f"Nenhum desmatamento PRODES dentro do imóvel depois de 31/07/2019{scope or ' nas camadas consultadas'}."
+            + (f" {INCOMPLETE_TEXT}" if incomplete else "")
+            + " Isso não substitui a verificação da instituição financeira."
         )
 
     if m:
         risk = {"level": "attention", "status": "ATENÇÃO", "criterion": "desmatamento dentro do imóvel depois de 31/07/2019"}
     elif n:
-        risk = {"level": "attention", "status": "ATENÇÃO", "criterion": "desmatamento mapeado dentro do imóvel, todo anterior a 31/07/2019"}
+        risk = {"level": "attention", "status": "ATENÇÃO", "criterion": f"desmatamento mapeado dentro do imóvel, todo anterior a 31/07/2019{scope}"}
     elif pending:
         risk = {"level": "neutral", "status": "CONSULTA PENDENTE", "criterion": "PRODES não respondeu por completo e nada foi achado nas camadas que responderam"}
     else:
@@ -588,7 +712,7 @@ def _texts(reading: dict[str, Any]) -> dict[str, Any]:
     return {
         "headline": headline, "summary_short": summary_short, "inside_text": inside_text,
         "boundary_text": boundary_text, "boundary_core": boundary_core, "boundary_short": boundary_short, "accumulated_text": accumulated_text, "other_classes_text": other_text,
-        "credit_text": credit_text, "risk": risk,
+        "credit_text": credit_text, "risk": risk, "post_straddle_years": straddling,
     }
 
 
@@ -611,9 +735,12 @@ def _rows(reading: dict[str, Any], texts: dict[str, Any]) -> list[list[str]]:
             rows.append(["Demais ocorrências", f"mais {rest} dentro do imóvel, já somadas no total acima"])
         if post["count"]:
             pc = post["count"]
-            rows.append(["Depois de 31/07/2019", f"{pc} {_plural(pc, 'desmatamento', 'desmatamentos')} • {format_ha(post['area_ha'])} • PRODES {_years_text(post['years'])}"])
+            value = f"{pc} {_plural(pc, 'desmatamento', 'desmatamentos')} • {format_ha(post['area_ha'])} • PRODES {_years_text(post['years'])}"
+            if texts.get("post_straddle_years"):
+                value += f" • PRODES {_years_text(texts['post_straddle_years'])}: detectado em imagem posterior; o período começa antes de 31/07/2019"
+            rows.append(["Depois de 31/07/2019", value])
         else:
-            rows.append(["Depois de 31/07/2019", "Nenhum dentro do imóvel nas camadas consultadas"])
+            rows.append(["Depois de 31/07/2019", "Nenhum dentro do imóvel nas camadas que responderam; a consulta não veio completa" if not reading.get("complete", False) else "Nenhum dentro do imóvel nas camadas consultadas"])
     if texts["boundary_core"]:
         # Faixa de divisa pós-31/07/2019 nunca some: quando a linha de triagem já fala dela
         # (sem desmatamento interno recente), a linha da divisa não repete o aviso.
@@ -637,16 +764,23 @@ def _narrative(reading: dict[str, Any], texts: dict[str, Any]) -> dict[str, Any]
     total = reading.get("car_area_ha") or 0.0
     n, m = ins["count"], post["count"]
     one = None
+    straddling = texts.get("post_straddle_years") or []
+    after_cutoff = "em imagem posterior a 31/07/2019" if straddling else "depois de 31/07/2019"
     if m:
         one = (
-            f"tem desmatamento mapeado pelo PRODES dentro da área depois de 31/07/2019 (PRODES {_years_text(post['years'])}; "
-            f"{format_ha(post['area_ha'])}); isso exige diligência para crédito rural, mas não prova irregularidade por si só."
+            f"tem desmatamento mapeado pelo PRODES dentro da área {after_cutoff} (PRODES {_years_text(post['years'])}; "
+            f"{format_ha(post['area_ha'])})"
+            + (f", e o período PRODES {_years_text(straddling)} começa antes dessa data" if straddling else "")
+            + "; isso exige diligência para crédito rural, mas não prova irregularidade por si só."
         )
     elif n:
+        complete = reading.get("complete", False)
         one = (
             f"tem desmatamento mapeado pelo PRODES dentro da área ("
             f"{ins['occurrences'][0]['period_label'] if n == 1 else 'anos PRODES ' + _years_text(ins['years'])}; {format_ha(ins['area_ha'])}, "
-            f"{format_pct(ins['area_ha'], total)} do CAR), todo anterior a 31/07/2019; isso não prova irregularidade por si só."
+            f"{format_pct(ins['area_ha'], total)} do CAR), "
+            + ("todo anterior a 31/07/2019" if complete else "anterior a 31/07/2019 nas camadas que responderam, mas a consulta ao PRODES não veio completa")
+            + "; isso não prova irregularidade por si só."
         )
     found = [x for x in (texts["inside_text"], texts["boundary_short"], texts["accumulated_text"], texts["other_classes_text"]) if x]
     why = []
@@ -656,16 +790,16 @@ def _narrative(reading: dict[str, Any], texts: dict[str, Any]) -> dict[str, Any]
         why.append("Para crédito rural, o MCR exige atenção especial à supressão de vegetação nativa posterior a 31/07/2019. Por isso esse recorte aparece separado do histórico antigo.")
     attention, next_steps, money = [], [], []
     if m:
-        attention.append(f"Há desmatamento PRODES dentro do imóvel depois de 31/07/2019 (PRODES {_years_text(post['years'])}). A análise de crédito deve conferir documentação ambiental e a regra vigente; o Raio-X não transforma isso em impedimento automático.")
-        next_steps.append("Conferir cada desmatamento PRODES posterior a 31/07/2019 por data, autorização e documento ambiental aplicável à operação de crédito.")
-        money.append("Desmatamento PRODES posterior a 31/07/2019 pode exigir documentação adicional na análise de crédito rural e deve ser verificado antes de fechar a operação.")
+        attention.append(f"Há desmatamento PRODES dentro do imóvel {after_cutoff} (PRODES {_years_text(post['years'])}). A análise de crédito deve conferir documentação ambiental e a regra vigente; o Raio-X não transforma isso em impedimento automático.")
+        next_steps.append(f"Conferir cada desmatamento PRODES {after_cutoff.replace('depois de', 'posterior a')} por data, autorização e documento ambiental aplicável à operação de crédito.")
+        money.append(f"Desmatamento PRODES {after_cutoff.replace('depois de', 'posterior a')} pode exigir documentação adicional na análise de crédito rural e deve ser verificado antes de fechar a operação.")
     elif n:
         next_steps.append("Interpretar o desmatamento PRODES antigo por data e contexto ambiental, sem tratá-lo automaticamente como infração atual.")
         money.append("Desmatamento PRODES antigo pode gerar custo de diligência ou regularização dependendo do enquadramento real.")
     if bnd["post_cutoff_count"] and not m:
         attention.append(f"Faixa de divisa de {_years_text(bnd['post_cutoff_years'])}, posterior a 31/07/2019, pode aparecer em checagem automática de crédito; pela medição ela é mais estreita que um pixel do satélite e não é desmatamento dentro do imóvel.")
         next_steps.append("Se a checagem de crédito apontar a faixa de divisa, apresentar a medição do Raio-X: largura menor que um pixel do satélite (30 m).")
-    if reading["state"] == "pending":
+    if reading["state"] == "pending" or not reading.get("complete", False):
         next_steps.append("Refazer a consulta ao PRODES, pendente nesta emissão.")
     return {"one_sentence": one, "found": found, "why": why, "attention": attention, "next_steps": next_steps, "money": money}
 
@@ -722,8 +856,34 @@ def prodes_reading_payload(result: dict[str, Any]) -> dict[str, Any]:
         "rows": _rows(reading, texts),
         "narrative": _narrative(reading, texts),
         "lens": lens_from_reading(reading, props.get("m_fiscal")),
-        "panel": {"id": "prodes", "label": "PRODES", "state": reading["state"], "audit_state": panel_state, "text": texts["headline"]},
+        "panel": {"id": "prodes", "label": "PRODES", "state": reading["state"], "audit_state": panel_state, "text": texts["headline"],
+                  **_card(reading, texts)},
     }
+
+
+def _card(reading: dict[str, Any], texts: dict[str, Any]) -> dict[str, str]:
+    """Linha do PRODES no cartão do mapa: o mesmo texto do relatório, curto."""
+    ins, post = reading["inside"], reading["post_cutoff_inside"]
+    n, m = ins["count"], post["count"]
+    incomplete = not reading.get("complete", False)
+    if n:
+        straddling = texts.get("post_straddle_years") or []
+        if m and straddling:
+            reason = f"{_plural(m, 'Um tem imagem posterior', f'{m} têm imagem posterior')} a 31/07/2019 (PRODES {_years_text(post['years'])}); o período PRODES {_years_text(straddling)} começa antes dessa data."
+        elif m:
+            reason = f"{_plural(m, 'Um é posterior', f'{m} são posteriores')} a 31/07/2019 (PRODES {_years_text(post['years'])})."
+        else:
+            reason = "Nenhum é posterior a 31/07/2019" + (" nas camadas que responderam." if incomplete else ".")
+        if incomplete:
+            reason += " " + INCOMPLETE_TEXT
+        # O status do cartão sai em caixa alta (CSS): número e unidade ("14,28 ha") ficam no motivo.
+        total = reading.get("car_area_ha") or 0.0
+        size = f"{n} {_plural(n, 'desmatamento', 'desmatamentos')} • {format_ha(ins['area_ha'])} ({format_pct(ins['area_ha'], total)} do CAR). "
+        return {"dot": "diligence", "status": "Desmatamento dentro do imóvel", "reason": size + reason}
+    if reading["state"] == "pending":
+        return {"dot": "source_failed", "status": "Consulta pendente",
+                "reason": "O PRODES não respondeu por completo nesta consulta. Nada foi presumido."}
+    return {"dot": "checked_clear", "status": "Sem desmatamento dentro do imóvel", "reason": texts["boundary_short"]}
 
 
 def compact_reading(payload: dict[str, Any]) -> dict[str, Any]:
@@ -745,7 +905,11 @@ def apply_reading_to_result(result: dict[str, Any]) -> dict[str, Any] | None:
     if not isinstance(result, dict) or not isinstance(result.get("prodes"), dict):
         return None
     prodes = result["prodes"]
-    payload = prodes_reading_payload(result)
+    key = _reading_key(result)
+    payload = _cache_get(key)
+    if payload is None:
+        payload = prodes_reading_payload(result)
+        _cache_put(key, payload)
     if "exact_raw" not in prodes and isinstance(prodes.get("exact"), dict):
         prodes["exact_raw"] = prodes["exact"]
     if payload["state"] == "pending" and not payload["inside"]["count"]:
@@ -767,6 +931,49 @@ def apply_reading_to_result(result: dict[str, Any]) -> dict[str, Any] | None:
         }
     prodes["reading"] = compact_reading(payload)
     return payload
+
+
+# A mesma análise passa pela leitura duas vezes (analyze_car e o patch do relatório). O cache é
+# pelo CONTEÚDO de tudo o que a leitura usa (hits, camadas, geometria, área, regras), nunca pela
+# identidade dos objetos: id() se repete depois que o objeto some e daria a leitura de outro imóvel.
+_CACHE_LOCK = threading.Lock()
+_CACHE: "OrderedDict[str, dict[str, Any]]" = OrderedDict()
+_CACHE_MAX = 64
+
+
+def _reading_key(result: dict[str, Any]) -> str | None:
+    car, props, prodes = _result_parts(result)
+    p = prodes if isinstance(prodes, dict) else {}
+    basis = [READING_VERSION, PIXEL_M, BOUNDARY_MAX_HA, DUPLICATE_IOU, WFS_FEATURE_LIMIT, CREDIT_CUTOFF.isoformat(), _GEO_OK,
+             p.get("ok"), p.get("hits"), p.get("failed_layers"), p.get("candidate_layers"),
+             car.get("geometry"), props.get("area"), props.get("m_fiscal")]
+    try:
+        raw = json.dumps(basis, sort_keys=True, ensure_ascii=False, separators=(",", ":"), default=str)
+    except Exception:
+        return None
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _cache_get(key: str | None) -> dict[str, Any] | None:
+    if key is None:
+        return None
+    with _CACHE_LOCK:
+        hit = _CACHE.get(key)
+        if hit is None:
+            return None
+        _CACHE.move_to_end(key)
+    return copy.deepcopy(hit)
+
+
+def _cache_put(key: str | None, payload: dict[str, Any]) -> None:
+    if key is None:
+        return
+    frozen = copy.deepcopy(payload)
+    with _CACHE_LOCK:
+        _CACHE[key] = frozen
+        _CACHE.move_to_end(key)
+        while len(_CACHE) > _CACHE_MAX:
+            _CACHE.popitem(last=False)
 
 
 # ---------------------------------------------------------------- relatório
@@ -822,16 +1029,7 @@ def apply_reading_to_report_payload(payload: dict[str, Any], result: dict[str, A
         for cat in con.get("categories") or []:
             if isinstance(cat, dict) and cat.get("label") == "Ambiental":
                 cat.update(text=rp["inside_text"], risk=risk["status"], level=risk["level"])
-        if con.get("overall_risk") == "MODERADO" and old_count and not inside["count"]:
-            emb = (payload.get("enforcement") or {}).get("embargo_count")
-            try:
-                emb = int(emb or 0)
-            except Exception:
-                emb = 0
-            con["overall_risk"] = "ALTO" if emb else ("NÃO CLASSIFICADO" if pending else "BAIXO")
-        elif con.get("overall_risk") == "BAIXO" and pending:
-            con["overall_risk"] = "NÃO CLASSIFICADO"
-            con["overall_reason"] = str(con.get("overall_reason") or "") + " A consulta ao PRODES ficou pendente nesta emissão."
+        _reconcile_overall_risk(con, payload, inside["count"], pending, old_count)
         if con.get("main_attention") == _OLD_MAIN_ATTENTION and not inside["count"]:
             con["main_attention"] = _NEW_MAIN_ATTENTION
         risks = [x for x in (con.get("risks") or []) if not _OLD_PRODES_LINE.match(str(x))]
@@ -862,3 +1060,38 @@ def apply_reading_to_report_payload(payload: dict[str, Any], result: dict[str, A
     if RULE_TEXT not in rules:
         rules.append(RULE_TEXT)
     return payload
+
+
+_PENDING_REASON = " A consulta ao PRODES ficou pendente nesta emissão."
+
+
+def _reconcile_overall_risk(con: dict[str, Any], payload: dict[str, Any], inside_count: int, pending: bool, old_count: Any) -> None:
+    """Risco geral coerente com a leitura, nos dois sentidos, sem nunca baixar ALTO/CRÍTICO.
+
+    build_live_payload decide MODERADO pela contagem bruta de result['prodes']['exact'].
+    Na nova tentativa essa contagem pode faltar (dicionário cru da consulta) e o risco sair
+    BAIXO enquanto a leitura acha desmatamento dentro: aqui ele sobe para MODERADO.
+    """
+    emb = (payload.get("enforcement") or {}).get("embargo_count")
+    try:
+        emb = int(emb or 0)
+    except Exception:
+        emb = 0
+    current = con.get("overall_risk")
+    reason = str(con.get("overall_reason") or "")
+    if inside_count:
+        if current in (None, "", "BAIXO", "NÃO CLASSIFICADO"):
+            con["overall_risk"] = "MODERADO"
+            con["overall_reason"] = reason.replace(_PENDING_REASON, "")
+        return
+    if pending:
+        if current == "BAIXO" or (current == "MODERADO" and old_count):
+            con["overall_risk"] = "ALTO" if emb else "NÃO CLASSIFICADO"
+            if _PENDING_REASON not in reason:
+                con["overall_reason"] = reason + _PENDING_REASON
+        return
+    if current == "MODERADO" and old_count:
+        con["overall_risk"] = "ALTO" if emb else "BAIXO"
+    elif current == "NÃO CLASSIFICADO" and _PENDING_REASON in reason:
+        con["overall_risk"] = "ALTO" if emb else "BAIXO"
+        con["overall_reason"] = reason.replace(_PENDING_REASON, "")

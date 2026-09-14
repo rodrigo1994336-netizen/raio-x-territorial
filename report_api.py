@@ -113,6 +113,14 @@ def _cache_put(code:str,result:dict):
     _prune_cache()
 
 
+async def _reapply_prodes_reading(result:dict):
+    # F2: depois de trocar result['prodes'] pela nova tentativa, refaz a leitura única
+    # ('exact' só dentro do imóvel + 'reading') para relatório, portal, WhatsApp e monitoramento.
+    import deploy_app
+    await asyncio.to_thread(deploy_app._apply_prodes_reading,result)
+    return result
+
+
 async def _retry_failed_core(result:dict):
     car=result.get('car') or {}; bbox=car.get('bbox')
     if not bbox: return result
@@ -125,6 +133,7 @@ async def _retry_failed_core(result:dict):
         for k,v in zip(keys,values):
             if isinstance(v,Exception): result[k]={'ok':False,'detail':f'{type(v).__name__}:{v}'}
             else: result[k]=v
+    if 'prodes' in keys: await _reapply_prodes_reading(result)
     if not (result.get('anm') or {}).get('ok'):
         try: result['anm']=await asyncio.to_thread(query_anm_curl_exact,car.get('geometry'),bbox)
         except Exception as e: result['anm']={'ok':False,'source':'ANM/SIGMINE','detail':f'{type(e).__name__}:{e}'}
