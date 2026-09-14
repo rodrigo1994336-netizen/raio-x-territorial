@@ -45,6 +45,10 @@ jobs:
         env:
           RX_RELEASE: OFF
         run: PYTHONPATH=. python scripts/f2_incra_sigef_snci_gate.py
+      - name: Ponte no Brasil gate (token, host list, IP literal, userinfo, port, redirect, private DNS, body/method limits, client routing on/off identical, real curl; positive controls)
+        env:
+          RX_RELEASE: OFF
+        run: PYTHONPATH=. python scripts/ponte_brasil_gate.py
       - uses: actions/setup-node@v4
         with:
           node-version: '20'

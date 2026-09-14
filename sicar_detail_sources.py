@@ -10,12 +10,14 @@ from shapely.geometry import shape
 from shapely.ops import unary_union
 from pyproj import Geod
 
+import br_bridge
+
 SICAR='https://geoserver.car.gov.br/geoserver/sicar/ows'
 GEOD=Geod(ellps='GRS80')
 
 
 def _curl(url: str, expect_json=True):
-    p=subprocess.run(['curl','-k','-sS','--connect-timeout','12','--max-time','35','-A','Raio-X-Territorial/0.14.10',url],capture_output=True,timeout=40)
+    p=br_bridge.run_curl(['curl','-k','-sS','--connect-timeout','12','--max-time','35','-A','Raio-X-Territorial/0.14.10',url],timeout_seconds=40,runner=br_bridge.subprocess_runner)
     if p.returncode:
         return {'ok':False,'detail':p.stderr.decode('utf-8','ignore')[:240]}
     raw=p.stdout

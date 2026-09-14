@@ -7,6 +7,7 @@ from urllib.parse import urlencode
 from datetime import datetime, timedelta, timezone
 import source_layer_guard as layer_guard
 import incra_acervo_f2
+import br_bridge
 
 try:
     from shapely.geometry import shape, mapping
@@ -46,7 +47,8 @@ TARGETS={
 def _curl(url:str, expect_json=True, *, cancel_event=None, connect_timeout=12, max_time=40, hard_timeout=45):
     args=['curl','-k','-sS','--connect-timeout',str(connect_timeout),'--max-time',str(max_time),'-A','Raio-X-Territorial/0.14.6',url]
     try:
-        p=run_managed_process(args,timeout_seconds=hard_timeout,cancel_event=cancel_event)
+        # SICAR/INCRA pela Ponte no Brasil quando configurada; sem ela, a mesma chamada de antes.
+        p=br_bridge.run_curl(args,timeout_seconds=hard_timeout,cancel_event=cancel_event,runner=run_managed_process)
     except ManagedProcessCancelled:
         return {'ok':False,'cancelled':True,'detail':'request_cancelled','bytes':0}
     except subprocess.TimeoutExpired:

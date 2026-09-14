@@ -12,6 +12,8 @@ from shapely.geometry import shape
 from shapely.ops import unary_union
 from pyproj import Geod
 
+import br_bridge
+
 SICAR='https://geoserver.car.gov.br/geoserver/ows'
 GEOD=Geod(ellps='GRS80')
 CAP_TTL=21600
@@ -27,10 +29,10 @@ EXPLICIT=[
 
 def _curl(url:str,expect_json=True):
     try:
-        p=subprocess.run([
+        p=br_bridge.run_curl([
             'curl','-k','-sS','--fail','--retry','0',
             '--connect-timeout','6','--max-time','13','-A','Raio-X-Territorial/SICAR-v41',url
-        ],capture_output=True,timeout=17)
+        ],timeout_seconds=17,runner=br_bridge.subprocess_runner)
     except Exception as e:return {'ok':False,'detail':f'{type(e).__name__}:{str(e)[:220]}'}
     if p.returncode:return {'ok':False,'detail':p.stderr.decode('utf-8','ignore')[:260]}
     raw=p.stdout
