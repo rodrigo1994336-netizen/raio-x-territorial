@@ -87,7 +87,7 @@ async def main() -> None:
             # The portal intentionally reloads once during the boot guard handshake.
             # Do not inspect the DOM until that navigation has settled.
             await page.wait_for_function(
-                "sessionStorage.getItem('rx-v26-ready-reload')==='1' && !document.querySelector('#rxBootGuard')",
+                "(window.rxPortalBootReady===true || sessionStorage.getItem('rx-v26-ready-reload')==='1') && !document.querySelector('#rxBootGuard')",
                 timeout=25000,
             )
             await page.wait_for_function("window.rxV46Installed===true", timeout=25000)
