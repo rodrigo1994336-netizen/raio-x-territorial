@@ -8,7 +8,8 @@ on:
 jobs:
   browser-smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 18
+    # +7 min for the two W1a steps (measured locally on a loaded machine: smoke 103-160 s, controls 134-262 s).
+    timeout-minutes: 25
     env:
       RX_RELEASE: V8_OPERATIONAL_ZERO_COST
       RX_PORTAL_RSS_BUDGET_MB: '220'
@@ -23,6 +24,7 @@ jobs:
           pip install fastapi httpx shapely pyproj pillow reportlab uvicorn "psycopg[binary]" "redis>=5,<7" "numpy>=2,<3" "rasterio>=1.4,<2" "PyJWT[crypto]>=2.10,<3" playwright
           python -m playwright install --with-deps chromium
       - name: Start V46 branch runtime and wait for deferred marker
+        id: runtime
         run: |
           set -euo pipefail
           mkdir -p artifacts
@@ -55,8 +57,17 @@ jobs:
           fi
       - name: Selection card panel and 10-movement visual gate
         run: python .github/scripts/v46_browser_smoke.py
+      # The W1a steps below do not depend on live SICAR (fixtures or a spawned server), so they run even when the
+      # live-SICAR smoke above failed (SICAR often does not answer GitHub runners); they only need the runtime.
       - name: W1a boot smoke (one navigation, CSS/JS failure recovery, failed boot page at 375/768/1440, cold server)
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
         run: python .github/scripts/w1a_boot_browser_smoke.py --spawn 8311
+      - name: W1a fast CAR parcels (cells, canvas, hysteresis, honest notice)
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
+        run: python .github/scripts/w1a_imoveis_rapidos_smoke.py
+      - name: W1a mutation controls (each broken rule must turn the smoke red at its own check)
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
+        run: python .github/scripts/w1a_imoveis_rapidos_smoke.py --mutation-controls
       - name: Enforce browser smoke execution
         if: always()
         run: |
