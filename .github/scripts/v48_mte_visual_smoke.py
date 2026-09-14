@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from pathlib import Path
 
 from playwright.async_api import async_playwright
 
-BASE = "http://127.0.0.1:8000/"
+BASE = os.environ.get("RX_SMOKE_BASE_URL", "http://127.0.0.1:8000/").rstrip("/") + "/"
 CAR = "MG-3120904-DFB380BECD7A4323AD8AA68FA14D011F"
 OUT = Path("artifacts-v48-mte")
 VIEWPORTS = ((375, 812, "375"), (768, 900, "768"), (1440, 900, "1440"))
@@ -20,6 +21,48 @@ ORIGINAL_EIGHT = {
     "public_forest": "Floresta Pública",
     "snci": "SNCI",
 }
+
+# F2 regression: the conformity rows must resolve even when /v1/live/map-panel
+# answers after every legacy fixed timer (~11 s) has already fired, and a
+# re-render of the panel must never re-query a source that already answered.
+MAP_PANEL_DELAY_S = 12.0
+SETTLE_AFTER_FULL_S = 11.5
+MAX_QUERIES_PER_SOURCE = 2  # first attempt + the single automatic retry
+
+
+async def delay_map_panel(page, seconds):
+    async def slow(route):
+        await asyncio.sleep(seconds)
+        try:
+            await route.continue_()
+        except Exception:
+            pass  # page closed while the response was held
+
+    await page.route("**/v1/live/map-panel/**", slow)
+
+
+def count_conformity_requests(page):
+    counts = {"mte": 0, "sinaflor": 0}
+
+    def on_request(request):
+        url = request.url
+        if "/v1/live/conformity/mte/" in url:
+            counts["mte"] += 1
+        elif "/v1/live/conformity/sinaflor/" in url:
+            counts["sinaflor"] += 1
+
+    page.on("request", on_request)
+    return counts
+
+
+async def assert_no_requery(page, counts, t_full, label):
+    # Let every legacy re-render timer (the last one at ~9.5 s after opening) fire first.
+    remaining = SETTLE_AFTER_FULL_S - (asyncio.get_running_loop().time() - t_full)
+    if remaining > 0:
+        await page.wait_for_timeout(int(remaining * 1000))
+    assert counts["mte"] <= MAX_QUERIES_PER_SOURCE, (label, "mte_requeried_on_rerender", counts)
+    assert counts["sinaflor"] <= MAX_QUERIES_PER_SOURCE, (label, "sinaflor_requeried_on_rerender", counts)
+    return dict(counts)
 
 
 COUNTER_JS = r"""(panelSel)=>{const p=document.querySelector(panelSel);if(!p)return null;
@@ -57,11 +100,12 @@ async def open_panel(page):
     await page.locator("#go").click()
     await page.locator(f'.rx46-card[data-car="{CAR}"]').wait_for(state="visible", timeout=60000)
     await page.locator('[data-rx46-action="full"]').click()
+    t_full = asyncio.get_running_loop().time()
     panel = page.locator(f'.rx45-panel-card[data-car="{CAR}"]')
     await panel.wait_for(state="visible", timeout=15000)
-    await page.locator('.rx45-check[data-source="mte_slave_labor"][data-state="blocked_missing_owner_identity"]').wait_for(state="visible", timeout=30000)
+    await page.locator('.rx45-check[data-source="mte_slave_labor"][data-state="blocked_missing_owner_identity"]').wait_for(state="visible", timeout=45000)
     await page.wait_for_timeout(900)
-    return panel
+    return panel, t_full
 
 
 async def assert_contract(page, label):
@@ -142,16 +186,21 @@ async def position_conformity(page, edge):
     await page.wait_for_timeout(180)
 
 
-async def run_viewport(browser, width, height, label):
+async def run_viewport(browser, width, height, label, map_panel_delay_s=0.0):
     context = await browser.new_context(viewport={"width": width, "height": height})
     page = await context.new_page()
+    if map_panel_delay_s:
+        await delay_map_panel(page, map_panel_delay_s)
+    counts = count_conformity_requests(page)
     errors = []
     page.on("pageerror", lambda exc: errors.append("pageerror:" + str(exc)))
     page.on("console", lambda msg: errors.append(f"console:{msg.type}:{msg.text}") if msg.type == "error" else None)
     await page.goto(BASE, wait_until="domcontentloaded", timeout=30000)
     await wait_runtime(page)
-    await open_panel(page)
+    _, t_full = await open_panel(page)
     evidence = await assert_contract(page, label)
+    evidence["conformity_requests"] = await assert_no_requery(page, counts, t_full, label)
+    evidence["map_panel_delay_s"] = map_panel_delay_s
     assert not errors, errors
 
     await position_conformity(page, "top")
@@ -176,6 +225,7 @@ async def main():
         try:
             for width, height, label in VIEWPORTS:
                 results.append(await run_viewport(browser, width, height, label))
+            results.append(await run_viewport(browser, 375, 812, "375-slow-map-panel", MAP_PANEL_DELAY_S))
         finally:
             await browser.close()
     (OUT / "results.json").write_text(json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8")
