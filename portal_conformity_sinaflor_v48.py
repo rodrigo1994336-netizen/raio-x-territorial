@@ -10,6 +10,7 @@ import portal_map_panel_v45 as v45
 from car_resilient import CAR_RE
 import sinaflor_authorization_hardening_v48  # noqa: F401 — patches the source engine deliberately
 from sinaflor_authorization_v48 import query_sinaflor_authorization
+import portal_panel_sources_f2
 
 app = portal_v8.app
 _BASE_PANEL_SYNC = v45._panel_sync
@@ -64,28 +65,34 @@ UI = r'''
 <script>
 (function(){
  const q=s=>document.querySelector(s);
- const currentCar=()=>String((window.current||{}).car_code||'').trim().toUpperCase();
  const fmtDate=v=>{if(!v)return 'não publicada pela camada';const s=String(v),m=s.match(/^(\d{4})-(\d{2})-(\d{2})/);return m?`${m[3]}/${m[2]}/${m[1]}`:s};
  const fmtQuery=v=>{if(!v)return 'não realizada';try{return new Date(v).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'})}catch(e){return String(v)}};
  const ha=v=>{const n=Number(v);return Number.isFinite(n)?n.toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:4}):'—'};
  function row(card){return card?.querySelector('.rx45-check[data-source="sinaflor"]')||null}
- function apply(card,d){const el=row(card);if(!el||typeof window.rxV48UpdateComplianceSource!=='function')return;let status='CONSULTA PENDENTE',reason='A fonte oficial não respondeu agora. Nenhum resultado foi presumido.',answered=false,state=d.state||'source_failed';const first=(d.matches||[])[0]||{};
-   if(d.ok&&d.answered&&state==='checked_clear'){status='SEM AUTORIZAÇÃO SINAFLOR LOCALIZADA';reason=d.reason;answered=true}
-   else if(d.ok&&d.answered&&state==='checked_spatial_record_unconfirmed'){status='REGISTRO ESPACIAL · VÍNCULO NÃO CONFIRMADO';const num=first.authorization_number?`ASV ${first.authorization_number}: `:'';reason=`${num}intersecta espacialmente o CAR, mas a geometria publicada é territorial ampla e não identifica este CAR. O imóvel não foi declarado como autorizado.`;answered=true}
-   else if(d.ok&&d.answered&&state==='checked_authorization_overlap'){status='AUTORIZAÇÃO SINAFLOR LOCALIZADA';const num=first.authorization_number?`ASV ${first.authorization_number}`:'Autorização';reason=`${num} com interseção espacial confirmada${first.overlap_ha!=null?` (${ha(first.overlap_ha)} ha no CAR)`:''}. A validade para eventual desmatamento depende também da data do evento.`;answered=true}
-   else if(d.ok&&d.answered&&state==='checked_authorization_overlap_unconfirmed'){status='AUTORIZAÇÃO LOCALIZADA · VIGÊNCIA NÃO CONFIRMADA';const num=first.authorization_number?`ASV ${first.authorization_number}: `:'';reason=`${num}há vínculo espacial/local, mas vigência/status não confirmam cobertura atual. Não foi concluído que eventual desmatamento estava autorizado.`;answered=true}
-   const meta=`Fonte: IBAMA/PAMGIA · dado: ${fmtDate(d.data_date)} · consulta: ${fmtQuery(d.queried_at)}`;
-   window.rxV48UpdateComplianceSource('sinaflor',{state,label:'SINAFLOR — Supressão',status,reason,meta,answered});
- }
- async function load(card){const el=row(card);if(!el||el.dataset.rx48SinaflorLoaded==='1')return;el.dataset.rx48SinaflorLoaded='1';window.rxV48UpdateComplianceSource?.('sinaflor',{state:'checking',label:'SINAFLOR — Supressão',status:'CONSULTANDO',reason:'Confrontando o perímetro do CAR com os polígonos públicos ASV/UAS do SINAFLOR. BBOX não conta como ocorrência.','meta':'Fonte: IBAMA/PAMGIA',answered:false});const car=card.dataset.car||'';try{const r=await fetch(`/v1/live/conformity/sinaflor/${encodeURIComponent(car)}`),d=await r.json();if(!r.ok)throw new Error(d.detail||`HTTP ${r.status}`);if((!d.ok||d.state==='source_failed')&&retryOnce(card,el))return;apply(card,d)}catch(e){if(retryOnce(card,el))return;apply(card,{ok:false,answered:false,state:'source_failed',queried_at:new Date().toISOString()})}} function retryOnce(card,el){if(!el||el.dataset.rx48SinaflorRetried==='1')return false;el.dataset.rx48SinaflorRetried='1';el.dataset.rx48SinaflorLoaded='';setTimeout(()=>{if(el.isConnected)load(card)},4000);return true} if(!window.__rx48SinaflorRetryWired){window.__rx48SinaflorRetryWired=1;document.addEventListener('click',e=>{const b=e.target.closest?.('[data-rx48-retry="sinaflor"]');if(!b)return;e.preventDefault();const el=b.closest('.rx45-check'),card=b.closest('.rx45-panel-card');if(!el||!card)return;el.dataset.rx48SinaflorLoaded='';el.dataset.rx48SinaflorRetried='1';load(card)})}
+ const SF_ID='sinaflor',SF_LABEL='SINAFLOR — Supressão';
+ // F2: same vocabulary as portal_panel_sources_f2.classify_sinaflor — only an answer the source marked as answered leaves "pending".
+ function view(d){if(!d||typeof d!=='object'||d.ok!==true||d.answered!==true)return null;const first=(d.matches||[])[0]||{},state=d.state;
+   if(state==='checked_clear')return {state,status:'SEM AUTORIZAÇÃO SINAFLOR LOCALIZADA',reason:d.reason};
+   if(state==='checked_spatial_record_unconfirmed'){const num=first.authorization_number?`ASV ${first.authorization_number}: `:'';return {state,status:'REGISTRO ESPACIAL · VÍNCULO NÃO CONFIRMADO',reason:`${num}intersecta espacialmente o CAR, mas a geometria publicada é territorial ampla e não identifica este CAR. O imóvel não foi declarado como autorizado.`}}
+   if(state==='checked_authorization_overlap'){const num=first.authorization_number?`ASV ${first.authorization_number}`:'Autorização';return {state,status:'AUTORIZAÇÃO SINAFLOR LOCALIZADA',reason:`${num} com interseção espacial confirmada${first.overlap_ha!=null?` (${ha(first.overlap_ha)} ha no CAR)`:''}. A validade para eventual desmatamento depende também da data do evento.`}}
+   if(state==='checked_authorization_overlap_unconfirmed'){const num=first.authorization_number?`ASV ${first.authorization_number}: `:'';return {state,status:'AUTORIZAÇÃO LOCALIZADA · VIGÊNCIA NÃO CONFIRMADA',reason:`${num}há vínculo espacial/local, mas vigência/status não confirmam cobertura atual. Não foi concluído que eventual desmatamento estava autorizado.`}}
+   return null}
+ function paint(card,e){const el=row(card),U=window.rxV48UpdateComplianceSource;if(!el||typeof U!=='function')return;if(e.phase==='checking'){U(SF_ID,{state:'checking',label:SF_LABEL,status:'CONSULTANDO',reason:'Confrontando o perímetro do CAR com os polígonos públicos ASV/UAS do SINAFLOR. BBOX não conta como ocorrência.',meta:'Fonte: IBAMA/PAMGIA',answered:false},card);return}const d=e.data||{},v=e.phase==='done'?view(d):null;if(v){U(SF_ID,{state:v.state,label:SF_LABEL,status:v.status,reason:v.reason,meta:`Fonte: IBAMA/PAMGIA · dado: ${fmtDate(d.data_date)} · consulta: ${fmtQuery(d.queried_at)}`,answered:true},card);return}
+   // Not answered: no data date is claimed for a query that did not return.
+   U(SF_ID,{state:'source_failed',label:SF_LABEL,status:'CONSULTA PENDENTE',reason:'A fonte oficial não respondeu agora. Nenhum resultado foi presumido.',meta:`Fonte: IBAMA/PAMGIA${d.queried_at?` · consulta: ${fmtQuery(d.queried_at)}`:''}`,answered:false},card)}
+ const sfPause=ms=>new Promise(res=>setTimeout(res,ms));
+ async function query(car,alive,attempts=2){let last=null;for(let i=0;i<attempts;i++){if(i){await sfPause(4000);if(!alive())return {abandoned:true}}try{const r=await fetch(`/v1/live/conformity/sinaflor/${encodeURIComponent(car)}`),d=await r.json();if(r.ok&&d&&typeof d==='object')last=d;if(r.ok&&view(d))return {done:true,data:d}}catch(e){}}return {done:false,data:last}}
+ // F2: driven by the rx45:panel-rendered event; the per-CAR memory repaints a re-render without a new query.
+ function load(card){const S=window.rxPanelSourcesF2;if(!card||!S||!row(card))return;S.settle(SF_ID,card.dataset.car,query,paint)}
+ if(!window.__rx48SinaflorRetryWired){window.__rx48SinaflorRetryWired=1;document.addEventListener('click',e=>{const b=e.target.closest?.('[data-rx48-retry="sinaflor"]');if(!b)return;e.preventDefault();const card=b.closest('.rx45-panel-card'),S=window.rxPanelSourcesF2;if(!card||!S)return;S.forget(SF_ID,card.dataset.car);S.settle(SF_ID,card.dataset.car,(car,alive)=>query(car,alive,1),paint)})}
  function enhanceCar(car){if(!car)return;const card=q(`.rx45-panel-card[data-car="${CSS.escape(car)}"]`);if(card&&row(card))load(card)}
- function schedule(car){[120,720,2200,9800,10800].forEach(ms=>setTimeout(()=>{if(currentCar()===car)enhanceCar(car)},ms))}
- function install(){if(window.__rx48SinaflorShowWrapped)return;const base=window.showProperty;if(typeof base!=='function'){const n=(window.__rx48SinaflorInstallAttempts||0)+1;window.__rx48SinaflorInstallAttempts=n;if(n<=4)setTimeout(install,140);return}window.__rx48SinaflorShowWrapped=true;const wrapped=function(...args){const out=base.apply(this,args),p=args?.[0]||{},car=String(p.car_code||p?.properties?.cod_imovel||p?.properties?.id_imovel||currentCar()||'').trim().toUpperCase();if(car)schedule(car);return out};window.showProperty=wrapped;try{showProperty=wrapped}catch(e){}setTimeout(()=>enhanceCar(currentCar()),320)}
+ function install(){if(window.__rx48SinaflorEventWired)return;window.__rx48SinaflorEventWired=true;window.rxPanelSourcesF2?.onRendered(enhanceCar)}
  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',install);else install();
 })();
 </script>
 '''
 
+portal_panel_sources_f2.install()  # idempotent; MTE normally injected it already
 if "RX_CONFORMITY_SINAFLOR_V48" not in portal_v8.PORTAL_HTML:
     portal_v8.PORTAL_HTML = portal_v8.PORTAL_HTML.replace("</body>", UI + "<!-- RX_CONFORMITY_SINAFLOR_V48 --></body>")
 

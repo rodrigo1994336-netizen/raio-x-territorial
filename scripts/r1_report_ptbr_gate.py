@@ -132,8 +132,10 @@ def test_client_payload() -> None:
     ident = out["sources"][2]
     assert ident["status"] == "CONSULTADA" and "código do CAR" in ident["description"], ident
     assert [r[0] for r in out["land"]["certifications"]] == ["SIGEF"]
+    # F2: the PAMGIA mirror envelope count never reaches the client as the certification.
+    assert out["land"]["certifications"][0][1] == "CONSULTA PENDENTE", out["land"]["certifications"]
     assert [r[0] for r in out["land"]["matrix"]] == ["CAR"]
-    assert "preparadas para ativação" not in out["land"]["summary"] and "0 parcela" in out["land"]["summary"]
+    assert "preparadas para ativação" not in out["land"]["summary"] and "parcela" not in out["land"]["summary"] and "consulta pendente" in out["land"]["summary"]
     # The saved payload is not mutated.
     assert len(payload["sources"]) == 6 and payload["sources"][4]["status"] == "INDISPONÍVEL"
 

@@ -1,0 +1,13 @@
+{
+  "source": "Ministério do Trabalho e Emprego — Cadastro de Empregadores",
+  "source_page": "https://www.gov.br/trabalho-e-emprego/pt-br/assuntos/inspecao-do-trabalho/areas-de-atuacao/cadastro_de_empregadores.csv/view",
+  "data_date": null,
+  "queried_at": "2026-09-14T11:28:26+00:00",
+  "registry_row_count": null,
+  "ok": false,
+  "answered": false,
+  "state": "source_failed",
+  "match_count": null,
+  "reason": "A fonte oficial do MTE não respondeu de forma utilizável; nenhuma ausência foi presumida.",
+  "detail": "ConnectError:transport_down_simulated"
+}

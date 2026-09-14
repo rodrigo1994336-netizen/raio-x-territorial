@@ -754,7 +754,7 @@ async def search_regression(page, label):
 # /map-panel fixtures in a flow of its own (the real-click flows above stay untouched).
 SIGEF_CAR = "MG-3152006-BB48D05173F540CD9703B23088C3ABF4"
 SIGEF_LABEL = "PROJETO DE ASSENTAMENTO PAULISTA"
-SIGEF_ORIGIN = "SIGEF/INCRA · espelho público IBAMA/PAMGIA"
+SIGEF_ORIGIN = "Acervo Fundiário do INCRA (SIGEF)"
 SIGEF_GEOMETRY = {"type": "Polygon", "coordinates": [[[-45.02, -19.22], [-44.98, -19.22], [-44.98, -19.18], [-45.02, -19.18], [-45.02, -19.22]]]}
 
 REF_JS = """(root)=>{
@@ -866,7 +866,7 @@ async def sigef_reference_flow(browser, width, height, scenarios):
         await page.wait_for_timeout(700)
         pinfo = await page.evaluate(REF_JS, ".rx45-panel-card")
         assert_ref_readable(pinfo, "panel-found")
-        for required in ("Referência INCRA", SIGEF_LABEL, "99,95%", SIGEF_ORIGIN, "não é o nome do CAR", "+1 outra parcela SIGEF cobre metade ou mais"):
+        for required in ("Referência INCRA", SIGEF_LABEL, "99,95%", SIGEF_ORIGIN, "não é o nome do CAR", "+1 outra certificação INCRA cobre metade ou mais"):
             assert required in pinfo["text"], (required, pinfo)
         assert SIGEF_LABEL.replace(" ", "") not in pinfo["title"], pinfo
         assert "OpenStreetMap" in pinfo["all"] and "Fazenda Teste OSM" in pinfo["all"], pinfo

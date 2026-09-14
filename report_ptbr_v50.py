@@ -144,6 +144,9 @@ def _iso_d(m: re.Match) -> str:
 
 
 _TAG = re.compile(r"(<[^>]*>)")
+# F2: a license version is a name, not a quantity: "CC BY-SA 4.0" never becomes "CC BY-SA 4".
+_LICENSE_VERSION = re.compile(r"\bCC[ -]BY(?:[ -](?:SA|NC|ND))*[ -]\d+\.\d+")
+_KEPT = re.compile(r"(\d+)")
 
 
 def _normalize_segment(out: str) -> str:
@@ -159,8 +162,11 @@ def _normalize_segment(out: str) -> str:
     out = _ISO_DT.sub(_iso_dt, out)
     out = _ISO_D.sub(_iso_d, out)
     out = _COMPACT_D.sub(lambda m: _iso_d(m) if 1 <= int(m.group(2)) <= 12 and 1 <= int(m.group(3)) <= 31 else m.group(0), out)
+    kept: list[str] = []
+    out = _LICENSE_VERSION.sub(lambda m: kept.append(m.group(0)) or f"{len(kept) - 1}", out)
     out = _DEC_UNIT.sub(_dec_unit, out)
-    return _BARE_DEC.sub(_bare_dec, out)
+    out = _BARE_DEC.sub(_bare_dec, out)
+    return _KEPT.sub(lambda m: kept[int(m.group(1))], out) if kept else out
 
 
 def _drop_tail(text: str, start: int, replacement: str) -> str:
@@ -190,11 +196,14 @@ def normalize_text(text):
     return "".join(part if part.startswith("<") and part.endswith(">") else _normalize_segment(part) for part in _TAG.split(out))
 
 
-_PENDING_TEXT = "A fonte não respondeu nesta emissão. Isso não é tratado como ausência de ocorrência; a consulta é refeita na próxima emissão."
+_PENDING_TEXT = "Esta consulta não pôde ser confirmada nesta emissão. Isso não é tratado como ausência de ocorrência; a consulta é refeita na próxima emissão."
+# F2: a count taken from the PAMGIA mirror envelope is never the property's certification.
 _LAND_SUMMARY = (
-    "SIGEF público consultado nesta emissão: {n} parcela(s) candidata(s) no entorno do imóvel. "
+    "Certificação SIGEF e SNCI (INCRA): consulta pendente. "
     "Matrícula, ônus e titularidade dependem de certidão do cartório de registro de imóveis e não são inferidos do CAR."
 )
+# A row still built from the PAMGIA mirror means the official base was not asked in this emission: never "não respondeu".
+_MIRROR_CERT_ROW = ["SIGEF", "CONSULTA PENDENTE", "—", "Consulta ao INCRA não realizada nesta emissão; isso não indica ausência de certificação."]
 
 
 def _not_activated(status) -> bool:
@@ -228,6 +237,31 @@ def client_payload(payload: dict) -> dict:
         sources.append(src)
     if "sources" in out:
         out["sources"] = sources
+    # H1: a layer or check that did not answer (or whose base cannot prove absence)
+    # reads as a quiet pending consultation, never as a loud "fonte indisponível".
+    env = out.get("environment")
+    if isinstance(env, dict) and isinstance(env.get("layer_rows"), list):
+        env["layer_rows"] = [
+            [r[0], "CONSULTA PENDENTE", *r[2:]] if isinstance(r, (list, tuple)) and len(r) > 1 and "FONTE INDISPONÍVEL" in str(r[1]).upper() else r
+            for r in env["layer_rows"]
+        ]
+    for item in out.get("compliance") or []:
+        if isinstance(item, dict) and "fonte indisponível" in str(item.get("text") or "").lower():
+            item["text"] = "Consulta pendente."
+            item["badge"] = "CONSULTA PENDENTE"
+            item["level"] = "neutral"
+    enf = out.get("enforcement")
+    if isinstance(enf, dict):
+        icmbio_pending = any(isinstance(i, dict) and i.get("label") == "Embargos ICMBio" and i.get("badge") == "CONSULTA PENDENTE" for i in out.get("compliance") or [])
+        ibama_pending = bool(enf.get("embargo_pending"))
+        if ibama_pending and str(enf.get("embargo_count") or 0) == "0":
+            enf["embargo_count"] = "PENDENTE"
+        if ibama_pending and icmbio_pending:
+            enf["embargo_sources_label"] = "consulta pendente"
+        elif ibama_pending:
+            enf["embargo_sources_label"] = "ICMBio · IBAMA pendente"
+        elif icmbio_pending:
+            enf["embargo_sources_label"] = "IBAMA · ICMBio pendente"
     car = out.get("car")
     if isinstance(car, dict) and isinstance(car.get("fields"), list):
         # An empty field is not shown.
@@ -238,10 +272,16 @@ def client_payload(payload: dict) -> dict:
             rows = land.get(key)
             if isinstance(rows, list):
                 land[key] = [r for r in rows if not (isinstance(r, (list, tuple)) and len(r) > 1 and _not_activated(r[1]))]
+        certs = land.get("certifications")
+        if isinstance(certs, list):
+            land["certifications"] = [
+                list(_MIRROR_CERT_ROW) if isinstance(r, (list, tuple)) and len(r) > 3 and str(r[0]).strip().upper() == "SIGEF" and "espelho" in str(r[3]).lower() else r
+                for r in certs
+            ]
         summary = str(land.get("summary") or "")
-        if "permanecem preparadas para ativação" in summary:
-            m = re.search(r"(\d+) parcela", summary)
-            land["summary"] = _LAND_SUMMARY.format(n=m.group(1) if m else "0")
+        # F2 + H1: a summary built from the PAMGIA mirror (with or without a parcel count) is never the certification.
+        if "permanecem preparadas para ativação" in summary or re.search(r"\d+ parcela\(s\) candidata", summary) or summary.startswith("SIGEF público: consulta pendente"):
+            land["summary"] = _LAND_SUMMARY
     return out
 
 

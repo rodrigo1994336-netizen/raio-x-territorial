@@ -9,6 +9,8 @@ from pyproj import Geod
 from shapely.geometry import shape
 from shapely.ops import unary_union
 
+import source_layer_guard as layer_guard
+
 ANM_QUERY='https://geo.anm.gov.br/arcgis/rest/services/SIGMINE/dados_anm/FeatureServer/0/query'
 GEOD=Geod(ellps='GRS80')
 
@@ -32,8 +34,9 @@ def query_anm_curl_exact(car_geometry:dict[str,Any], bbox:list[float]):
         if p.returncode:
             return {'ok':False,'source':'ANM/SIGMINE','error':'curl','detail':p.stderr.decode('utf-8','ignore')[:300]}
         data=json.loads(p.stdout.decode('utf-8'))
-        if data.get('error'):
-            return {'ok':False,'source':'ANM/SIGMINE','error':'arcgis','detail':str(data.get('error'))[:400]}
+        problem=layer_guard.arcgis_answer_problem(None,data)
+        if problem:
+            return {'ok':False,'source':'ANM/SIGMINE','error':'arcgis','source_state':'pending','detail':f'consulta_pendente:{problem}'}
         fs=data.get('features') or []
         car=shape(car_geometry); intersections=[]; occ=[]
         for f in fs:
@@ -54,7 +57,7 @@ def query_anm_curl_exact(car_geometry:dict[str,Any], bbox:list[float]):
             except Exception:
                 continue
         union=unary_union(intersections) if intersections else None
-        return {
+        out={
             'ok':True,'status':200,'feature_count_bbox':len(fs),'features':fs,
             'source':'ANM/SIGMINE','exact':{
                 'available':True,'occurrence_count':len(intersections),
@@ -63,5 +66,6 @@ def query_anm_curl_exact(car_geometry:dict[str,Any], bbox:list[float]):
             },
             'transport':'curl-retry'
         }
+        return layer_guard.apply_verdict(out,layer_guard.zero_verdict('anm_sigmine',zero=not fs))
     except Exception as e:
         return {'ok':False,'source':'ANM/SIGMINE','error':type(e).__name__,'detail':str(e)[:300]}
