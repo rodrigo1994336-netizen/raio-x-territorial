@@ -9,11 +9,15 @@ imagem (``image_date``) confere com o catálogo de cenas; o satélite, não.
 Regra:
 - o atributo ``satellite``/``sensor`` do WFS nunca é exibido;
 - a data da imagem é exibida sempre que for uma data válida;
-- o satélite só aparece quando o catálogo de cenas Landsat Collection 2
-  (Microsoft Planetary Computer, espelho do USGS) tem cena naquela data e
-  naquela órbita/ponto (ou sobre o centróide) e todas as cenas são do mesmo
-  satélite. Nenhuma cena ou mais de um satélite -> ``not_found`` (omite).
-  Catálogo que não respondeu -> ``pending`` (omite, sem aviso técnico).
+- o satélite só aparece quando TUDO isto vale: o ``path_row`` da feição é
+  órbita/ponto WRS-2 válida (caminho 1–233, linha 1–248); o catálogo de cenas
+  Landsat Collection 2 (Microsoft Planetary Computer, espelho do USGS) tem
+  cena naquela data, com o MESMO caminho/linha, cobrindo o centróide do
+  imóvel; e todas essas cenas são do mesmo satélite. Busca só pelo centróide
+  (sem órbita válida) nunca prova: num dia em que o PRODES usou Sentinel-2 ou
+  CBERS e um Landsat também passou, ela apontaria o satélite errado.
+  Nenhuma cena, órbita diferente ou mais de um satélite -> ``not_found``
+  (omite). Catálogo que não respondeu -> ``pending`` (omite, sem aviso técnico).
 - não se deduz satélite pela data (2002 foi Landsat 7, não Landsat 5).
 """
 from __future__ import annotations
@@ -53,8 +57,9 @@ def image_day(value: Any) -> date | None:
 
 
 def wrs_path_row(value: Any) -> tuple[str, str] | None:
+    """'218/73' -> ('218', '073') only for a valid WRS-2 path (1-233) and row (1-248)."""
     m = _PATH_ROW.match(str(value or ""))
-    if not m:
+    if not m or not (1 <= int(m.group(1)) <= 233 and 1 <= int(m.group(2)) <= 248):
         return None
     return m.group(1).zfill(3), m.group(2).zfill(3)
 
@@ -68,28 +73,34 @@ def search_body(day: date, path_row: tuple[str, str] | None = None, lonlat: tupl
     }
     if path_row:
         body["query"] = {"landsat:wrs_path": {"eq": path_row[0]}, "landsat:wrs_row": {"eq": path_row[1]}}
-    elif lonlat:
+    if lonlat:
         body["intersects"] = {"type": "Point", "coordinates": [float(lonlat[0]), float(lonlat[1])]}
     return body
 
 
-def platform_from_stac(response: dict[str, Any] | None, day: date) -> dict[str, Any]:
-    """Pure: decide the satellite from a STAC search response for one image date."""
+def _scene_orbit(props: dict[str, Any]) -> tuple[str, str] | None:
+    return wrs_path_row(f"{props.get('landsat:wrs_path') or ''}/{props.get('landsat:wrs_row') or ''}")
+
+
+def platform_from_stac(response: dict[str, Any] | None, day: date, path_row: tuple[str, str] | None) -> dict[str, Any]:
+    """Pure: decide the satellite from a STAC search response for one image date and one WRS-2 orbit."""
     if not isinstance(response, dict) or not isinstance(response.get("features"), list):
         return {"status": "pending", "reason": "catalogo_resposta_invalida", "image_date": day.isoformat()}
+    if not path_row:
+        return {"status": "not_found", "reason": "sem_orbita_wrs2", "image_date": day.isoformat()}
     platforms: dict[str, set[str]] = {}
     scene_ids = []
     for feature in response["features"]:
         props = feature.get("properties") or {}
         when = image_day(props.get("datetime"))
         platform = str(props.get("platform") or "").strip().lower()
-        if when != day or not re.fullmatch(r"landsat-\d", platform):
+        if when != day or not re.fullmatch(r"landsat-\d", platform) or _scene_orbit(props) != tuple(path_row):
             continue
         instruments = {str(x).strip().lower() for x in (props.get("instruments") or [])}
         platforms.setdefault(platform, set()).update(instruments)
         scene_ids.append(str(feature.get("id") or ""))
     if not platforms:
-        return {"status": "not_found", "reason": "nenhuma_cena_landsat_na_data", "image_date": day.isoformat()}
+        return {"status": "not_found", "reason": "nenhuma_cena_landsat_na_data_e_orbita", "image_date": day.isoformat()}
     if len(platforms) > 1:
         return {"status": "not_found", "reason": "mais_de_um_satelite_na_data", "image_date": day.isoformat(),
                 "platforms": sorted(platforms)}
@@ -101,6 +112,7 @@ def platform_from_stac(response: dict[str, Any] | None, day: date) -> dict[str, 
         "platform": f"Landsat {platform.split('-')[1]}",
         "instrument": "/".join(optical) or None,
         "scene_ids": sorted(set(x for x in scene_ids if x)),
+        "path_row": "/".join(path_row),
         "source": CATALOG_NAME,
     }
 
@@ -122,20 +134,26 @@ def _curl_post_json(url: str, body: dict[str, Any]) -> dict[str, Any] | None:
 
 def query_landsat_platform(image_date: Any, path_row: Any = None, lonlat: tuple[float, float] | None = None,
                            post: Callable[[str, dict[str, Any]], dict[str, Any] | None] = _curl_post_json) -> dict[str, Any]:
-    """One catalog search for one PRODES image date. ``post`` is injectable for offline tests."""
+    """One catalog search for one PRODES image date. ``post`` is injectable for offline tests.
+
+    No valid WRS-2 orbit or no property centroid -> ``not_found`` without calling the catalog:
+    a centroid-only search cannot prove which satellite the PRODES image came from.
+    """
     day = image_day(image_date)
     if day is None:
         return {"status": "not_found", "reason": "data_da_imagem_invalida", "image_date": None}
     pr = wrs_path_row(path_row)
-    if not pr and not lonlat:
-        return {"status": "not_found", "reason": "sem_orbita_ponto_nem_centroide", "image_date": day.isoformat()}
+    if not pr:
+        return {"status": "not_found", "reason": "sem_orbita_wrs2", "image_date": day.isoformat()}
+    if not lonlat:
+        return {"status": "not_found", "reason": "sem_centroide_do_imovel", "image_date": day.isoformat()}
     try:
         response = post(STAC_SEARCH, search_body(day, pr, lonlat))
     except Exception as exc:
         return {"status": "pending", "reason": f"catalogo:{type(exc).__name__}", "image_date": day.isoformat()}
     if response is None:
         return {"status": "pending", "reason": "catalogo_nao_respondeu", "image_date": day.isoformat()}
-    return platform_from_stac(response, day)
+    return platform_from_stac(response, day, pr)
 
 
 def _src(occurrence: dict[str, Any]) -> dict[str, Any]:
@@ -159,14 +177,17 @@ def lookup_key(occurrence: dict[str, Any]) -> str | None:
 def query_platforms_for_occurrences(occurrences: Iterable[dict[str, Any]], lonlat: tuple[float, float] | None = None,
                                     post: Callable[[str, dict[str, Any]], dict[str, Any] | None] = _curl_post_json,
                                     max_workers: int = 4) -> dict[str, dict[str, Any]]:
-    """Unique (date, path/row) searches in parallel; returns lookups for ``prodes_image_payload``."""
+    """Unique (date, path/row) searches in parallel; returns lookups for ``prodes_image_payload``.
+
+    ``lonlat`` is the property centroid; without it nothing is searched and nothing is shown.
+    """
     keys = sorted({k for k in (lookup_key(o) for o in occurrences) if k})
     if not keys:
         return {}
 
     def one(key: str):
         day, path_row = key.split("|", 1)
-        return key, query_landsat_platform(day, path_row or None, None if path_row else lonlat, post)
+        return key, query_landsat_platform(day, path_row or None, lonlat, post)
 
     with ThreadPoolExecutor(max_workers=max(1, min(max_workers, len(keys)))) as pool:
         return dict(pool.map(one, keys))
@@ -183,7 +204,9 @@ def prodes_image_text(occurrence: dict[str, Any], lookup: dict[str, Any] | None 
     when = image_date_ptbr(raw)
     if not when:
         return ""
-    if lookup and lookup.get("status") == "found" and lookup.get("image_date") == image_day(raw).isoformat():
+    orbit = wrs_path_row(_src(occurrence).get("path_row"))
+    if (lookup and lookup.get("status") == "found" and lookup.get("image_date") == image_day(raw).isoformat()
+            and orbit and lookup.get("path_row") == "/".join(orbit)):
         sat = lookup.get("platform")
         inst = lookup.get("instrument")
         return f"{when} · {sat}" + (f" ({inst})" if inst else "")
@@ -197,7 +220,8 @@ def prodes_image_payload(occurrences: Iterable[dict[str, Any]], lookups: dict[st
     for occ in occurrences:
         key = lookup_key(occ)
         lookup = lookups.get(key) if key else None
-        status = (lookup or {}).get("status") or ("pending" if key else "not_found")
+        # no valid date or no WRS-2 orbit is a limit of the data, not a pending query
+        status = (lookup or {}).get("status") or ("pending" if key and not key.endswith("|") else "not_found")
         item = {
             "year": _src(occ).get("year"),
             "image_date": key.split("|", 1)[0] if key else None,

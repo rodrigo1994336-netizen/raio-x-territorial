@@ -7,7 +7,10 @@ alerta em 34 de 35 anos. A climatologia do NASA POWER também era impressa com
 rótulo errado: T2M_MAX/T2M_MIN são o recorde do período 2001–2020, não a média
 das máximas, e a chuva vem em mm/dia.
 
-Regra declarada (sem limite fixo de mm, sem dias secos como gatilho):
+Regra declarada (sem limite fixo de mm, sem dias secos como gatilho). Todo
+limite é aplicado sobre o MESMO número que se imprime (percentual inteiro,
+arredondado meio para cima; mm com uma casa), para o texto nunca contradizer o
+estado.
 
 1. Percentil na série longa (preferido, quando ``history`` é passado).
    Soma da chuva nos mesmos dias do calendário em cada ano da série diária
@@ -15,19 +18,26 @@ Regra declarada (sem limite fixo de mm, sem dias secos como gatilho):
    - percentil <= 20 e média da época >= 1 mm/dia -> "abaixo do normal" (alerta);
    - percentil <= 20 e média da época <  1 mm/dia -> "época de pouca chuva" (sem alerta);
    - percentil >= 80 e chuva - mediana >= 10 mm  -> "acima do normal";
-   - resto -> "dentro do normal".
-2. Razão contra a climatologia mensal 2001–2020 (sem chamada extra), só para
-   janelas de 28 a 120 dias. Esperado = soma, dia a dia, do mm/dia do mês.
-   - chuva < 40 % do esperado e esperado >= 1,5 mm/dia -> "abaixo do normal" (alerta);
-   - chuva < 40 % do esperado e esperado <  1,5 mm/dia -> "época de pouca chuva";
-   - chuva > 150 % do esperado e excesso >= 10 mm      -> "acima do normal";
-   - resto -> "dentro do normal".
-   Limites conferidos contra a série real de Curvelo (gate
-   ``scripts/f2_clima_landsat_gate.py``): nenhum "abaixo" pela razão cai acima
-   do percentil 30 e nenhum "acima" abaixo do percentil 70.
+   - resto -> "dentro do normal" (é o que o percentil prova).
+2. Razão contra a MÉDIA da climatologia mensal 2001–2020 (sem chamada extra),
+   só para janelas de 28 a 120 dias. Média = soma, dia a dia, do mm/dia do mês.
+   A razão não sabe o quanto a chuva varia de ano para ano (em Curvelo, 120 dias
+   a partir de 13/10 com 83 % da média ficaram entre os 10 % mais secos), então ela NUNCA diz
+   "dentro do normal": entre os extremos só descreve a posição contra a média.
+   - chuva < 40 % da média e média >= 1,5 mm/dia -> "abaixo do normal" (alerta);
+   - chuva < 40 % da média e média <  1,5 mm/dia -> "época de pouca chuva";
+   - chuva > 150 % da média e excesso >= 10 mm   -> "acima do normal";
+   - 40 % a 89 %   -> "abaixo da média da época" (sem alerta);
+   - 90 % a 110 %  -> "perto da média da época";
+   - acima de 110 % (ou acima de 150 % com excesso < 10 mm) -> "acima da média da época".
+   Conferido contra a série real de Curvelo, janelas de 30/60/90/120 dias
+   (gate ``scripts/f2_clima_landsat_gate.py``): nenhum "abaixo do normal" acima
+   do percentil 30, nenhum "acima do normal" abaixo do 70 e nenhum "perto da
+   média" entre os 10 % mais secos ou os 10 % mais chuvosos.
 3. Janela com menos de 28 dias -> ``not_found`` (não se compara uma semana).
-   Chuva recente ou referência que não respondeu -> ``pending``; nunca estado
-   inventado.
+   Janela acima de 120 dias sem a série longa -> ``not_found`` (limite do
+   método, não falha de fonte). Chuva recente ou referência que não respondeu
+   -> ``pending``; nunca estado inventado.
 """
 from __future__ import annotations
 
@@ -48,25 +58,35 @@ MONTH_DAYS = (31, 28.25, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
 
 MIN_WINDOW_DAYS = 28
 MIN_REFERENCE_YEARS = 20
-PCT_LOW = 20.0
-PCT_HIGH = 80.0
+PCT_LOW = 20  # printed integer percentile
+PCT_HIGH = 80
 PCT_DRY_SEASON_MM_DAY = 1.0
 RATIO_MAX_WINDOW_DAYS = 120
-RATIO_LOW = 0.40
-RATIO_HIGH = 1.50
+RATIO_LOW_PCT = 40  # printed integer % of the climatological mean
+RATIO_NEAR_LOW_PCT = 90
+RATIO_NEAR_HIGH_PCT = 110
+RATIO_HIGH_PCT = 150
 RATIO_DRY_SEASON_MM_DAY = 1.5
-MIN_EXCESS_MM = 10.0
+MIN_EXCESS_MM = 10.0  # on the printed (one decimal) mm values
 
 STATE_LABELS = {
     "below_normal": "abaixo do normal",
     "normal": "dentro do normal",
     "above_normal": "acima do normal",
     "dry_season": "época de pouca chuva",
+    # ratio method only: position against the climatological mean, never a claim of normality
+    "below_average": "abaixo da média da época",
+    "near_average": "perto da média da época",
+    "above_average": "acima da média da época",
 }
 NOTE = (
-    "Compara a chuva do período com o normal dos mesmos dias do calendário na grade NASA POWER "
-    "do centróide do imóvel. Não é índice oficial de seca (SPI/SPEI) nem medição da fazenda."
+    "Compara a chuva do período com os mesmos dias do calendário na grade NASA POWER do centróide do imóvel. "
+    "Não é índice oficial de seca (SPI/SPEI) nem medição da fazenda."
 )
+PDF_LABELS = {
+    "percentile_series": "Chuva recente comparada ao normal",
+    "ratio_climatology": "Chuva recente comparada à média da época",
+}
 
 # Measured 13/09/2026 from Brazil: 1.035-1.531 s for 1991-2025 PRECTOTCORR (6 calls, 202 kB).
 HISTORY_MAX_TIME_S = 12
@@ -88,6 +108,16 @@ def fmt_num(value: Any, digits: int = 1) -> str:
         return ""
     text = f"{number:,.{digits}f}".replace(",", "_").replace(".", ",").replace("_", ".")
     return text[1:] if text.startswith("-") and not any(ch in "123456789" for ch in text) else text
+
+
+def half_up(value: float) -> int:
+    """Integer rounding used both to print and to classify (never Python's half-even)."""
+    return int(Decimal(repr(float(value))).quantize(Decimal("1"), ROUND_HALF_UP))
+
+
+def mm1(value: float) -> float:
+    """mm with one decimal, half-up: the value stored, printed and compared."""
+    return float(Decimal(repr(float(value))).quantize(Decimal("0.1"), ROUND_HALF_UP))
 
 
 def _fmt_date(yyyymmdd: str | None) -> str:
@@ -349,7 +379,7 @@ def build_rain_vs_normal(recent: dict[str, Any] | None, climatology: dict[str, A
     pairs = _recent_days(recent)
     if pairs:
         days = [d for d, _ in pairs]
-        observed = round(sum(v for _, v in pairs), 2)
+        observed = sum(v for _, v in pairs)
     else:
         # summarised recent climate (no daily list): accept only a contiguous, fully valid period
         start, end = _parse_day(recent.get("period_start")), _parse_day(recent.get("period_end"))
@@ -358,11 +388,11 @@ def build_rain_vs_normal(recent: dict[str, Any] | None, climatology: dict[str, A
         if not span or total is None or int(recent.get("available_days") or 0) != span:
             return _base(recent, "pending", "chuva_recente_sem_serie_diaria")
         days = [start + timedelta(k) for k in range(span)]
-        observed = round(total, 2)
+        observed = total
     n = len(days)
     if n < MIN_WINDOW_DAYS:
         out = _base(recent, "not_found", "janela_curta")
-        out.update(rain_sum_mm=observed, days=n)
+        out.update(rain_sum_mm=mm1(observed), days=n)
         return out
 
     out: dict[str, Any] | None = None
@@ -372,18 +402,18 @@ def build_rain_vs_normal(recent: dict[str, Any] | None, climatology: dict[str, A
             values = sorted(sums.values())
             below = sum(1 for s in values if s < observed)
             ties = sum(1 for s in values if s == observed)
-            pct = round((below + 0.5 * ties) / len(values) * 100, 1)
+            pct = half_up((below + 0.5 * ties) / len(values) * 100)
             median = values[len(values) // 2] if len(values) % 2 else (values[len(values) // 2 - 1] + values[len(values) // 2]) / 2
             mean = sum(values) / len(values)
             if pct <= PCT_LOW:
                 code = "below_normal" if mean / n >= PCT_DRY_SEASON_MM_DAY else "dry_season"
-            elif pct >= PCT_HIGH and observed - median >= MIN_EXCESS_MM:
+            elif pct >= PCT_HIGH and mm1(observed) - mm1(median) >= MIN_EXCESS_MM:
                 code = "above_normal"
             else:
                 code = "normal"
             years = sorted(sums)
             out = _base(recent, "found", None)
-            out.update(method="percentile_series", normal_mm=round(median, 1), percentile=pct,
+            out.update(method="percentile_series", normal_mm=mm1(median), percentile=pct,
                        reference=f"{years[0]}–{years[-1]}", reference_years=len(years), state_code=code)
     if out is None:
         expected = _expected_from_climatology(days, climatology) if climatology.get("ok", True) else None
@@ -391,21 +421,28 @@ def build_rain_vs_normal(recent: dict[str, Any] | None, climatology: dict[str, A
             return _base(recent, "pending", "normal_da_epoca_nao_respondeu")
         if n > RATIO_MAX_WINDOW_DAYS:
             res = _base(recent, "not_found", "janela_longa_sem_serie_historica")
-            res.update(rain_sum_mm=observed, days=n)
+            res.update(rain_sum_mm=mm1(observed), days=n)
             return res
-        ratio = observed / expected if expected > 0 else math.inf
-        if ratio < RATIO_LOW:
+        shown_rain, shown_mean = mm1(observed), mm1(expected)
+        ratio_pct = half_up(shown_rain / shown_mean * 100) if shown_mean > 0 else None
+        excess = shown_rain - shown_mean >= MIN_EXCESS_MM
+        if ratio_pct is None:
+            code = "above_normal" if excess else ("above_average" if shown_rain > 0 else "near_average")
+        elif ratio_pct < RATIO_LOW_PCT:
             code = "below_normal" if expected / n >= RATIO_DRY_SEASON_MM_DAY else "dry_season"
-        elif ratio > RATIO_HIGH and observed - expected >= MIN_EXCESS_MM:
+        elif ratio_pct > RATIO_HIGH_PCT and excess:
             code = "above_normal"
+        elif ratio_pct < RATIO_NEAR_LOW_PCT:
+            code = "below_average"
+        elif ratio_pct > RATIO_NEAR_HIGH_PCT:
+            code = "above_average"
         else:
-            code = "normal"
+            code = "near_average"
         out = _base(recent, "found", None)
-        out.update(method="ratio_climatology", normal_mm=round(expected, 1),
-                   ratio_pct=round(ratio * 100) if math.isfinite(ratio) else None,
+        out.update(method="ratio_climatology", normal_mm=shown_mean, ratio_pct=ratio_pct,
                    reference=climatology.get("period"), state_code=code)
 
-    out.update(rain_sum_mm=observed, days=n, state=STATE_LABELS[out["state_code"]], alert=out["state_code"] == "below_normal")
+    out.update(rain_sum_mm=mm1(observed), days=n, state=STATE_LABELS[out["state_code"]], alert=out["state_code"] == "below_normal")
     out["summary"] = rain_vs_normal_summary(out)
     return out
 
@@ -417,16 +454,15 @@ def rain_vs_normal_summary(item: dict[str, Any]) -> str:
     period = f" ({start} a {end})" if start and end else ""
     head = f"{fmt_num(item.get('rain_sum_mm'), 1)} mm em {item.get('days')} dias{period}."
     if item.get("method") == "percentile_series":
-        pct = float(item.get("percentile") or 0)
-        compare = (f"choveu mais que em {fmt_num(pct, 0)}% dos anos" if pct >= 50
-                   else f"choveu menos que em {fmt_num(100 - pct, 0)}% dos anos")
+        pct = int(item.get("percentile") or 0)
+        compare = f"choveu mais que em {pct}% dos anos" if pct >= 50 else f"choveu menos que em {100 - pct}% dos anos"
         body = (f" Nos mesmos dias de {item.get('reference')}, a chuva mediana é {fmt_num(item.get('normal_mm'), 1)} mm; "
                 f"{compare}.")
     else:
         ratio = item.get("ratio_pct")
         ref = f" {item.get('reference')}" if item.get("reference") else ""
-        body = (f" O normal desses dias na climatologia NASA POWER{ref} é "
-                f"{fmt_num(item.get('normal_mm'), 1)} mm" + (f" ({fmt_num(ratio, 0)}% do normal)." if ratio is not None else "."))
+        body = (f" A média desses dias na climatologia NASA POWER{ref} é "
+                f"{fmt_num(item.get('normal_mm'), 1)} mm" + (f"; choveu {int(ratio)}% dessa média." if ratio is not None else "."))
     tail = " É uma época normalmente de pouca chuva na região; pouca chuva agora é o esperado." if item.get("state_code") == "dry_season" else ""
     return head + body + tail
 
@@ -436,4 +472,5 @@ def rain_vs_normal_pdf_row(item: dict[str, Any]) -> list[str] | None:
     if item.get("status") != "found":
         return None
     label = str(item.get("state") or "")
-    return ["Chuva recente comparada ao normal", f"{label[:1].upper()}{label[1:]} — {item.get('summary')}"]
+    title = PDF_LABELS.get(str(item.get("method")), PDF_LABELS["ratio_climatology"])
+    return [title, f"{label[:1].upper()}{label[1:]} — {item.get('summary')}"]

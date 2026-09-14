@@ -1,7 +1,7 @@
 {
  "source": "https://planetarycomputer.microsoft.com/api/stac/v1/search",
- "recorded": "2026-09-13",
- "request": "search_body(date, path/row) do módulo",
+ "recorded": "2026-09-14",
+ "request": "search_body(data, órbita WRS-2, centróide do imóvel) do módulo",
  "responses": {
   "2002-07-02": {
    "type": "FeatureCollection",
@@ -19,17 +19,17 @@
    ],
    "features": [
     {
-     "collection": "landsat-c2-l2",
      "id": "LE07_L2SP_218073_20020702_02_T1",
      "properties": {
+      "landsat:wrs_row": "073",
+      "platform": "landsat-7",
       "landsat:wrs_path": "218",
+      "datetime": "2002-07-02T12:45:25.096857Z",
       "instruments": [
        "etm+"
-      ],
-      "datetime": "2002-07-02T12:45:25.096857Z",
-      "platform": "landsat-7",
-      "landsat:wrs_row": "073"
-     }
+      ]
+     },
+     "collection": "landsat-c2-l2"
     }
    ],
    "numberReturned": 1
@@ -51,16 +51,16 @@
    "features": [
     {
      "properties": {
+      "landsat:wrs_path": "218",
       "platform": "landsat-5",
       "datetime": "2004-07-31T12:39:38.931063Z",
-      "landsat:wrs_path": "218",
       "landsat:wrs_row": "073",
       "instruments": [
        "tm"
       ]
      },
-     "collection": "landsat-c2-l2",
-     "id": "LT05_L2SP_218073_20040731_02_T1"
+     "id": "LT05_L2SP_218073_20040731_02_T1",
+     "collection": "landsat-c2-l2"
     }
    ],
    "numberReturned": 1
@@ -82,13 +82,13 @@
    "features": [
     {
      "properties": {
+      "landsat:wrs_row": "073",
       "landsat:wrs_path": "218",
+      "datetime": "2006-07-21T12:50:05.274019Z",
+      "platform": "landsat-5",
       "instruments": [
        "tm"
-      ],
-      "datetime": "2006-07-21T12:50:05.274019Z",
-      "landsat:wrs_row": "073",
-      "platform": "landsat-5"
+      ]
      },
      "id": "LT05_L2SP_218073_20060721_02_T1",
      "collection": "landsat-c2-l2"
@@ -113,13 +113,13 @@
    "features": [
     {
      "properties": {
-      "landsat:wrs_row": "073",
       "platform": "landsat-5",
       "datetime": "2010-08-01T12:47:23.716050Z",
-      "landsat:wrs_path": "218",
+      "landsat:wrs_row": "073",
       "instruments": [
        "tm"
-      ]
+      ],
+      "landsat:wrs_path": "218"
      },
      "id": "LT05_L2SP_218073_20100801_02_T1",
      "collection": "landsat-c2-l2"
@@ -144,17 +144,17 @@
    "features": [
     {
      "properties": {
+      "landsat:wrs_path": "218",
+      "platform": "landsat-8",
+      "datetime": "2014-08-12T12:57:02.086624Z",
       "instruments": [
        "oli",
        "tirs"
       ],
-      "platform": "landsat-8",
-      "landsat:wrs_path": "218",
-      "landsat:wrs_row": "073",
-      "datetime": "2014-08-12T12:57:02.086624Z"
+      "landsat:wrs_row": "073"
      },
-     "collection": "landsat-c2-l2",
-     "id": "LC08_L2SP_218073_20140812_02_T1"
+     "id": "LC08_L2SP_218073_20140812_02_T1",
+     "collection": "landsat-c2-l2"
     }
    ],
    "numberReturned": 1
@@ -175,18 +175,18 @@
    ],
    "features": [
     {
-     "collection": "landsat-c2-l2",
+     "id": "LC08_L2SP_218073_20200913_02_T1",
      "properties": {
-      "datetime": "2020-09-13T12:57:13.092052Z",
       "landsat:wrs_path": "218",
-      "platform": "landsat-8",
+      "datetime": "2020-09-13T12:57:13.092052Z",
       "landsat:wrs_row": "073",
       "instruments": [
        "oli",
        "tirs"
-      ]
+      ],
+      "platform": "landsat-8"
      },
-     "id": "LC08_L2SP_218073_20200913_02_T1"
+     "collection": "landsat-c2-l2"
     }
    ],
    "numberReturned": 1
@@ -209,14 +209,14 @@
     {
      "collection": "landsat-c2-l2",
      "properties": {
+      "platform": "landsat-8",
       "datetime": "2021-09-16T12:57:16.163228Z",
       "landsat:wrs_path": "218",
+      "landsat:wrs_row": "073",
       "instruments": [
        "oli",
        "tirs"
-      ],
-      "platform": "landsat-8",
-      "landsat:wrs_row": "073"
+      ]
      },
      "id": "LC08_L2SP_218073_20210916_02_T1"
     }
