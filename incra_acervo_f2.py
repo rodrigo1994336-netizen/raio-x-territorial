@@ -21,6 +21,9 @@ Rules (measured live on 13/09/2026, see tests/fixtures/f2_incra_sigef_snci/READM
   the layer is pending.
 - Absence ("not_found") needs every layer of the family to have answered completely.
   Presence ("found") needs only the layer that returned the parcel.
+- Only thin border slivers are ignored (small for the CAR, small for the parcel, < 5 m wide):
+  small certified parcels inside a large CAR are presence, never "Não há".
+- A CAR inside a much larger certified perimeter never gets the "CERTIFICADO" seal.
 - Personal data never leaves the parser: rt, art, cod_profissional_credenciado, num_processo,
   registro_matricula and registro_data are not read (white list of fields).
 
@@ -28,6 +31,7 @@ Public API:
     enabled()                               RX_INCRA_ACERVO_ENABLED (default on)
     query_incra_acervo(geometry, uf, ...)   consultation, explicit states per family
     query_for_result(result, ...)           same, taking the report ``result['car']``
+    acervo_for_report(result, ...)          the report's answer: reuses a complete one, asks otherwise (never raises)
     land_payload(acervo)                    fields for the client, pt-BR, found/not_found/pending
     apply_to_report_payload(payload, acervo) rewrites every SIGEF/SNCI line of the report payload
     identity_candidates(geometry, bbox, uf) C2b-compatible reference candidates for the card
@@ -78,8 +82,17 @@ HARD_TIMEOUT_S = 10
 RETRIES = 1
 MAX_BODY_BYTES = 30_000_000
 
-MIN_SHARE = 0.01            # below 1% of the CAR: a neighbour's border, not shown
+# A neighbour's border sliver is ignored only when it is small for the CAR AND small for the parcel AND thin.
+# A parcel lying inside a large CAR (small for the CAR, whole for itself) or a compact overlap is never dropped:
+# otherwise a large property with many small certified parcels would read "Não há certificação".
+# Measured on the 10 recorded border intersections (tests/fixtures/f2_incra_sigef_snci): mean width <= 0,90 m,
+# <= 0,06% of the CAR and <= 0,04% of the parcel; the real parcels are 236-646 m wide.
+MIN_SHARE = 0.01            # border candidate: below 1% of the CAR ...
+BORDER_PARCEL_SHARE = 0.5   # ... and below half of the parcel ...
+SLIVER_WIDTH_M = 5.0        # ... and mean width (2 x area / perimeter) below 5 m
 COVERS_SHARE = 0.90         # at least 90% of the CAR: "cobre o imóvel"
+WITHIN_PARCEL_SHARE = 0.5   # the CAR occupies less than half of the certified perimeter: never the "CERTIFICADO" seal
+WITHIN_STATUS = "EM PERÍMETRO CERTIFICADO"
 UA = "Raio-X-Territorial/f2-incra-acervo"
 
 BRT = timezone(timedelta(hours=-3))
@@ -345,19 +358,47 @@ def _car_shape(car_geometry):
     return geom
 
 
+def _polygonal(geom):
+    """Only the areal part of an intersection (lines and points of a touching border have no area)."""
+    from shapely.geometry import MultiPolygon, Polygon
+
+    if geom is None or geom.is_empty:
+        return Polygon()
+    if geom.geom_type in ("Polygon", "MultiPolygon"):
+        return geom
+    polys = []
+    for part in getattr(geom, "geoms", ()):
+        part = _polygonal(part)
+        if not part.is_empty:
+            polys.extend(part.geoms if part.geom_type == "MultiPolygon" else [part])
+    return MultiPolygon(polys) if polys else Polygon()
+
+
+def is_border_sliver(car_share: float, parcel_share: float, mean_width_m: float) -> bool:
+    """A neighbour's border: small for the CAR, small for the parcel and thin. Anything else is an overlap."""
+    return car_share < MIN_SHARE and parcel_share < BORDER_PARCEL_SHARE and mean_width_m < SLIVER_WIDTH_M
+
+
 def measure_features(car, features, family: str, layer: str, geod=None) -> dict[str, Any]:
-    """Real intersection with the CAR (geodesic GRS80). Rows below 1% of the CAR are borders."""
+    """Real intersection with the CAR (geodesic GRS80). Only thin border slivers are dropped (is_border_sliver)."""
     geod = geod or _geod()
     car_ha = area_ha(car, geod)
-    rows, failed = [], 0
+    rows, failed, borders = [], 0, 0
     for props, geom in features:
         if geom is None:
             continue
         try:
             if not car.intersects(geom):
                 continue
-            inter = car.intersection(geom)
-            inter_ha = area_ha(inter, geod)
+            inter = _polygonal(car.intersection(geom))
+            if inter.is_empty:
+                continue  # touching along a line or a point: no area in common
+            area_m2, perimeter_m = geod.geometry_area_perimeter(inter)
+            area_m2 = abs(area_m2)
+            if area_m2 <= 0:
+                continue
+            inter_ha = area_m2 / 10000.0
+            mean_width_m = 2.0 * area_m2 / perimeter_m if perimeter_m > 0 else 0.0
             parcel_ha = area_ha(geom, geod)
             if car_ha <= 0:
                 raise ValueError("car_without_area")
@@ -369,16 +410,18 @@ def measure_features(car, features, family: str, layer: str, geod=None) -> dict[
         except Exception:
             failed += 1
             continue
-        share = floor_share(car_ratio)
-        if share < MIN_SHARE:
+        share, parcel_share = floor_share(car_ratio), floor_share(parcel_ratio)
+        if is_border_sliver(car_ratio, parcel_ratio, mean_width_m):
+            borders += 1
             continue
         rows.append({
             "family": family, "layer": layer, "props": props, "geometry": geom,
-            "car_share": share, "parcel_share": floor_share(parcel_ratio),
+            "car_share": share, "parcel_share": parcel_share,
             "intersection_ha": round(inter_ha, 4), "parcel_area_ha": round(parcel_ha, 4),
+            "mean_width_m": round(mean_width_m, 2),
         })
     rows.sort(key=lambda r: (r["car_share"], r["parcel_share"]), reverse=True)
-    return {"rows": rows, "failed": failed, "car_area_ha": round(car_ha, 4)}
+    return {"rows": rows, "failed": failed, "borders": borders, "car_area_ha": round(car_ha, 4)}
 
 
 def _union_share(car, rows, geod=None) -> float:
@@ -454,6 +497,7 @@ def query_incra_acervo(car_geometry: dict[str, Any] | None, uf: str | None, *, f
             else:
                 measured = measure_features(car, answer["features"], family, key, geod)
                 info.update(count_in_box=int(answer.get("count") or 0), rows=len(measured["rows"]),
+                            border_slivers=measured["borders"],
                             unmeasurable=int(answer.get("unmeasurable") or 0) + measured["failed"],
                             split=bool(answer.get("split")))
                 if info["unmeasurable"]:
@@ -469,6 +513,10 @@ def query_incra_acervo(car_geometry: dict[str, Any] | None, uf: str | None, *, f
             state = "pending"
         out[family] = {"state": state, "complete": complete, "rows": rows, "layers": layers,
                        "union_share": _union_share(car, rows, geod) if rows else (0.0 if state == "not_found" else None)}
+        if not complete:
+            # Asked, not concluded: never read as "not asked" (pending_reason).
+            out[family]["detail"] = "layers_incomplete:" + ",".join(
+                f"{k}:{v.get('detail') or 'unmeasurable'}" for k, v in layers.items() if not v.get("answered") or v.get("unmeasurable"))[:200]
     out["ok"] = any(out[f]["state"] != "pending" for f in FAMILIES)
     return out
 
@@ -479,6 +527,33 @@ def query_for_result(result: dict[str, Any], **kwargs) -> dict[str, Any]:
     props = car.get("properties") or {}
     uf = props.get("uf") or str(props.get("cod_imovel") or "")[:2]
     return query_incra_acervo(car.get("geometry"), uf, **kwargs)
+
+
+def is_complete(acervo: dict[str, Any] | None) -> bool:
+    """Both families answered by every layer (found or not_found). Only such an answer may be reused."""
+    if not isinstance(acervo, dict) or not acervo.get("enabled", True) or acervo.get("cancelled"):
+        return False
+    for family in FAMILIES:
+        data = acervo.get(family)
+        if not isinstance(data, dict) or data.get("state") not in ("found", "not_found") or data.get("complete") is False:
+            return False
+    return True
+
+
+def acervo_for_report(result: dict[str, Any], **kwargs) -> dict[str, Any]:
+    """The report's INCRA answer: a complete previous answer is reused; anything else is asked now.
+
+    Never raises: an unexpected failure is a consultation that did not finish (pending), never an absence.
+    """
+    previous = (result or {}).get("incra_acervo")
+    if is_complete(previous):
+        return previous
+    try:
+        return query_for_result(result, **kwargs)
+    except Exception as exc:  # trying is not answering
+        detail = f"exception:{type(exc).__name__}"
+        return {"source": SOURCE_LABEL, "enabled": enabled(kwargs.get("env")), "ok": False, "detail": detail,
+                "sigef": _pending_family(detail), "snci": _pending_family(detail)}
 
 
 # ---------------------------------------------------------------------------------------------
@@ -498,6 +573,14 @@ def pct_floor_text(share: float | None) -> str:
     if basis % 100 == 0:
         return f"{basis // 100}%"
     return _num_br(basis / 100, 2) + "%"
+
+
+def pct_text(share: float | None) -> str:
+    """pct_floor_text, but a real overlap below 0,01% never reads as '0%'."""
+    text = pct_floor_text(share)
+    if share is not None and float(share) > 0 and text == "0%":
+        return "menos de 0,01%"
+    return text
 
 
 def _date_br(value: str | None) -> str:
@@ -532,7 +615,7 @@ def _item_view(row: dict[str, Any]) -> dict[str, Any]:
             "family": "snci", "layer": row["layer"], "certification": props.get("num_certificacao") or None,
             "property_code": props.get("cod_imovel_rural") or None, "date": _date_br(props.get("data_certificacao")) or None,
             "area_ha": area, "area_text": f"{_num_br(area)} ha", "car_share": row["car_share"],
-            "car_pct_text": pct_floor_text(row["car_share"]), "parcel_share": row["parcel_share"],
+            "car_pct_text": pct_text(row["car_share"]), "parcel_share": row["parcel_share"],
         }
     status = str(props.get("status") or "").strip().upper()
     return {
@@ -541,8 +624,27 @@ def _item_view(row: dict[str, Any]) -> dict[str, Any]:
         "status_text": _SIGEF_STATUS.get(status, status.lower()) or None,
         "date": _date_br(props.get("data_aprovacao")) or None, "area_ha": row["parcel_area_ha"],
         "area_text": f"{_num_br(row['parcel_area_ha'])} ha", "car_share": row["car_share"],
-        "car_pct_text": pct_floor_text(row["car_share"]), "parcel_share": row["parcel_share"],
+        "car_pct_text": pct_text(row["car_share"]), "parcel_share": row["parcel_share"],
     }
+
+
+_NOT_ASKED_DETAILS = ("not_queried", "disabled", "invalid_uf", "car_geometry")
+# Not asked (not wired, switched off, no usable CAR): nothing was asked, so nothing "did not answer".
+# Asked but not finished (layer down, cut short, unreadable geometry, cancelled): the consultation is not concluded.
+PENDING_READING = {
+    "not_asked": "Consulta ao INCRA não realizada nesta emissão; isso não indica ausência de certificação.",
+    "incomplete": "Consulta ao INCRA não concluída nesta emissão; isso não indica ausência de certificação.",
+}
+PARTIAL_READING = "Consulta parcial: uma camada do INCRA não respondeu por completo, então pode haver outros registros."
+
+
+def pending_reason(data: dict[str, Any] | None) -> str:
+    """'not_asked' only when nothing reached INCRA; any layer asked (or a failure while asking) is 'incomplete'."""
+    data = data or {}
+    detail = str(data.get("detail") or "not_queried")
+    if data.get("layers") or not detail.startswith(_NOT_ASKED_DETAILS):
+        return "incomplete"
+    return "not_asked"
 
 
 def _family_view(family: str, data: dict[str, Any] | None, checked_text: str) -> dict[str, Any]:
@@ -551,11 +653,14 @@ def _family_view(family: str, data: dict[str, Any] | None, checked_text: str) ->
     items = [_item_view(r) for r in data.get("rows") or []] if state == "found" else []
     name = "SIGEF" if family == "sigef" else "SNCI"
     base = "SIGEF (INCRA)" if family == "sigef" else "SNCI (INCRA)"
-    view: dict[str, Any] = {"state": state, "items": items[:5], "count": len(items) if state == "found" else None}
+    partial = state == "found" and data.get("complete") is False
+    view: dict[str, Any] = {"state": state, "items": items[:5], "count": len(items) if state == "found" else None,
+                            "count_is_minimum": partial, "partial": partial}
     if state == "pending":
+        reason = pending_reason(data)
         text = f"Certificação {name}: consulta pendente."
-        view.update(text=text, status="CONSULTA PENDENTE", coverage=None, car_share=None,
-                    row=[base, "CONSULTA PENDENTE", "—", "A base oficial do INCRA não respondeu nesta emissão; isso não indica ausência de certificação."])
+        view.update(text=text, status="CONSULTA PENDENTE", coverage=None, car_share=None, pending_reason=reason,
+                    row=[base, "CONSULTA PENDENTE", "—", PENDING_READING[reason]])
         return view
     if state == "not_found":
         text = ("Não há parcela SIGEF certificada sobre o imóvel." if family == "sigef"
@@ -565,42 +670,56 @@ def _family_view(family: str, data: dict[str, Any] | None, checked_text: str) ->
                     row=[base, "SEM CERTIFICAÇÃO", "0", text[:-1] + " na base oficial do INCRA" + when + "."])
         return view
     best = items[0]
+    n = len(items)
+    count_text = f"pelo menos {n}" if partial else str(n)
     union = data.get("union_share")
     union = best["car_share"] if union is None else max(float(union), best["car_share"])
+    union_text = ("pelo menos " if partial else "") + pct_text(union)
     if best["car_share"] >= COVERS_SHARE:
-        coverage = "covers"
+        # The CAR is a small piece of a much larger certified perimeter: the seal would suggest this property is certified.
+        within = best["parcel_share"] < WITHIN_PARCEL_SHARE
+        coverage = "within" if within else "covers"
         if family == "snci":
-            parts = ["Certificado no SNCI (INCRA)"]
+            parts = ["Certificação SNCI (INCRA) de perímetro maior que o imóvel" if within else "Certificado no SNCI (INCRA)"]
             if best.get("certification"):
                 parts.append(f"nº {best['certification']}")
+            if best.get("date"):
+                parts.append(best["date"])
         else:
-            parts = [f"Parcela {best.get('status_text') or 'certificada'} no SIGEF (INCRA)"]
+            status_text = best.get("status_text") or "certificada"
+            parts = [f"Parcela SIGEF {status_text} (INCRA) de perímetro maior que o imóvel" if within
+                     else f"Parcela {status_text} no SIGEF (INCRA)"]
             if best.get("date"):
                 parts.append(f"aprovada em {best['date']}")
-        if family == "snci" and best.get("date"):
-            parts.append(best["date"])
         # The certified area is the parcel's, not the CAR's: say so, so it is never read as the property area.
         area_phrase = f"área certificada de {best['area_text']}" if family == "snci" else f"parcela de {best['area_text']}"
         parts += [area_phrase, f"cobre {best['car_pct_text']} do imóvel"]
+        if within:
+            parts.append(f"o imóvel ocupa {pct_text(best['parcel_share'])} da área certificada")
         text = " · ".join(parts)
-        status = "CERTIFICADO"
+        status = WITHIN_STATUS if within else "CERTIFICADO"
     elif union >= COVERS_SHARE:
-        coverage = "covers"
+        within = all(i["parcel_share"] < WITHIN_PARCEL_SHARE for i in items)
+        coverage = "within" if within else "covers"
         noun = "Parcelas SIGEF certificadas" if family == "sigef" else "Certificações SNCI"
-        text = f"{noun} cobrem {pct_floor_text(union)} do imóvel ({len(items)} registros)"
-        status = "CERTIFICADO"
+        text = f"{noun} cobrem {union_text} do imóvel ({count_text} registros)"
+        if within:
+            text += "; o imóvel ocupa menos da metade de cada perímetro certificado"
+        status = WITHIN_STATUS if within else "CERTIFICADO"
     else:
         coverage = "partial"
+        plural = n > 1 or partial
         if family == "sigef":
-            text = f"Parcela SIGEF de outro perímetro sobreposta a {pct_floor_text(union)} do imóvel"
+            noun = "Parcelas SIGEF certificadas sobrepostas" if plural else "Parcela SIGEF certificada sobreposta"
         else:
-            text = f"Certificação SNCI de outro perímetro sobreposta a {pct_floor_text(union)} do imóvel"
-        if len(items) > 1:
-            text += f" ({len(items)} registros)"
+            noun = "Certificações SNCI sobrepostas" if plural else "Certificação SNCI sobreposta"
+        text = f"{noun} a {union_text} do imóvel"
+        if plural:
+            text += f" ({count_text} {'registro' if n == 1 else 'registros'})"
         status = "SOBREPOSIÇÃO PARCIAL"
-    reading = text + "." + (" Não equivale a matrícula." if family == "sigef" else "")
+    reading = text + "." + (" Não equivale a matrícula." if family == "sigef" else "") + (" " + PARTIAL_READING if partial else "")
     view.update(text=text + ".", status=status, coverage=coverage, car_share=union,
-                row=[base, status, str(len(items)), reading])
+                row=[base, status, count_text, reading])
     return view
 
 
@@ -634,8 +753,15 @@ def land_payload(acervo: dict[str, Any] | None) -> dict[str, Any]:
 
 
 def family_answered(acervo: dict[str, Any] | None, family: str) -> bool:
+    """The family answered completely: not_found (always complete) or found with every layer answering.
+
+    A presence found while another layer of the family did not answer is a partial consultation, not a
+    consulted core source ("200 não é todos").
+    """
     data = (acervo or {}).get(family) if isinstance(acervo, dict) else None
-    return isinstance(data, dict) and data.get("state") in ("found", "not_found")
+    if not isinstance(data, dict):
+        return False
+    return data.get("state") == "not_found" or (data.get("state") == "found" and data.get("complete") is not False)
 
 
 def _is_certification_row(row) -> bool:
@@ -648,6 +774,15 @@ def _is_certification_source(src) -> bool:
 
 
 _SNCI_ATTENTION = "Matrícula, titularidade registral e SNCI ainda não foram consultados neste ciclo."
+_COVERAGE_LEVEL = {"covers": "ok", "within": "info", "partial": "info"}
+
+
+def _compliance_level(fam_view: dict[str, Any]) -> str:
+    if fam_view["state"] == "pending":
+        return "neutral"
+    if fam_view["state"] == "not_found":
+        return "info"
+    return _COVERAGE_LEVEL.get(fam_view.get("coverage"), "info")
 
 
 def apply_to_report_payload(payload: dict[str, Any], acervo: dict[str, Any] | None) -> dict[str, Any]:
@@ -665,19 +800,19 @@ def apply_to_report_payload(payload: dict[str, Any], acervo: dict[str, Any] | No
     for row in land.get("matrix") or []:
         if _is_certification_row(row):
             r = list(row) + [""] * (4 - len(row))
-            result = sigef["status"] if sigef["state"] != "found" else f"{sigef['status']} · {sigef['items'][0]['car_pct_text']}"
+            fam_view = snci if str(r[0]).strip().upper().startswith("SNCI") else sigef
+            result = fam_view["status"] if fam_view["state"] != "found" else f"{fam_view['status']} · {fam_view['items'][0]['car_pct_text']}"
             matrix.append([r[0], result, r[2] or "-", "Não equivale a matrícula imobiliária"])
         else:
             matrix.append(row)
     land["matrix"] = matrix
     compliance, placed = [], False
-    level = {"found": "ok", "not_found": "info", "pending": "neutral"}
     for item in payload.get("compliance") or []:
         label = str((item or {}).get("label") or "").strip().upper() if isinstance(item, dict) else ""
         if label in ("SIGEF", "SNCI"):
             if not placed:
-                compliance.append({"label": "SIGEF", "text": sigef["text"], "badge": sigef["status"], "level": level[sigef["state"]]})
-                compliance.append({"label": "SNCI", "text": snci["text"], "badge": snci["status"], "level": level[snci["state"]]})
+                compliance.append({"label": "SIGEF", "text": sigef["text"], "badge": sigef["status"], "level": _compliance_level(sigef)})
+                compliance.append({"label": "SNCI", "text": snci["text"], "badge": snci["status"], "level": _compliance_level(snci)})
                 placed = True
             continue
         compliance.append(item)
@@ -695,26 +830,33 @@ def apply_to_report_payload(payload: dict[str, Any], acervo: dict[str, Any] | No
             for x in payload["attention_points"]
         ]
     sources = [s for s in payload.get("sources") or [] if not _is_certification_source(s)]
+    when = f" Consulta de {view['checked_at']}." if view.get("checked_at") else ""
     for family, fam_view in (("sigef", sigef), ("snci", snci)):
         name = "INCRA — Acervo Fundiário (SIGEF)" if family == "sigef" else "INCRA — Acervo Fundiário (SNCI)"
         if fam_view["state"] == "pending":
             sources.append({"name": name, "status": "CONSULTA PENDENTE", "level": "attention",
-                            "description": "A base oficial do INCRA não respondeu nesta emissão; a consulta é refeita na próxima emissão."})
+                            "description": PENDING_READING[fam_view["pending_reason"]]})
+        elif fam_view["partial"]:
+            sources.append({"name": name, "status": "PARCIAL", "level": "attention",
+                            "description": "Certificações consultadas na base oficial do INCRA e cruzadas com o perímetro do CAR. "
+                                           + PARTIAL_READING + when})
         else:
             sources.append({"name": name, "status": "CONSULTADA", "level": "ok",
-                            "description": "Certificações consultadas na base oficial do INCRA e cruzadas com o perímetro do CAR."
-                                           + (f" Consulta de {view['checked_at']}." if view.get("checked_at") else "")})
+                            "description": "Certificações consultadas na base oficial do INCRA e cruzadas com o perímetro do CAR." + when})
     payload["sources"] = sources
     payload["incra_acervo_f2"] = {k: view[k] for k in ("source", "checked_at", "sigef", "snci")}
     return payload
 
 
 def summary_item(acervo: dict[str, Any] | None) -> dict[str, Any]:
-    """Legacy analysis summary: never the mirror's envelope count."""
-    if not family_answered(acervo, "sigef"):
+    """Legacy analysis summary: never the mirror's envelope count; a partial answer carries a minimum, never a total."""
+    data = (acervo or {}).get("sigef") if isinstance(acervo, dict) else None
+    if not isinstance(data, dict) or data.get("state") not in ("found", "not_found"):
         return {"ok": None, "state": "pending", "source": SOURCE_LABEL}
-    rows = acervo["sigef"].get("rows") or []
-    return {"ok": True, "state": acervo["sigef"]["state"], "occurrence_count": len(rows), "source": SOURCE_LABEL}
+    rows = data.get("rows") or []
+    if data.get("state") == "found" and data.get("complete") is False:
+        return {"ok": True, "state": "found", "complete": False, "occurrence_count_min": len(rows), "source": SOURCE_LABEL}
+    return {"ok": True, "state": data["state"], "complete": True, "occurrence_count": len(rows), "source": SOURCE_LABEL}
 
 
 # ---------------------------------------------------------------------------------------------

@@ -10,7 +10,6 @@ from PIL import Image, ImageDraw, ImageFont
 from shapely.geometry import shape
 
 from report_engine import build_premium_property_report
-import incra_acervo_f2
 
 REPORT_DIR = Path('/tmp/raiox_reports')
 REPORT_DIR.mkdir(parents=True, exist_ok=True)
@@ -226,8 +225,8 @@ def build_live_payload(result: dict[str, Any], report_id: str, generated_at: str
             'summary': 'Certificação SIGEF e SNCI (INCRA): consulta pendente.',
             'risk': 'ATENÇÃO',
             'certifications': [
-                ['SIGEF', 'CONSULTA PENDENTE', '—', 'A base oficial do INCRA não respondeu nesta emissão.'],
-                ['SNCI', 'CONSULTA PENDENTE', '—', 'A base oficial do INCRA não respondeu nesta emissão.'],
+                ['SIGEF', 'CONSULTA PENDENTE', '—', 'Consulta ao INCRA pendente nesta emissão.'],
+                ['SNCI', 'CONSULTA PENDENTE', '—', 'Consulta ao INCRA pendente nesta emissão.'],
             ],
             'matrix': [
                 ['CAR', car_status, f'{round(area_ha,3)} ha', 'Cadastro ambiental consultado'],
@@ -367,6 +366,8 @@ def build_live_payload(result: dict[str, Any], report_id: str, generated_at: str
             'Interseções espaciais exatas são recalculadas localmente sobre a geometria do CAR.',
         ],
     }
+    import incra_acervo_f2  # local import: keeps the shared import block of this module untouched
+
     return incra_acervo_f2.apply_to_report_payload(payload, result.get('incra_acervo'))
 
 

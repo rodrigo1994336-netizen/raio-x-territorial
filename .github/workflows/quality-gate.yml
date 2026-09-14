@@ -33,6 +33,10 @@ jobs:
         env:
           RX_RELEASE: OFF
         run: PYTHONPATH=. python scripts/r1_report_ptbr_gate.py
+      - name: F2 INCRA SIGEF/SNCI official source gate
+        env:
+          RX_RELEASE: OFF
+        run: PYTHONPATH=. python scripts/f2_incra_sigef_snci_gate.py
       - name: Import standalone engines
         env:
           RX_RELEASE: OFF

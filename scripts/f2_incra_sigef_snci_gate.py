@@ -3,13 +3,18 @@
 Usage (offline, no network: every socket and every curl subprocess is refused):
   PYTHONPATH=. python scripts/f2_incra_sigef_snci_gate.py            # everything
   PYTHONPATH=. python scripts/f2_incra_sigef_snci_gate.py --no-card  # skip the card contract (no portal import)
+  PYTHONPATH=. python scripts/f2_incra_sigef_snci_gate.py --no-chain # skip rendering the real report chain (~20 s)
 
 Fixtures in tests/fixtures/f2_incra_sigef_snci/ are live answers recorded on 13/09/2026 (see README.md),
-with personal and registry fields replaced by a sentinel and property names pseudonymised.
+with personal and registry fields replaced by a sentinel and property names pseudonymised. Large CARs and
+huge certified perimeters are synthetic boxes (no real property), built in the gate.
 
 Positive control: on the code before F2 this gate fails in mirror_never_absence_contract (the report
 prints "0 parcela(s)" and "CONSULTADO" from the empty public mirror), in card_contract (the card still
-asks the mirror) and in all_places_contract.
+asks the mirror) and in all_places_contract. On the first F2 commit (b4fe086) it fails in
+large_car_small_parcels_contract ("Não há" with parcels inside), within_perimeter_contract ("CERTIFICADO"
+for a CAR inside a huge perimeter), partial_answer_report_contract, report_wiring_contract (nobody asked
+INCRA; "não respondeu nesta emissão") and all_places_contract.
 """
 from __future__ import annotations
 
@@ -35,6 +40,12 @@ TEST_CAR = "MG-3120904-DFB380BECD7A4323AD8AA68FA14D011F"
 SNCI_CAR = "MG-3120904-528DEBA144FF4CEE994BA14D1ABD0E71"
 # Words that state an absence. From the mirror they are always wrong; only the official answer may say them.
 ABSENCE = re.compile(r"\b0 parcela|parcela\(s\) candidata|n[ãa]o h[áa] (?:parcela|certifica)|sem certifica|n[ãa]o possui", re.I)
+# Pending readings, written literally (not imported): the rule is the text the client reads.
+NOT_ASKED_READING = "Consulta ao INCRA não realizada nesta emissão; isso não indica ausência de certificação."
+INCOMPLETE_READING = "Consulta ao INCRA não concluída nesta emissão; isso não indica ausência de certificação."
+DID_NOT_ANSWER = re.compile(r"n[ãa]o respondeu nesta emiss[ãa]o|refeita na pr[óo]xima emiss[ãa]o", re.I)
+WITHIN_STATUS = "EM PERÍMETRO CERTIFICADO"
+ALL_THEMES = ("imoveiscertificados_privado_mg", "imoveiscertificados_publico_mg", "certificada_sigef_particular_mg", "certificada_sigef_publico_mg")
 
 
 # ---------------------------------------------------------------------------------------------
@@ -60,8 +71,19 @@ class _NoCurlPopen(_REAL_POPEN):
         super().__init__(args, *a, **k)
 
 
+_REAL_CONNECT = socket.socket.connect
+
+
+def _connect(self, address, *args):
+    host = address[0] if isinstance(address, tuple) and address else None
+    if host in ("127.0.0.1", "::1"):
+        # asyncio's self-pipe (socketpair emulated over loopback on Windows): never the network.
+        return _REAL_CONNECT(self, address, *args)
+    raise NetworkRefused(f"network is disabled in the offline F2 gate: {address!r}"[:200])
+
+
 def offline():
-    socket.socket.connect = _refuse
+    socket.socket.connect = _connect
     socket.create_connection = _refuse
     subprocess.Popen = _NoCurlPopen
 
@@ -214,8 +236,8 @@ def pct_floor_contract():
     assert acervo.floor_share(0.99999999) == 0.999999
 
 
-def _legacy_result(label, acervo=None):
-    feature = car(label)
+def _legacy_result(label, acervo=None, feature=None):
+    feature = feature or car(label)
     props = dict(feature["properties"])
     props.update(status_imovel="AT", condicao="Aguardando análise", tipo_imovel="IRU")
     from shapely.geometry import shape
@@ -223,7 +245,7 @@ def _legacy_result(label, acervo=None):
     result = {
         "car": {"ok": True, "properties": props, "geometry": feature["geometry"], "bbox": list(shape(feature["geometry"]).bounds)},
         # What deploy_app.query_sigef returns for this CAR today: the public mirror answered with nothing.
-        "sigef": {"ok": True, "feature_count": 0, "features": json.loads((FIX / f"{label}__pamgia_sigef_publico_10.json").read_text(encoding="utf-8"))["features"],
+        "sigef": {"ok": True, "feature_count": 0, "features": json.loads((FIX / f"{label}__pamgia_sigef_publico_10.json").read_text(encoding="utf-8"))["features"] if label else [],
                   "source": "IBAMA/PAMGIA espelho público SIGEF-INCRA"},
         "embargos_ibama": {"ok": True, "feature_count": 0, "exact": {"occurrence_count": 0}},
         "anm": {"ok": True, "feature_count": 0, "exact": {"occurrence_count": 0}},
@@ -261,6 +283,10 @@ def mirror_never_absence_contract():
         assert "SIGEF" not in payload["conclusion"]["coverage"]["consulted_core"], payload["conclusion"]["coverage"]
         compliance = {c["label"]: c["badge"] for c in client.get("compliance") or [] if c.get("label") in ("SIGEF", "SNCI")}
         assert compliance.get("SIGEF") == "CONSULTA PENDENTE", compliance
+        # Nothing was asked: the report never says INCRA "did not answer".
+        assert rows["SIGEF"][3] == NOT_ASKED_READING and rows["SNCI"][3] == NOT_ASKED_READING, (label, rows)
+        said = sorted({t for t in texts(client) if DID_NOT_ANSWER.search(t) and re.search("INCRA|SIGEF|SNCI", t)})
+        assert not said, (label, said)
     # RX_INCRA_ACERVO_ENABLED off: the report is pending, never zero, and nothing is asked.
     calls = []
     with patch.dict(os.environ, {"RX_INCRA_ACERVO_ENABLED": "off"}):
@@ -268,6 +294,15 @@ def mirror_never_absence_contract():
     _payload, client = _report_payload(_legacy_result("vizinho_sigef2025", off))
     assert not calls and not any(ABSENCE.search(t) for t in texts(client)), calls
     assert _cert_rows(client)["SIGEF"][1] == "CONSULTA PENDENTE"
+    assert _cert_rows(client)["SIGEF"][3] == NOT_ASKED_READING, _cert_rows(client)["SIGEF"]
+    # Asked and every layer down: pending, "não concluída", never "não realizada".
+    down = {"ok": False, "detail": "curl_exit_28:timeout"}
+    failed = acervo_for("vizinho_sigef2025", fetch=fixture_fetch(override={t: down for t in ALL_THEMES}))
+    _payload, client = _report_payload(_legacy_result("vizinho_sigef2025", failed))
+    rows = _cert_rows(client)
+    assert rows["SIGEF"][1] == "CONSULTA PENDENTE" and rows["SIGEF"][3] == INCOMPLETE_READING, rows
+    sources = {s["name"]: s["description"] for s in client["sources"] if "Acervo" in s["name"]}
+    assert sources and all(v == INCOMPLETE_READING for v in sources.values()), sources
     # The legacy analysis summary no longer carries the mirror envelope count.
     import deploy_app
 
@@ -339,6 +374,196 @@ def partial_failure_contract():
     ev.set()
     res = acervo_for("vizinho_snci", cancel_event=ev)
     assert res.get("cancelled") and res["snci"]["state"] == "pending", res
+
+
+# ---------------------------------------------------------------------------------------------
+# synthetic WFS answers: shapes the four recorded CARs cannot show (large CAR, huge perimeter).
+# Geometry only, no real property: parcels are boxes in degrees near Curvelo/MG.
+# ---------------------------------------------------------------------------------------------
+
+_SYN_HDR = (b"<?xml version='1.0' encoding=\"UTF-8\" ?><wfs:FeatureCollection xmlns:ms=\"http://www.omsug.ca/osgis2004\" "
+            b"xmlns:wfs=\"http://www.opengis.net/wfs\" xmlns:gml=\"http://www.opengis.net/gml\">"
+            b"<gml:boundedBy><gml:null>missing</gml:null></gml:boundedBy>")
+_SYN_THEME = {"sigef": "certificada_sigef_particular_mg", "snci": "imoveiscertificados_privado_mg"}
+CX0, CY0 = -44.30, -18.90
+
+
+def _syn_body(family, boxes):
+    theme = _SYN_THEME[family]
+    parts = []
+    for k, (x0, y0, x1, y1) in enumerate(boxes):
+        ring = f"{x0},{y0} {x1},{y0} {x1},{y1} {x0},{y1} {x0},{y0}"
+        if family == "sigef":
+            props = f"<ms:parcela_codigo>syn-{k}</ms:parcela_codigo><ms:status>CERTIFICADA</ms:status><ms:data_aprovacao>2024-01-01</ms:data_aprovacao>"
+        else:
+            props = f"<ms:num_certificacao>999999999{k:03d}-99</ms:num_certificacao><ms:data_certificacao>2010-01-01</ms:data_certificacao>"
+        parts.append(f"<gml:featureMember><ms:{theme}><ms:msGeometry><gml:Polygon srsName=\"EPSG:4326\"><gml:outerBoundaryIs><gml:LinearRing>"
+                     f"<gml:coordinates>{ring}</gml:coordinates></gml:LinearRing></gml:outerBoundaryIs></gml:Polygon></ms:msGeometry>"
+                     f"{props}</ms:{theme}></gml:featureMember>".encode())
+    return _SYN_HDR + b"".join(parts) + b"</wfs:FeatureCollection>"
+
+
+def _syn_fetch(bodies, calls=None):
+    """Every layer answers; the ones without a synthetic body answer an empty collection (a real 'none')."""
+    empty = _SYN_HDR + b"</wfs:FeatureCollection>"
+
+    def fetch(url, cancel_event=None):
+        theme = parse_qs(urlsplit(url).query)["tema"][0]
+        if calls is not None:
+            calls.append(theme)
+        family = next((f for f, t in _SYN_THEME.items() if t == theme), None)
+        return {"ok": True, "body": bodies.get(family, empty) if family else empty}
+    return fetch
+
+
+def _syn_car(x0, y0, x1, y1, code="MG-3120904-00000000000000000000000000000000"):
+    geometry = {"type": "Polygon", "coordinates": [[[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]]]}
+    return {"type": "Feature", "properties": {"cod_imovel": code, "uf": "MG", "municipio": "Curvelo"}, "geometry": geometry}
+
+
+def _syn_acervo(feature, bodies):
+    import incra_acervo_f2 as acervo
+
+    with patch.object(acervo.time, "sleep", lambda _s: None):
+        return acervo.query_incra_acervo(feature["geometry"], "MG", fetch=_syn_fetch(bodies))
+
+
+def _syn_report(feature, res):
+    result = _legacy_result(None, res, feature=feature)
+    return _report_payload(result)
+
+
+def large_car_small_parcels_contract():
+    """A large CAR with small certified parcels inside is presence, never 'Não há'; only thin border slivers are dropped."""
+    import incra_acervo_f2 as acervo
+
+    big = _syn_car(CX0, CY0, CX0 + 0.1, CY0 + 0.1)  # ~11.600 ha
+    # One ~74 ha parcel entirely inside (0,6% of the CAR).
+    one = _syn_acervo(big, {"sigef": _syn_body("sigef", [(CX0 + 0.05, CY0 + 0.05, CX0 + 0.058, CY0 + 0.058)])})
+    assert one["sigef"]["state"] == "found" and len(one["sigef"]["rows"]) == 1, (one["sigef"]["state"], one["sigef"]["layers"])
+    view = acervo.land_payload(one)["sigef"]
+    assert view["status"] == "SOBREPOSIÇÃO PARCIAL" and not ABSENCE.search(view["text"]), view
+    _p, client = _syn_report(big, one)
+    assert _cert_rows(client)["SIGEF"][1] == "SOBREPOSIÇÃO PARCIAL", _cert_rows(client)
+    assert not any(re.search(r"n[ãa]o h[áa] parcela sigef", t, re.I) for t in texts(client)), "large CAR with a parcel inside reads 'Não há'"
+    # Mosaic: 81 parcels of ~94 ha each (0,8% of the CAR each), ~65% of the CAR certified.
+    grid = [(CX0 + 0.001 + i * 0.0105, CY0 + 0.001 + j * 0.0105, CX0 + 0.001 + i * 0.0105 + 0.009, CY0 + 0.001 + j * 0.0105 + 0.009)
+            for i in range(9) for j in range(9)]
+    mosaic = _syn_acervo(big, {"sigef": _syn_body("sigef", grid)})
+    assert mosaic["sigef"]["state"] == "found" and len(mosaic["sigef"]["rows"]) == 81, (mosaic["sigef"]["state"], len(mosaic["sigef"]["rows"]))
+    assert 0.6 <= mosaic["sigef"]["union_share"] <= 0.75, mosaic["sigef"]["union_share"]
+    view = acervo.land_payload(mosaic)["sigef"]
+    assert view["status"] == "SOBREPOSIÇÃO PARCIAL" and "81 registros" in view["text"] and view["row"][2] == "81", view
+    # Negative control of the rule: a neighbour's border sliver (~1 m wide along the east side) is not an overlap.
+    sliver = _syn_acervo(big, {"sigef": _syn_body("sigef", [(CX0 + 0.1 - 0.00001, CY0, CX0 + 0.15, CY0 + 0.1)])})
+    assert sliver["sigef"]["state"] == "not_found" and sliver["sigef"]["layers"]["particular"]["border_slivers"] == 1, sliver["sigef"]
+    # A compact overlap (~55 m x 55 m corner of a neighbour) is small for the CAR but not a sliver: presence.
+    corner = _syn_acervo(big, {"sigef": _syn_body("sigef", [(CX0 + 0.1 - 0.0005, CY0 + 0.1 - 0.0005, CX0 + 0.13, CY0 + 0.13)])})
+    assert corner["sigef"]["state"] == "found", corner["sigef"]
+    text = acervo.land_payload(corner)["sigef"]["text"]
+    assert "menos de 0,01% do imóvel" in text and not re.search(r"\b0% do imóvel", text), text
+    # The rule itself: all three conditions are needed to drop an intersection.
+    assert acervo.is_border_sliver(0.005, 0.1, 1.0) is True
+    assert acervo.is_border_sliver(0.005, 0.9, 1.0) is False    # the whole parcel lies inside
+    assert acervo.is_border_sliver(0.005, 0.1, 30.0) is False   # compact, not thin
+    assert acervo.is_border_sliver(0.02, 0.1, 1.0) is False     # not small for the CAR
+
+
+def within_perimeter_contract():
+    """A CAR inside a much larger certified perimeter never gets the 'CERTIFICADO' seal; it says how much it occupies."""
+    import incra_acervo_f2 as acervo
+
+    parcel = [(CX0, CY0, CX0 + 0.1, CY0 + 0.1)]
+    small = _syn_car(CX0 + 0.045, CY0 + 0.045, CX0 + 0.055, CY0 + 0.055)  # ~117 ha inside ~11.600 ha
+    for family, name in (("snci", "SNCI"), ("sigef", "SIGEF")):
+        res = _syn_acervo(small, {family: _syn_body(family, parcel)})
+        assert res[family]["state"] == "found" and res[family]["rows"][0]["parcel_share"] < 0.5, res[family]
+        view = acervo.land_payload(res)[family]
+        assert view["status"] == WITHIN_STATUS and view["coverage"] == "within", view
+        assert "de perímetro maior que o imóvel" in view["text"] and "cobre 100% do imóvel" in view["text"], view["text"]
+        assert re.search(r"o imóvel ocupa (?:0,99|1)% da área certificada", view["text"]), view["text"]
+        _p, client = _syn_report(small, res)
+        assert _cert_rows(client)[name][1] == WITHIN_STATUS, _cert_rows(client)
+        badges = {c["label"]: c["badge"] for c in client.get("compliance") or [] if c.get("label") in ("SIGEF", "SNCI")}
+        assert badges.get(name) == WITHIN_STATUS, badges
+        seal = [t for t in texts(client) if t.strip().upper() == "CERTIFICADO" or t.startswith("Certificado no SNCI") or t.startswith("Parcela certificada no SIGEF")]
+        assert not seal, (family, seal)
+    # Two huge perimeters, each covering half of the CAR: union covers it, the seal still does not apply.
+    halves = [(CX0 - 0.1, CY0, CX0 + 0.05, CY0 + 0.1), (CX0 + 0.05, CY0, CX0 + 0.2, CY0 + 0.1)]
+    res = _syn_acervo(small, {"snci": _syn_body("snci", halves)})
+    view = acervo.land_payload(res)["snci"]
+    assert view["status"] == WITHIN_STATUS and "menos da metade de cada perímetro certificado" in view["text"], view
+    # Control: the recorded neighbour whose certification is its own perimeter keeps the seal.
+    assert acervo.land_payload(acervo_for("vizinho_snci"))["snci"]["status"] == "CERTIFICADO"
+
+
+def partial_answer_report_contract():
+    """Found while another layer of the family did not answer: a minimum, a partial source, not a consulted core."""
+    import deploy_app
+    import incra_acervo_f2 as acervo
+
+    down = {"ok": False, "detail": "curl_exit_28:timeout"}
+    res = acervo_for("vizinho_sigef2025", fetch=fixture_fetch(override={"certificada_sigef_publico_mg": down}))
+    assert res["sigef"]["state"] == "found" and res["sigef"]["complete"] is False, res["sigef"]["state"]
+    payload, client = _report_payload(_legacy_result("vizinho_sigef2025", res))
+    row = _cert_rows(client)["SIGEF"]
+    assert row[2] == "pelo menos 1" and "Consulta parcial: uma camada do INCRA não respondeu por completo" in row[3], row
+    sources = {s["name"]: s["status"] for s in client["sources"] if "Acervo" in s["name"]}
+    assert sources.get("INCRA — Acervo Fundiário (SIGEF)") == "PARCIAL", sources
+    assert "SIGEF" not in payload["conclusion"]["coverage"]["consulted_core"], payload["conclusion"]["coverage"]
+    item = deploy_app._safe_summary(_legacy_result("vizinho_sigef2025", res))["sigef"]
+    assert item["complete"] is False and item["occurrence_count_min"] == 1 and "occurrence_count" not in item, item
+    assert acervo.family_answered(res, "sigef") is False and acervo.family_answered(acervo_for("vizinho_sigef2025"), "sigef") is True
+
+
+def report_wiring_contract(run_chain=True):
+    """Every report asks INCRA: the real chain (report_v19_patch -> v19 -> v18 -> ... -> truth guard) shows the answer."""
+    import incra_acervo_f2 as acervo
+    import live_report_adapter_v19 as v19
+
+    src = (ROOT / "report_v19_patch.py").read_text(encoding="utf-8")
+    assert "from live_report_adapter_v19 import generate_live_report" in src and "base.generate_live_report = generate_live_report" in src
+    # Reuse: a complete answer already on the analysis is not asked again.
+    calls = []
+    done = _legacy_result("vizinho_snci", acervo_for("vizinho_snci"))
+    with patch.object(acervo, "curl_fetch", fixture_fetch(calls)), patch.object(acervo.time, "sleep", lambda _s: None):
+        working = v19.with_incra_acervo(done)
+    assert not calls and working["incra_acervo"] is done["incra_acervo"], calls
+    # Every layer down: asked now, pending "não concluída", and never cached on the analysis.
+    down = {"ok": False, "detail": "curl_exit_28:timeout"}
+    fresh = _legacy_result("vizinho_snci")
+    with patch.object(acervo, "curl_fetch", fixture_fetch(calls, override={t: down for t in ALL_THEMES})), patch.object(acervo.time, "sleep", lambda _s: None):
+        working = v19.with_incra_acervo(fresh)
+    assert calls and "incra_acervo" not in fresh, (calls, sorted(fresh))
+    assert acervo.land_payload(working["incra_acervo"])["snci"]["row"][3] == INCOMPLETE_READING, working["incra_acervo"]["snci"]
+    # Switched off: nothing asked, pending "não realizada", never cached.
+    calls.clear()
+    with patch.dict(os.environ, {"RX_INCRA_ACERVO_ENABLED": "off"}), patch.object(acervo, "curl_fetch", fixture_fetch(calls)):
+        working = v19.with_incra_acervo(fresh)
+    assert not calls and "incra_acervo" not in fresh, calls
+    assert acervo.land_payload(working["incra_acervo"])["snci"]["row"][3] == NOT_ASKED_READING
+    if not run_chain:
+        return
+    # The real chain, rendered: the PDF carries INCRA's answer and the analysis keeps the complete answer.
+    import shutil
+
+    from pypdf import PdfReader
+
+    result = _legacy_result("vizinho_snci")
+    with patch.object(acervo, "curl_fetch", fixture_fetch(calls)), patch.object(acervo.time, "sleep", lambda _s: None):
+        meta = v19.generate_live_report(result, SNCI_CAR)
+    try:
+        assert sorted(set(calls)) == sorted(ALL_THEMES), calls
+        payload = json.loads(Path(meta["payload_path"]).read_text(encoding="utf-8"))
+        rows = {str(r[0]).split(" ")[0].upper(): r for r in payload["land"]["certifications"]}
+        assert rows["SNCI"][1] == "CERTIFICADO" and "061308000091-60" in rows["SNCI"][3], rows
+        pdf = re.sub(r"\s+", " ", " ".join((page.extract_text() or "") for page in PdfReader(meta["pdf_path"]).pages))
+        assert "061308000091-60" in pdf and "Acervo Fundiário (SNCI)" in pdf, "the rendered PDF does not carry the INCRA answer"
+        assert "Consulta ao INCRA não" not in pdf, "the rendered PDF reads INCRA as pending although it answered"
+        kept = ((result.get("incra_acervo") or {}).get("snci") or {}).get("state")
+        assert kept == "found", f"the analysis did not keep INCRA's complete answer (summary next to the PDF would read pending): {kept!r}"
+    finally:
+        shutil.rmtree(Path(meta["pdf_path"]).parent, ignore_errors=True)
 
 
 def lgpd_contract():
@@ -427,7 +652,15 @@ def all_places_contract():
         "report_truth_guard_v16.py": "incra_acervo_f2.apply_to_report_payload",
         "property_identity_runtime.py": "incra_acervo_f2.identity_candidates",
         "deploy_app.py": "incra_acervo_f2.summary_item",
+        "live_report_adapter_v19.py": "v18.generate_live_report(with_incra_acervo(result), car_code)",
+        # The CAFIR locator still reads the frozen mirror: it must say so, and never read its silence as absence.
+        "cafir_name_search_v44.py": "'source':'SIGEF/INCRA — espelho público IBAMA/PAMGIA'",
+        # The gate is required on every PR, not only by hand.
+        ".github/workflows/quality-gate.yml": "PYTHONPATH=. python scripts/f2_incra_sigef_snci_gate.py",
     }
+    forbidden["portal_cafir_inverse_v44.py"] = ("parcela SIGEF não localizada agora",)
+    forbidden["cafir_name_search_v44.py"] = ("'source':'SIGEF/INCRA','car_link_status'",)
+    forbidden["incra_acervo_f2.py"] = ("não respondeu nesta emissão", "refeita na próxima emissão")
     problems = []
     for name, needles in forbidden.items():
         src = (ROOT / name).read_text(encoding="utf-8")
@@ -439,7 +672,8 @@ def all_places_contract():
 
 
 CONTRACTS = [switch_contract, parser_controls_contract, real_cases_contract, mirror_never_absence_contract,
-             official_report_contract, partial_failure_contract, lgpd_contract, card_contract, all_places_contract]
+             official_report_contract, partial_failure_contract, large_car_small_parcels_contract, within_perimeter_contract,
+             partial_answer_report_contract, report_wiring_contract, lgpd_contract, card_contract, all_places_contract]
 
 
 def main(argv):
@@ -450,7 +684,10 @@ def main(argv):
     failures = []
     for contract in selected:
         try:
-            contract()
+            if contract is report_wiring_contract:
+                contract(run_chain="--no-chain" not in argv)
+            else:
+                contract()
             print(f"PASS {contract.__name__}", flush=True)
         except Exception as exc:  # collect all: the positive control must show every broken rule
             detail = "".join(traceback.format_exception_only(type(exc), exc)).strip()

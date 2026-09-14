@@ -196,7 +196,8 @@ _LAND_SUMMARY = (
     "Certificação SIGEF e SNCI (INCRA): consulta pendente. "
     "Matrícula, ônus e titularidade dependem de certidão do cartório de registro de imóveis e não são inferidos do CAR."
 )
-_MIRROR_CERT_ROW = ["SIGEF", "CONSULTA PENDENTE", "—", "A base oficial do INCRA não respondeu nesta emissão; isso não indica ausência de certificação."]
+# A row still built from the PAMGIA mirror means the official base was not asked in this emission: never "não respondeu".
+_MIRROR_CERT_ROW = ["SIGEF", "CONSULTA PENDENTE", "—", "Consulta ao INCRA não realizada nesta emissão; isso não indica ausência de certificação."]
 
 
 def _not_activated(status) -> bool:
