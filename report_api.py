@@ -31,8 +31,9 @@ APP_VERSION='0.18.6-memory-hardened'
 app = FastAPI(title='Raio-X Territorial Report API', version=APP_VERSION)
 
 # M1: este app é o servido pelos dois serviços (o portal importa daqui). Linha RX_PROC_STATS no log no
-# arranque e a cada RX_PROC_STATS_MIN minutos, rota GET /v1/diag/processos; e, no desligamento, os
-# processos externos gerenciados param (antes só o app de deploy_app, que não é servido, tinha isso).
+# arranque e a cada RX_PROC_STATS_MIN minutos; rota GET /v1/diag/processos só com RX_DIAG_TOKEN; e, no
+# desligamento, os processos externos gerenciados param. No portal a limpeza já vinha dos módulos
+# portal_* e property_identity_runtime (instalam neste mesmo app); o serviço de relatório não tinha.
 import external_process_lifecycle as _process_lifecycle  # noqa: E402
 import rx_proc_stats as _proc_stats  # noqa: E402
 

@@ -182,10 +182,21 @@ async def wait_for_cancelling_processes(aw: Awaitable[Any], timeout: float | Non
     """asyncio.wait_for que, ao estourar o prazo, ser cancelado ou falhar, cancela os processos externos
     gerenciados nascidos dentro dele.
 
-    O wait_for sozinho abandona viva a thread de asyncio.to_thread, e com ela o curl filho até o limite
-    próprio (até 45 s). Passe a corrotina ainda não iniciada (asyncio.to_thread(...) ou chamada async): a
-    tarefa é criada aqui, dentro do escopo, para herdar o cancelamento. Devolve no prazo, como o wait_for;
-    o filho cai em até ~0,1 s + a carência de parada, na thread que o criou."""
+    O wait_for sozinho abandona viva a thread de asyncio.to_thread, e com ela a cadeia inteira de curl que
+    ela ainda roda: no fetch_car_live_resilient com o SICAR travado são 10 curls de até 11 s em sequência
+    (~110 s). Devolve no prazo, como o wait_for; o filho cai em até ~0,1 s + a carência de parada, na
+    thread que o criou, e a thread não cria outro.
+
+    Só aceita corrotina ainda não iniciada (asyncio.to_thread(...) ou chamada async): a tarefa é criada
+    aqui, dentro do escopo, e herda o cancelamento. Tarefa ou Future criada antes já copiou o contexto sem
+    o escopo e passaria sem proteção, em silêncio — por isso é recusada com TypeError.
+
+    O escopo viaja pelo contexto (asyncio.to_thread e create_task o copiam). Não atravessa
+    ThreadPoolExecutor.submit, loop.run_in_executor nem threading.Thread: quem usa pool ou thread própria
+    precisa repassar cancel_event até o run_managed_process. Processo criado fora do run_managed_process
+    (subprocess.run direto) não é alcançado: fica limitado só pelo timeout dele."""
+    if asyncio.isfuture(aw):
+        raise TypeError("wait_for_cancelling_processes: passe a corrotina, não tarefa/Future já criada (ela não herda o escopo)")
     event = threading.Event()
     token = _open_scope(event)
     try:

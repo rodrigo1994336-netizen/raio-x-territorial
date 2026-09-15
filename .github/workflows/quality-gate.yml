@@ -413,7 +413,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install fastapi httpx shapely pyproj pillow reportlab uvicorn "psycopg[binary]" "redis>=5,<7" "numpy>=2,<3" "rasterio>=1.4,<2" "PyJWT[crypto]>=2.10,<3" "pypdf>=4,<7"
-      - name: M1 processos pendurados gate (Linux /proc - consulta abandonada, prazo do servidor, desligamento e slots do relatório com curl travado não deixam filho vivo nem pipe aberto; wait_for puro sobre cadeia com processo reprova; todo subprocess com timeout; RX_PROC_STATS e /v1/diag/processos com números conferidos por provas independentes, "indisponivel" sem /proc, sem dado sensível, limite de taxa; controles positivos por mutação no arquivo)
+      - name: M1 processos pendurados gate (Linux /proc - consulta abandonada, prazo do servidor, desligamento, os quatro handlers com prazo e os slots do relatório com curl travado não deixam filho vivo nem pipe aberto; atraso injetado entre nascimento e registro continua certo; wait_for puro e tarefa pronta reprovam; todo processo direto com timeout; RX_PROC_STATS com números conferidos por provas independentes e "indisponivel" quando a leitura não fecha; /v1/diag/processos só com RX_DIAG_TOKEN (senão 404), sem dado sensível; controles positivos por mutação no arquivo)
         env:
           RX_RELEASE: OFF
         run: python scripts/m1_processos_gate.py --exigir-linux
