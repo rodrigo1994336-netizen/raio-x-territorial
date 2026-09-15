@@ -124,11 +124,12 @@ def check_final_html(html: str) -> str:
     assert html.index("window.rxV46SelectProperty=function(p,g,latlng){const m=mapRef();") < html.index(
         "window.rxV46SelectProperty=selectWrapped") < start, "W1a must wrap the final, sanitized selection entry"
 
-    # The share control lives in the card head (no extra card height); nothing after the CTA.
+    # The share control lives in the card head (no extra card height). After the CTA only the INCRA reference,
+    # which F1B moved below it: it arrives with /map-panel and must never push the button away from the finger.
     head_hook = ('<span class="rx46-spacer"></span>${window.rxShareW1a?window.rxShareW1a.html(car,id.place):\'\'}'
                  '<button type="button" class="rx46-linkbtn" data-rx46-action="kml">Mapa KML</button>')
     assert html.count(head_hook) == 1, "V46 card head must render the W1a share control before Mapa KML"
-    assert "VER ANÁLISE COMPLETA</button></div>`}" in html, "nothing may be added under the CTA (card height)"
+    assert "VER ANÁLISE COMPLETA</button>${sigefRef(p)}</div>`}" in html, "nothing but the INCRA reference may be added under the CTA (card height)"
     assert "const id=identity(p),car=id.code" in html and "window.rxCardIdentityC2=cardIdentity" in html, "card title contract changed"
 
     # One validation for browser and gate.
@@ -140,9 +141,10 @@ def check_final_html(html: str) -> str:
     assert "textContent=text" in block and "innerHTML" not in block, "notices are text, and paint never rewrites nodes"
 
     # The base loadCar mapping W1a mirrors (search and link must build the same property).
-    assert "showProperty({car_code:p.cod_imovel,municipality:p.municipio,uf:p.uf,area_ha:p.area,status:p.status_imovel,condition:p.condicao,type:p.tipo_imovel,fiscal_modules:p.m_fiscal},c.geometry)" in html, \
+    # F1B 1B.7: both carry the SICAR creation/update dates, so the card paints them at once.
+    assert "showProperty({car_code:p.cod_imovel,municipality:p.municipio,uf:p.uf,area_ha:p.area,status:p.status_imovel,condition:p.condicao,type:p.tipo_imovel,fiscal_modules:p.m_fiscal,created_at:p.dat_criacao,updated_at:p.data_atualizacao},c.geometry)" in html, \
         "base loadCar mapping changed: update openFromLink in portal_share_link_w1a.py"
-    assert "{car_code:code,municipality:p.municipio,uf:p.uf,area_ha:p.area,status:p.status_imovel,condition:p.condicao,type:p.tipo_imovel,fiscal_modules:p.m_fiscal}" in block
+    assert "{car_code:code,municipality:p.municipio,uf:p.uf,area_ha:p.area,status:p.status_imovel,condition:p.condicao,type:p.tipo_imovel,fiscal_modules:p.m_fiscal,created_at:p.dat_criacao,updated_at:p.data_atualizacao}" in block
 
     # Touch targets: every W1a control is >= 44 px on every screen, without growing the card.
     css = html[html.index('<style id="rxShareLinkW1a">'): html.index("</style>", html.index('<style id="rxShareLinkW1a">'))]

@@ -76,10 +76,12 @@ async def assert_no_requery(page, counts, t_full, label):
     return dict(counts)
 
 
+# F1B: the client line no longer shows "N de M fontes responderam"; the audit registry still counts
+# (card.__rxSourceAudit), so the consistency contract is read from the registry, not from the text.
 COUNTER_JS = r"""(panelSel)=>{const p=document.querySelector(panelSel);if(!p)return null;
-  const t=(p.querySelector('.rx45-audit-count')?.innerText||'');
-  const m=t.match(/(\d+)\s+de\s+(\d+)\s+fontes responderam nesta consulta/i);
-  return {text:t,responded:m?Number(m[1]):null,total:m?Number(m[2]):null,
+  const t=(p.querySelector('.rx45-audit-count')?.innerText||''),a=p.__rxSourceAudit;
+  const answered=new Set(['ANSWERED_CLEAR','ANSWERED_HIT']);
+  return {text:t,responded:a&&Array.isArray(a.registry)?a.registry.filter(x=>answered.has(x.state)).length:null,total:a&&Array.isArray(a.registry)?a.registry.length:null,
     answered_rows:p.querySelectorAll('.rx45-check[data-answered="1"]').length,
     answered_ids:[...p.querySelectorAll('.rx45-check[data-answered="1"]')].map(x=>x.dataset.source)}}"""
 
@@ -91,6 +93,7 @@ async def assert_audit_counter(page, panel_selector, label):
     probe = await page.evaluate(COUNTER_JS, panel_selector)
     assert probe and probe["total"] == 11, (label, "audit_counter_contract_missing", probe)
     assert probe["responded"] == 1 + probe["answered_rows"], (label, "audit_counter_inconsistent", probe)
+    assert "fontes responderam" not in probe["text"].casefold(), (label, "internal_counter_text_shown", probe)
     return probe
 
 
@@ -221,9 +224,10 @@ async def assert_contract(page, label, sina_source):
     await box.wait_for(state="visible", timeout=3000)
     detail = await box.inner_text()
     detail_folded = detail.casefold()
-    assert detail_folded.count("pendente de implementação") == 6, (label, detail)
+    # F1B: no "pendente de implementação" catalogue and no source nobody asked in the client's box.
+    assert "pendente de implementação" not in detail_folded and "não consultada" not in detail_folded, (label, detail)
     for hidden in HIDDEN_FUTURE:
-        assert hidden.casefold() in detail_folded, (label, hidden, detail)
+        assert hidden.casefold() not in detail_folded, (label, hidden, detail)
     assert detail_folded.count("sinaflor — supressão") == 1, (label, detail)
     sina_status = (await sina.locator('.rx48-check-status').inner_text()).strip().casefold()
     assert sina_status in detail_folded, (label, "audit_not_reflecting_live_sinaflor_state", sina_status, detail)

@@ -61,6 +61,10 @@ jobs:
         env:
           RX_RELEASE: V8_OPERATIONAL_ZERO_COST
         run: PYTHONPATH=. python scripts/w1a_link_imovel_gate.py
+      - name: F1B screen gate (no tooltip over the map, full analysis visible in the panel, one request per source, sticky 44 px actions, old engine answer never shown as current, PRODES years and floors, pending rows retried once, sources box follows the analysis; engine state across the cache expiry; part 2 - UF by IBGE borders, municipality search without Nominatim, card with SICAR dates and no jump, report engine wake only with intention and server locks, short state poll; rules and positive controls; needs Node)
+        env:
+          RX_RELEASE: V8_OPERATIONAL_ZERO_COST
+        run: PYTHONPATH=. python scripts/f1b_tela_gate.py
       - name: Import standalone engines
         env:
           RX_RELEASE: OFF
