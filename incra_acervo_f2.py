@@ -133,6 +133,7 @@ def getfeature_url(theme: str, bbox: tuple[float, float, float, float], max_feat
 
 def curl_fetch(url: str, *, cancel_event=None) -> dict[str, Any]:
     """HTTPS with certificate verification (no -k), managed and cancellable like every portal curl."""
+    import br_bridge
     from external_process_lifecycle import ManagedProcessCancelled, run_managed_process
 
     args = [
@@ -141,7 +142,9 @@ def curl_fetch(url: str, *, cancel_event=None) -> dict[str, Any]:
         "--max-filesize", str(MAX_BODY_BYTES), "-A", UA, url,
     ]
     try:
-        proc = run_managed_process(args, timeout_seconds=HARD_TIMEOUT_S, cancel_event=cancel_event)
+        # Pela Ponte no Brasil quando configurada (br_bridge); sem ela, a mesma chamada de antes.
+        proc = br_bridge.run_curl(args, timeout_seconds=HARD_TIMEOUT_S, cancel_event=cancel_event,
+                                  runner=run_managed_process)
     except ManagedProcessCancelled:
         return {"ok": False, "cancelled": True, "detail": "request_cancelled", "body": b""}
     except subprocess.TimeoutExpired:

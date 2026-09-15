@@ -11,6 +11,8 @@ from urllib.parse import urlencode
 
 from shapely.geometry import shape
 
+import br_bridge
+
 BASE='https://acervofundiario.incra.gov.br/i3geo/ogc.php'
 TTL=1800
 _CAP:dict[str,tuple[float,dict[str,Any]]]={}
@@ -26,7 +28,7 @@ def _theme(uf:str,kind:str='privado')->str:
 
 def _curl(url:str,timeout:int=12)->dict[str,Any]:
     try:
-        p=subprocess.run(['curl','-k','-sS','-L','--fail','--retry','0','--connect-timeout','5','--max-time',str(timeout),'-A','Raio-X-Territorial/INCRA-SNCI-v42',url],capture_output=True,timeout=timeout+4)
+        p=br_bridge.run_curl(['curl','-k','-sS','-L','--fail','--retry','0','--connect-timeout','5','--max-time',str(timeout),'-A','Raio-X-Territorial/INCRA-SNCI-v42',url],timeout_seconds=timeout+4,runner=br_bridge.subprocess_runner)
     except Exception as e:return {'ok':False,'detail':f'{type(e).__name__}:{str(e)[:180]}'}
     if p.returncode:return {'ok':False,'detail':p.stderr.decode('utf-8','ignore')[:220],'bytes':len(p.stdout)}
     raw=p.stdout

@@ -69,16 +69,31 @@ def run_managed_process(
     *,
     timeout_seconds: float | None,
     cancel_event: threading.Event | None = None,
+    input_bytes: bytes | None = None,
 ) -> subprocess.CompletedProcess[bytes]:
     if _is_cancelled(cancel_event):
         raise ManagedProcessCancelled("operation_cancelled_before_spawn")
+    # input_bytes: entrada padrão pequena (cabeçalhos da ponte, br_bridge); sem ela, o processo
+    # nasce exatamente como antes (sem pipe de entrada).
     proc = subprocess.Popen(
         list(args),
+        stdin=subprocess.PIPE if input_bytes is not None else None,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
     with _ACTIVE_LOCK:
         _ACTIVE[proc.pid] = proc
+    if input_bytes is not None and proc.stdin is not None:
+        try:
+            proc.stdin.write(input_bytes)
+        except (BrokenPipeError, OSError):
+            pass
+        finally:
+            try:
+                proc.stdin.close()
+            except OSError:
+                pass
+            proc.stdin = None
     deadline = None if timeout_seconds is None else time.monotonic() + max(0.05, float(timeout_seconds))
     try:
         while True:

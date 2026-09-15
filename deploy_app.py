@@ -7,6 +7,7 @@ from urllib.parse import urlencode
 from datetime import datetime, timedelta, timezone
 import source_layer_guard as layer_guard
 import incra_acervo_f2
+import br_bridge
 
 try:
     from shapely.geometry import shape, mapping
@@ -46,7 +47,8 @@ TARGETS={
 def _curl(url:str, expect_json=True, *, cancel_event=None, connect_timeout=12, max_time=40, hard_timeout=45):
     args=['curl','-k','-sS','--connect-timeout',str(connect_timeout),'--max-time',str(max_time),'-A','Raio-X-Territorial/0.14.6',url]
     try:
-        p=run_managed_process(args,timeout_seconds=hard_timeout,cancel_event=cancel_event)
+        # SICAR/INCRA pela Ponte no Brasil quando configurada; sem ela, a mesma chamada de antes.
+        p=br_bridge.run_curl(args,timeout_seconds=hard_timeout,cancel_event=cancel_event,runner=run_managed_process)
     except ManagedProcessCancelled:
         return {'ok':False,'cancelled':True,'detail':'request_cancelled','bytes':0}
     except subprocess.TimeoutExpired:
@@ -285,11 +287,16 @@ async def query_prodes(bbox):
     except Exception as e:return {'ok':False,'error':type(e).__name__,'detail':str(e)[:250]}
 
 async def probe_sources():
+    # Com a Ponte no Brasil ligada, o INCRA é medido pelo mesmo caminho das consultas (pela ponte); por httpx
+    # direto ele sempre pareceria fora do ar a partir do Render. Sem a ponte, tudo como antes.
+    bridged=[k for k,u in TARGETS.items() if br_bridge.route_for(u)==br_bridge.ROUTE_BRIDGE]
     async with httpx.AsyncClient(timeout=httpx.Timeout(20,connect=12),follow_redirects=True,headers={'User-Agent':'Raio-X-Territorial/0.14.6'}) as c:
         async def one(k,u):
             try:r=await c.get(u);return k,{'ok':200<=r.status_code<400,'status':r.status_code,'bytes':len(r.content)}
             except Exception as e:return k,{'ok':False,'error':type(e).__name__}
-        out=dict(await asyncio.gather(*[one(k,u) for k,u in TARGETS.items()]))
+        out=dict(await asyncio.gather(*[one(k,u) for k,u in TARGETS.items() if k not in bridged]))
+    for k in bridged:
+        r=await asyncio.to_thread(_curl,TARGETS[k],False,connect_timeout=12,max_time=20,hard_timeout=25);out[k]={'ok':bool(r.get('ok')),'bytes':r.get('bytes',0),'via':'ponte'}
     cap=await asyncio.to_thread(_curl,SICAR+'?service=WFS&version=1.0.0&request=GetCapabilities',False);out['sicar_curl']={'ok':cap.get('ok'),'bytes':cap.get('bytes',0)}
     out['exact_geometry_engine']={'ok':GEO_AVAILABLE}
     return out

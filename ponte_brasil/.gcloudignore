@@ -1,0 +1,4 @@
+# Só o necessário sobe para o build do Cloud Run.
+*
+!Dockerfile
+!app.py
