@@ -65,6 +65,10 @@ jobs:
         env:
           RX_RELEASE: V8_OPERATIONAL_ZERO_COST
         run: PYTHONPATH=. python scripts/f1b_tela_gate.py
+      - name: O2 tela nova /novo gate (rotas, arquivos com hash, nada escrito sobre o mapa, sem m², sem CPF/CNPJ, sem texto interno, alvos de 44 px, fontes oficiais, regras da leitura no node; controles positivos; needs Node)
+        env:
+          RX_RELEASE: OFF
+        run: PYTHONPATH=. python scripts/o2_tela_nova_gate.py
       - name: Import standalone engines
         env:
           RX_RELEASE: OFF
