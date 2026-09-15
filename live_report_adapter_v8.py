@@ -4,6 +4,8 @@ from datetime import datetime, timezone
 from hashlib import sha256
 import json
 
+import mcr_regra_t1
+
 from live_report_adapter import REPORT_DIR, build_technical_map, build_live_payload
 from live_report_adapter_v2 import _patch_autos
 from live_report_adapter_v4 import _patch_fire, _patch_car_limit
@@ -73,7 +75,7 @@ def _patch_prodes_truth(payload:dict,result:dict):
         ['Recorte pós-31/07/2019',
          f"{post.get('occurrence_count',0)} ocorrência(s) • {float(post.get('area_unique_ha') or 0):.6f} ha únicos • {pct_text(post.get('pct_car'))} • anos: {', '.join(str(x) for x in post.get('years') or []) or '—'}"],
         ['Triagem para crédito rural',credit_short],
-        ['Base regulatória','MCR 2-9: verificar supressão de vegetação nativa após 31/07/2019.'],
+        ['Base regulatória',mcr_regra_t1.basis_text(props.get('m_fiscal'),props.get('tipo_imovel'))],
         ['Método de área PRODES','Interseção exata com o CAR + união por lente; sobreposições não são somadas em duplicidade.'],
     ]+original
     pd['meaning']=str(lens.get('explanation') or '')+' '+str(pd.get('meaning') or '')

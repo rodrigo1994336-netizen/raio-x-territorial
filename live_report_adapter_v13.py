@@ -23,7 +23,8 @@ from safras_ibge import query_safras
 from sicar_detail_sources import query_sicar_details
 from aerodromes_anac import query_aerodromes_anac
 from agropecuaria import query_sif_establishments
-from soilgrids_wcs import query_soilgrids_wcs
+# T1: SoilGrids (250 m, centróide) não entra mais no relatório; a textura vem do MapBiomas Solo no polígono.
+from solo_nacional_t1 import query_mapbiomas_solo as query_soil_texture
 
 
 def _s(v,default=''):
@@ -107,16 +108,14 @@ def _patch_car_details(payload:dict,details:dict):
 
 
 def _patch_soilgrids(payload:dict,soil:dict):
-    prod=payload.setdefault('productive',{});existing=list(prod.get('soil_rows') or [])
-    rows=[]
-    for x in soil.get('rows') or []:
-        if x.get('ok'):
-            unit=(' '+x.get('unit')) if x.get('unit') else ''
-            rows.append([f"{x.get('label')} — 0–5 cm",f"{x.get('value')}{unit}"])
-    if rows:
-        prod['soil_rows']=rows+[['Leitura',soil.get('note')]]+existing
-    status='CONSULTADA' if soil.get('ok') and not soil.get('partial') else ('PARCIAL' if soil.get('successful_properties') else 'INDISPONÍVEL')
-    _append_source(payload,'ISRIC SoilGrids — composição físico-química',f"{soil.get('successful_properties',0)}/{soil.get('requested_properties',7)} propriedades responderam: argila, areia, silte, pH, carbono orgânico, CTC e nitrogênio no horizonte 0–5 cm. Produto em grade 250 m; não é análise laboratorial.",status,'ok' if status=='CONSULTADA' else 'attention')
+    # T1: guarda a textura do MapBiomas Solo; as linhas do quadro de solo são escritas por terra_verdade_t1.
+    # SoilGrids não é mais chamado. Resultado sem estado (prazo do slot estourado, exceção) é pendente: sem
+    # isso o timeout do _timed caía no caminho antigo e a textura sumia sem "consulta pendente".
+    prod=payload.setdefault('productive',{})
+    soil=soil if isinstance(soil,dict) else {}
+    state=soil.get('state') if soil.get('state') in ('found','not_found','pending') else 'pending'
+    if state=='found' and not soil.get('ok'):state='pending'
+    prod['solo_textura_t1']={**{k:v for k,v in soil.items() if k!='rows'},'state':state,'version':'T1'}
     return payload
 
 
@@ -190,7 +189,7 @@ async def _extras(result:dict,car_code:str,out_dir:Path):
         query_safras(car_code),
         asyncio.to_thread(query_sicar_details,geom,bbox,8),
         asyncio.to_thread(query_aerodromes_anac,geom,50.0,12),
-        asyncio.to_thread(query_soilgrids_wcs,geom),
+        asyncio.to_thread(query_soil_texture,geom),
         asyncio.to_thread(query_climatology_nasa,geom),
         query_sif_establishments(props.get('municipio'),props.get('uf'),30),
         return_exceptions=True
@@ -209,7 +208,7 @@ def generate_live_report(result:dict,car_code:str):
     technical_map=build_technical_map(result,out_dir/'map_environment.png',include_prodes=True)
     try:extras=asyncio.run(_extras(result,car_code,out_dir))
     except Exception as e:extras=[{'ok':False,'detail':f'parallel:{type(e).__name__}:{str(e)[:180]}'}]*8
-    sat,gw,safras,car_details,aero,soil,clim,sif=[_safe_extra(x,s) for x,s in zip(extras,['Sentinel-2','SGB/SIAGAS','IBGE/PAM','SICAR detalhado','ANAC','SoilGrids','NASA climatology','MAPA/SIGSIF'])]
+    sat,gw,safras,car_details,aero,soil,clim,sif=[_safe_extra(x,s) for x,s in zip(extras,['Sentinel-2','SGB/SIAGAS','IBGE/PAM','SICAR detalhado','ANAC','MapBiomas Solo','NASA climatology','MAPA/SIGSIF'])]
     stamp_label=name or f'CAR {car_code.upper()}'
     _stamp_image(technical_map,stamp_label,'technical')
     if sat.get('ok') and sat.get('path'):_stamp_image(sat.get('path'),stamp_label,'satellite')
@@ -225,7 +224,7 @@ def generate_live_report(result:dict,car_code:str):
     one=payload['narrative'].get('one_sentence') or ''
     payload['narrative']['one_sentence']=f'{name} — {one}' if name and name not in one else one
     payload['quick_read']=payload['narrative']['one_sentence']
-    payload['source_version']='Raio-X Territorial V13 • identidade da fazenda + duas imagens contornadas + CAR interno + solo físico-químico SoilGrids + climatologia + safras + aeródromos + SIF + V12 completo.'
+    payload['source_version']='Raio-X Territorial V13 • identidade da fazenda + duas imagens contornadas + CAR interno + textura do solo MapBiomas + climatologia + safras + aeródromos + SIF + V12 completo.'
     payload_path=out_dir/'payload.json';payload_path.write_text(json.dumps(payload,ensure_ascii=False,indent=2,default=str),encoding='utf-8')
     pdf_path=out_dir/'raio_x_territorial.pdf';digest=build_premium_property_report_v6(pdf_path,payload)
     return {'report_id':report_id,'pdf_path':str(pdf_path),'payload_path':str(payload_path),'map_path':str(primary),'technical_map_path':str(technical_map),'satellite_image_path':sat.get('path') if sat.get('ok') else None,'property_name':name,'sha256':digest,'bytes':pdf_path.stat().st_size,'payload_sha256':sha256(payload_path.read_bytes()).hexdigest()}

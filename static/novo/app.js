@@ -338,41 +338,31 @@
     // 6 - terra e clima
     (function () {
       var row = { id: 'terra', q: 'Como é a terra e o clima?', seal: null, lead: '', details: [], source: '', when: when }, said = [], src = [];
-      var ide = a.ide_layers && typeof a.ide_layers === 'object' ? a.ide_layers : {};
-      // IDE-Sisema is a Minas Gerais source: outside MG its layers are not applicable, never pending.
-      var mg = String((fact && fact.code) || '').slice(0, 2) === 'MG';
-      var applies = function (l) { return mg && l && typeof l === 'object' && !/não aplicável|outside_source_coverage/i.test(String(l.detail || '')); };
-      var top = function (l) {
-        var list = Array.isArray(l.samples) ? l.samples.filter(function (s) { return s && s.properties; }) : [];
-        list.sort(function (x, y) { return (y.intersection_pct_car || 0) - (x.intersection_pct_car || 0); });
-        return list[0] || null;
-      };
-      var soil = ide.soil;
-      if (applies(soil)) {
-        var s = soil.ok === true && soil.exact_count > 0 ? top(soil) : null, leg = s ? String(s.properties.legenda || '').trim() : '';
-        if (leg) {
-          said.push('Solo: ' + lowerFirst(leg).replace(/^./, function (c) { return c.toUpperCase(); }) + (isNum(s.intersection_pct_car) ? ', em ' + int(s.intersection_pct_car) + '% da área' : '') + '.');
-          src.push('IDE-Sisema (MG)');
-        } else if (soil.ok !== true) row.details.push('Mapa de solos: consulta pendente.');
+      // T1: solo pela base nacional (IBGE + Embrapa) em qualquer UF; o texto vem pronto do servidor e diz a escala.
+      // A camada de MG (IDE-Sisema) e o "risco potencial de erosão" sozinho não aparecem mais.
+      var t1 = a.terra_nacional && typeof a.terra_nacional === 'object' ? a.terra_nacional : null;
+      if (t1) {
+        var st = t1.states && typeof t1.states === 'object' ? t1.states : {}, tx = t1.texts && typeof t1.texts === 'object' ? t1.texts : {};
+        if (tx.solo) { said.push('Solo no mapa oficial (IBGE, escala regional): ' + String(tx.solo)); src.push('IBGE'); }
+        else if (st.pedologia === 'pending') row.details.push('Mapa de solos: consulta pendente.');
+        if (tx.aptidao) { row.details.push('Aptidão no mapa regional da Embrapa: ' + String(tx.aptidao)); src.push('Embrapa'); }
+        else if (st.aptidao === 'pending') row.details.push('Aptidão agrícola: consulta pendente.');
+        if (tx.erodibilidade) {
+          row.details.push(String(tx.erodibilidade) + ' Erodibilidade é a fragilidade do próprio solo à erosão; o risco no terreno também depende da inclinação, da chuva e da cobertura.');
+          if (src.indexOf('Embrapa') < 0) src.push('Embrapa');
+        } else if (st.erodibilidade === 'pending') row.details.push('Erodibilidade do solo: consulta pendente.');
       }
-      var ero = ide.erosion;
-      if (applies(ero)) {
-        var e = ero.ok === true && ero.exact_count > 0 ? top(ero) : null, ind = e ? String(e.properties.indicador || '').trim() : '';
-        if (ind) { said.push('Risco potencial de erosão: ' + lowerFirst(ind) + '.'); if (src.indexOf('IDE-Sisema (MG)') < 0) src.push('IDE-Sisema (MG)'); }
-        else if (ero.ok !== true) row.details.push('Risco de erosão: consulta pendente.');
-      }
-      if (applies(ide.slope) && ide.slope.ok !== true) row.details.push('Declividade: consulta pendente.');
       var c = a.climate_nasa;
       if (c && typeof c === 'object') {
         if (c.ok === true && isNum(c.rain_sum_mm) && isNum(c.available_days) && c.available_days > 0) {
           var period = ymd(c.period_start) && ymd(c.period_end) ? ' (' + ymd(c.period_start).slice(0, 5) + ' a ' + ymd(c.period_end) + ')' : '';
-          said.push('Nos últimos ' + int(c.available_days) + ' dias' + period + ', ' + int(c.rain_sum_mm) + ' mm de chuva' + (isNum(c.temp_avg_c) ? ' e temperatura média de ' + num(c.temp_avg_c, 1) + ' °C' : '') + '.');
+          said.push('Nos últimos ' + int(c.available_days) + ' dias' + period + ', ' + int(c.rain_sum_mm) + ' mm de chuva' + (isNum(c.temp_avg_c) ? ' e temperatura média de ' + num(c.temp_avg_c, 1) + ' °C' : '') + ' (estimativa regional da NASA POWER, grade de ~50 km; não é medição no imóvel).');
           src.push('NASA POWER');
         } else row.details.push('Clima dos últimos dias: consulta pendente.');
       }
       if (said.length) row.lead = said.join(' ');
       else { row.seal = PEND; row.lead = 'Consulta pendente. As bases de solo e clima não responderam nesta consulta.'; }
-      row.source = src.join(', ') || 'IDE-Sisema e NASA POWER';
+      row.source = src.join(', ') || 'IBGE, Embrapa e NASA POWER';
       rows.push(row);
     })();
 

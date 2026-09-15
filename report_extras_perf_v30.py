@@ -35,7 +35,8 @@ async def _extras_v41(result:dict,car_code:str,out_dir:Path):
         _timed('safras',v13.query_safras(car_code),12),
         _timed('sicar_internal',asyncio.to_thread(query_sicar_details_v2,geom,bbox,10,car_code),26),
         _timed('aerodromes',asyncio.to_thread(v13.query_aerodromes_anac,geom,50.0,12),10),
-        _timed('soilgrids',asyncio.to_thread(v13.query_soilgrids_wcs,geom),16),
+        # T1: a leitura tem prazo interno 1 s antes do slot, contado daqui (a fila de threads come parte do slot)
+        _timed('mapbiomas_solo',asyncio.to_thread(v13.query_soil_texture,geom,None,time.monotonic()+15.0),16),
         _timed('climatology',asyncio.to_thread(v13.query_climatology_nasa,geom),12),
         _timed('sif_chain',v13.query_sif_establishments(props.get('municipio'),props.get('uf'),30),12),
     )

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import mcr_regra_t1
+
 
 def _s(v: Any, default='-') -> str:
     return default if v is None or v == '' else str(v)
@@ -103,7 +105,7 @@ def build_narrative(payload: dict[str,Any]) -> dict[str,Any]:
     elif prodes_n:
         why.append('O histórico PRODES ajuda a reconstruir quando houve desmatamento mapeado. Ocorrência cartográfica não equivale automaticamente a infração; data, autorização e enquadramento ambiental continuam necessários.')
     if rd is None and post_n:
-        why.append('Para crédito rural, o MCR exige atenção especial à supressão de vegetação nativa posterior a 31/07/2019. Por isso o Raio-X mostra esse recorte separado do histórico antigo, em vez de misturar tudo em um único número.')
+        why.append(mcr_regra_t1.why_text() + ' O Raio-X não mistura tudo em um único número.')
     if emb: why.append('Embargo é diferente de simples alerta cartográfico: exige conferência imediata do ato, da área atingida, da vigência e dos efeitos sobre compra, crédito, uso e garantia.')
     if anm: why.append('Processo minerário pode afetar negociação, percepção de valor e uso futuro da terra. Ele não significa que exista uma jazida economicamente aproveitável.')
     if rare: why.append('Sinal de terras raras é interessante porque pode indicar relevância geológica regional, mas só pesquisa mineral de campo pode avançar de favorabilidade para ocorrência, recurso ou reserva.')

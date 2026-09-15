@@ -49,6 +49,8 @@ from datetime import date, datetime
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
+import mcr_regra_t1
+
 try:
     import shapely
     from shapely.geometry import shape
@@ -88,7 +90,8 @@ _BIOMES = (
     ("pantanal", "Pantanal"),
 )
 PENDING_TEXT = "Consulta ao PRODES pendente nesta emissão; a leitura é refeita na próxima."
-MCR_BASIS = "MCR 2-9: verificação de supressão de vegetação nativa após 31/07/2019."
+# T1: a regra do MCR (Res. CMN 5.303/2026) com as datas por porte mora em mcr_regra_t1; aqui fica o texto sem porte.
+MCR_BASIS = mcr_regra_t1.basis_text()
 METHOD_TEXT = (
     "Interseção geométrica exata com o CAR. Conta como dentro do imóvel a mancha que está "
     "inteira no CAR, cuja parte interna comporta um pixel do satélite (30 m) ou tem 1 ha ou mais. "
@@ -716,7 +719,7 @@ def _texts(reading: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _rows(reading: dict[str, Any], texts: dict[str, Any]) -> list[list[str]]:
+def _rows(reading: dict[str, Any], texts: dict[str, Any], basis: str = MCR_BASIS) -> list[list[str]]:
     total = reading.get("car_area_ha") or 0.0
     ins, post, bnd = reading["inside"], reading["post_cutoff_inside"], reading["boundary"]
     if reading["state"] == "pending" and not ins["count"]:
@@ -752,14 +755,14 @@ def _rows(reading: dict[str, Any], texts: dict[str, Any]) -> list[list[str]]:
         rows.append(["Outras classes PRODES", texts["other_classes_text"]])
     rows += [
         ["Triagem para crédito rural", texts["credit_text"]],
-        ["Base regulatória", MCR_BASIS],
+        ["Base regulatória", basis],
         ["Como medimos", METHOD_TEXT],
         ["Fonte", "INPE / TerraBrasilis / PRODES"],
     ]
     return rows
 
 
-def _narrative(reading: dict[str, Any], texts: dict[str, Any]) -> dict[str, Any]:
+def _narrative(reading: dict[str, Any], texts: dict[str, Any], why_credit: str | None = None) -> dict[str, Any]:
     ins, post, bnd = reading["inside"], reading["post_cutoff_inside"], reading["boundary"]
     total = reading.get("car_area_ha") or 0.0
     n, m = ins["count"], post["count"]
@@ -787,7 +790,7 @@ def _narrative(reading: dict[str, Any], texts: dict[str, Any]) -> dict[str, Any]
     if n:
         why.append("O PRODES ajuda a reconstruir quando houve desmatamento mapeado. Ocorrência cartográfica não equivale automaticamente a infração; data, autorização e enquadramento ambiental continuam necessários.")
     if m:
-        why.append("Para crédito rural, o MCR exige atenção especial à supressão de vegetação nativa posterior a 31/07/2019. Por isso esse recorte aparece separado do histórico antigo.")
+        why.append(why_credit or mcr_regra_t1.why_text())
     attention, next_steps, money = [], [], []
     if m:
         attention.append(f"Há desmatamento PRODES dentro do imóvel {after_cutoff} (PRODES {_years_text(post['years'])}). A análise de crédito deve conferir documentação ambiental e a regra vigente; o Raio-X não transforma isso em impedimento automático.")
@@ -804,7 +807,7 @@ def _narrative(reading: dict[str, Any], texts: dict[str, Any]) -> dict[str, Any]
     return {"one_sentence": one, "found": found, "why": why, "attention": attention, "next_steps": next_steps, "money": money}
 
 
-def lens_from_reading(reading: dict[str, Any], fiscal_modules: Any = None) -> dict[str, Any]:
+def lens_from_reading(reading: dict[str, Any], fiscal_modules: Any = None, property_type: Any = None) -> dict[str, Any]:
     """Lente no formato de prodes_lens.derive_prodes_lens, só com o que está dentro do imóvel."""
     ins, post, bnd = reading["inside"], reading["post_cutoff_inside"], reading["boundary"]
     texts = _texts(reading)
@@ -829,7 +832,7 @@ def lens_from_reading(reading: dict[str, Any], fiscal_modules: Any = None) -> di
             "automatic_check_may_flag": post["count"] > 0 or bnd["post_cutoff_count"] > 0,
             "fiscal_modules": mf,
             "reading": texts["credit_text"],
-            "regulatory_basis": MCR_BASIS,
+            "regulatory_basis": mcr_regra_t1.basis_text(fiscal_modules, property_type),
         },
         "state": reading["state"],
         "calculation_method": "exact_geometry_union_after_intersection",
@@ -853,9 +856,9 @@ def prodes_reading_payload(result: dict[str, Any]) -> dict[str, Any]:
     return {
         **reading,
         **texts,
-        "rows": _rows(reading, texts),
-        "narrative": _narrative(reading, texts),
-        "lens": lens_from_reading(reading, props.get("m_fiscal")),
+        "rows": _rows(reading, texts, mcr_regra_t1.basis_text(props.get("m_fiscal"), props.get("tipo_imovel"))),
+        "narrative": _narrative(reading, texts, mcr_regra_t1.why_text(props.get("m_fiscal"), props.get("tipo_imovel"))),
+        "lens": lens_from_reading(reading, props.get("m_fiscal"), props.get("tipo_imovel")),
         "panel": {"id": "prodes", "label": "PRODES", "state": reading["state"], "audit_state": panel_state, "text": texts["headline"],
                   **_card(reading, texts)},
     }

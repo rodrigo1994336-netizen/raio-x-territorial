@@ -35,6 +35,7 @@ import live_report_adapter_v19 as v19
 import mapbiomas_alerta
 import outorga_vazao
 import prodes_image_platform_f2
+import terra_verdade_t1
 from report_engine_v10 import build_premium_property_report_v10
 
 REPORT_VERSION = "F2-VERDADE-E-LACUNAS"
@@ -293,6 +294,8 @@ def render_v20(path, payload):
     if ctx:
         t0 = time.monotonic()
         payload = apply_f2_payload(payload, ctx)
+        # T1 terra-verdade: relevo em %, solo nacional, sem SoilGrids/IDE-Sisema e sem adjetivo de chuva da POWER.
+        payload = terra_verdade_t1.apply_payload(payload, ctx.get("result") or {})
         Path(path).parent.joinpath("payload.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
         print(f"RX_REPORT_STAGE=f2_payload:{round((time.monotonic() - t0) * 1000)}ms", flush=True)
     return build_premium_property_report_v10(path, payload)

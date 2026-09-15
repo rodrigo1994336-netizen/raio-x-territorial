@@ -43,5 +43,9 @@ if os.getenv("RX_RELEASE", "") == "":
     import conab_armazens
 
     conab_armazens.aquecer_em_segundo_plano()
+    # T1: abre os arquivos do MapBiomas Solo (textura) fora do primeiro relatório.
+    import solo_nacional_t1
+
+    solo_nacional_t1.warm_texture_in_background()
 
 print("RX_REPORT_F2_RUNTIME=conab_alertas_outorga_landsat_connected", flush=True)

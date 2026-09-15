@@ -10,6 +10,7 @@ from agropecuaria import build_agro_profile
 from car_resilient import fetch_car_live_resilient
 from sicar_lookup_http import lookup_http_error
 from anm_resilient import query_anm_curl_exact
+import terra_verdade_t1
 
 app=portal_v8.app
 HEAVY_BASE=os.getenv('RX_HEAVY_BASE_URL','https://raio-x-territorial-report.onrender.com').rstrip('/')
@@ -64,9 +65,10 @@ async def agropecuaria_v18(car_code:str):
     mb=(heavy or {}).get('mapbiomas') or {};terrain=(heavy or {}).get('terrain_srtm') or {}
     screening=(profile.setdefault('property_screening',{}) if isinstance(profile,dict) else {}).setdefault('checks',[])
     # Remove stale placeholder terrain/soil rows from the lightweight municipal profile.
-    screening=[x for x in screening if str(x.get('factor') or '') not in {'Solo','Aptidão agrícola','Declividade'}]
-    if terrain.get('ok'):
-        screening.append({'factor':'Declividade','scope':'SRTM ~30 m dentro do CAR','status':'consultada','value':{'median_deg':terrain.get('slope_median_deg'),'p90_deg':terrain.get('slope_p90_deg'),'elevation_median_m':terrain.get('elevation_median_m')}})
+    screening=[x for x in screening if str(x.get('factor') or '') not in {'Solo','Aptidão agrícola','Declividade','Relevo (SRTM)'}]
+    relief=terra_verdade_t1.relief_check(terrain)  # T1: inclinação em %, classes de relevo da Embrapa
+    if relief:
+        screening.append(relief)
     profile['property_screening']['checks']=screening
     profile['mapbiomas']=mb;profile['terrain_srtm']=terrain
     profile['pasture']={
