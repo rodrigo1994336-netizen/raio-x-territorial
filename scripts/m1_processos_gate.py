@@ -321,8 +321,11 @@ def gated_wait_for(pred, extra_modules=()):
     real = asyncio.wait_for
 
     async def gated(aw, timeout):
+        # o wait_for real começa a corrotina na hora; esperar o filho antes de começá-la seria esperar para sempre
+        # (é o caso de um site revertido para asyncio.wait_for, que recebe a corrotina ainda não iniciada)
+        task = asyncio.ensure_future(aw)
         assert await await_until(pred, 15.0), "o filho não nasceu em 15 s (instrumento, não o prazo)"
-        return await real(aw, 0)
+        return await real(task, 0)
 
     fake = types.SimpleNamespace(**{k: getattr(asyncio, k) for k in dir(asyncio) if not k.startswith("__")})
     fake.wait_for = gated
