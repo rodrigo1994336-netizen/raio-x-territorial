@@ -109,20 +109,13 @@ def _patch_car_details(payload:dict,details:dict):
 
 def _patch_soilgrids(payload:dict,soil:dict):
     # T1: guarda a textura do MapBiomas Solo; as linhas do quadro de solo são escritas por terra_verdade_t1.
+    # SoilGrids não é mais chamado. Resultado sem estado (prazo do slot estourado, exceção) é pendente: sem
+    # isso o timeout do _timed caía no caminho antigo e a textura sumia sem "consulta pendente".
     prod=payload.setdefault('productive',{})
-    if soil.get('version')=='T1' or soil.get('state'):
-        prod['solo_textura_t1']={k:v for k,v in soil.items() if k!='rows'}
-        return payload
-    existing=list(prod.get('soil_rows') or [])
-    rows=[]
-    for x in soil.get('rows') or []:
-        if x.get('ok'):
-            unit=(' '+x.get('unit')) if x.get('unit') else ''
-            rows.append([f"{x.get('label')} — 0–5 cm",f"{x.get('value')}{unit}"])
-    if rows:
-        prod['soil_rows']=rows+[['Leitura',soil.get('note')]]+existing
-    status='CONSULTADA' if soil.get('ok') and not soil.get('partial') else ('PARCIAL' if soil.get('successful_properties') else 'INDISPONÍVEL')
-    _append_source(payload,'ISRIC SoilGrids — composição físico-química',f"{soil.get('successful_properties',0)}/{soil.get('requested_properties',7)} propriedades responderam: argila, areia, silte, pH, carbono orgânico, CTC e nitrogênio no horizonte 0–5 cm. Produto em grade 250 m; não é análise laboratorial.",status,'ok' if status=='CONSULTADA' else 'attention')
+    soil=soil if isinstance(soil,dict) else {}
+    state=soil.get('state') if soil.get('state') in ('found','not_found','pending') else 'pending'
+    if state=='found' and not soil.get('ok'):state='pending'
+    prod['solo_textura_t1']={**{k:v for k,v in soil.items() if k!='rows'},'state':state,'version':'T1'}
     return payload
 
 

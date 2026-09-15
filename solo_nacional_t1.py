@@ -17,18 +17,24 @@ Por que existe (estudo F1, seção 0, E2/E3/E6):
 Regras:
 
 * mapa regional descreve, não mede: percentual de unidade de mapa sai arredondado em partes de 10
-  ("cerca de 6 de cada 10 partes"), nunca "57,1 %"; a escala é dita;
-* fonte que não respondeu -> ``pending`` (tenta de novo na próxima emissão); resposta sem unidade no
-  imóvel -> ``not_found`` e a linha não aparece (campo vazio não aparece; zero não é ausência);
-* cada fonte tem prazo próprio; nenhuma espera a outra.
+  ("cerca de 6 de cada 10 partes"), nunca "57,1 %"; a escala é dita. "Todo o imóvel" só com 99,5 % ou
+  mais; acima de 90 % é "quase todo"; partes iguais recebem o mesmo texto; mancha abaixo de 5 % vira
+  "outras manchas menores" e lasca de borda abaixo de 0,5 % (menor que a precisão do mapa) não é citada;
+* fonte que não respondeu, resposta cortada (``numberMatched`` maior que o que veio ou teto de feições)
+  ou geometria que não se deixa cruzar -> ``pending`` (tenta de novo na próxima emissão); resposta sem
+  unidade no imóvel -> ``not_found`` e a linha não aparece (campo vazio não aparece; zero não é ausência);
+* geometria inválida (CAR com laço, comum no SICAR, ou mancha inválida) é consertada com ``make_valid``
+  antes do cruzamento;
+* cada fonte tem prazo próprio e a consulta inteira tem prazo total; nenhuma espera a outra.
 """
 from __future__ import annotations
 
+import json
 import math
 import re
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, wait
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
@@ -42,8 +48,13 @@ LAYERS = {
 FEATURE_CAP = 200  # 1:250.000: unidades de km²; bater no teto quer dizer resposta cortada -> pendente
 # Prazo por camada. Medido de um computador no Brasil em 15/09/2026: 0,3–1,6 s por camada nos três
 # imóveis de prova (MG, PA, MT). O prazo cobre uma nova tentativa sem segurar a análise.
+# WFS_DEADLINE_S é o prazo TOTAL da consulta (as três camadas em paralelo, com a nova tentativa e com
+# servidor que manda bytes aos poucos): passou dele, a camada que não terminou é "pending".
 WFS_TIMEOUT_S = 12.0
 WFS_DEADLINE_S = 20.0
+SLIVER_IGNORE_PCT = 0.5  # lasca de borda: menor que a precisão de um mapa 1:250.000, não é citada
+MINOR_PCT = 5.0  # abaixo disso a mancha não ganha frase própria: "outras manchas menores"
+MINOR_TEXT = "outras manchas menores (menos de 5% do imóvel cada)"
 
 SOURCE_PEDOLOGIA = "IBGE — Base Contínua de Pedologia (BDiA), escala 1:250.000"
 SOURCE_APTIDAO = "Embrapa Solos — aptidão agrícola do Brasil (GeoInfo), unidades 1:250.000"
@@ -66,15 +77,29 @@ TEXTURE_FILES = {
 }
 TEXTURE_WINDOW_GUARD_PX = 4_000_000
 # Leitura em série e com trava: três threads abrindo arquivos diferentes ao mesmo tempo travaram o GDAL
-# numa medição local (15/09/2026). Em série, frio: 4,9–8,7 s para os três arquivos; quente: 23–30 ms.
+# numa medição local (15/09/2026). Em série, frio: 4,9–8,7 s para os três arquivos; imóvel novo com os
+# arquivos já abertos: 3,7–4,4 s (revisão de 15/09/2026); o mesmo polígono de novo: 23–30 ms.
 _TEXTURE_LOCK = threading.Lock()
 TEXTURE_LOCK_WAIT_S = 14.0
+# Prazo interno da leitura: 1 s antes do slot de 16 s do relatório (report_extras_perf_v30), contado de
+# quando o pedido foi feito (a fila de threads come parte do slot). Sem prazo, a thread abandonada pelo
+# slot seguia segurando a trava e o relatório seguinte esperava até 14 s.
+TEXTURE_DEADLINE_S = 15.0
+TEXTURE_MIN_READ_S = 4.4  # imóvel novo com os arquivos abertos (pior medida); sem esse tempo, nem espera a trava
 
 _TEXTURE_ORDER = ("muito argilosa", "argilosa", "média", "siltosa", "arenosa")
 
 
 class TextureWindowTooLarge(ValueError):
     """Imóvel maior que a janela segura de leitura: limite do método, não consulta pendente."""
+
+
+class GeometryUnusable(ValueError):
+    """Geometria que não se deixa cruzar nem depois do make_valid: consulta pendente, nunca "nenhuma unidade"."""
+
+
+class TruncatedResponse(ValueError):
+    """O servidor disse que há mais feições do que mandou: resposta cortada, consulta pendente."""
 _APTITUDE_SKIP = re.compile(r"n[ãa]o\s*desm|naodesm|^\s*(?:água|agua|urbano|área urbana)\s*$", re.I)
 
 
@@ -94,65 +119,153 @@ def num(value: Any, digits: int = 0) -> str:
     return sign + ".".join(groups) + ("," + frac if digits > 0 else "")
 
 
+def pct_text(value: Any) -> str:
+    """Percentual inteiro para o cliente, sem precisão falsa e sem apagar o que é pequeno."""
+    try:
+        v = float(value)
+    except Exception:
+        return ""
+    if v != v:
+        return ""
+    if v <= 0:
+        return "0%"
+    if v < 0.5:
+        return "menos de 1%"
+    if 99.5 <= v < 100:
+        return "mais de 99%"
+    return num(v) + "%"
+
+
 def tenths(shares: list[float]) -> list[int]:
-    """Partes de 10 pelo maior resto: a soma mostrada nunca passa de 10."""
-    total = sum(max(0.0, s) for s in shares)
+    """Partes de 10 pelo maior resto: a soma mostrada nunca passa de 10.
+
+    Empate no corte (restos iguais, como 15 manchas de 6,67 %) não é desempatado pela ordem da lista:
+    nenhuma das empatadas ganha a parte extra, para que partes iguais tenham o mesmo texto.
+    """
+    vals = [max(0.0, float(s)) for s in shares]
+    total = sum(vals)
     if total <= 0:
         return [0 for _ in shares]
     # shares are % of the property: 57,1 % -> 5,71 parts of 10; the whole shown never exceeds the mapped part
-    raw = [max(0.0, s) / 10.0 for s in shares]
+    raw = [v / 10.0 for v in vals]
     target = int(Decimal(str(min(total, 100.0) / 10.0)).quantize(Decimal(1), rounding=ROUND_HALF_UP))
-    base = [int(math.floor(x)) for x in raw]
-    order = sorted(range(len(raw)), key=lambda i: raw[i] - base[i], reverse=True)
-    for i in order[: max(0, target - sum(base))]:
+    base = [int(math.floor(x + 1e-9)) for x in raw]
+    need = target - sum(base)
+    if need <= 0:
+        return base
+    rems = [raw[i] - base[i] for i in range(len(raw))]
+    order = sorted(range(len(raw)), key=lambda i: -rems[i])
+    chosen = order[:need]
+    if len(order) > need and abs(rems[order[need - 1]] - rems[order[need]]) < 1e-9:
+        cut = rems[order[need - 1]]
+        chosen = [i for i in chosen if rems[i] - cut > 1e-9]
+    for i in chosen:
         base[i] += 1
     return base
 
 
-def parts_text(n: int) -> str:
-    if n >= 10:
+def share_phrase(share_pct: float, n: int) -> str:
+    """Frase da parte do imóvel. "Todo" só com 99,5 % ou mais: 97 % com 3 % de água não é "todo"."""
+    share = float(share_pct or 0.0)
+    if share >= 99.5:
         return "todo o imóvel"
-    if n <= 0:
-        return "pequena parte do imóvel (menos de 1 de cada 10 partes)"
-    return f"cerca de {n} de cada 10 partes do imóvel"
+    if share > 90.0:
+        return "quase todo o imóvel (mais de 9 de cada 10 partes)"
+    if n >= 1:
+        return f"cerca de {min(n, 9)} de cada 10 partes do imóvel"
+    return "pequena parte do imóvel (menos de 1 de cada 10 partes)"
+
+
+def split_minor(groups: list[tuple[str, float]]) -> tuple[list[tuple[str, float]], bool]:
+    """Separa as manchas com frase própria (5 % ou mais) das menores; lasca abaixo de 0,5 % some."""
+    kept = [g for g in groups if g[1] >= SLIVER_IGNORE_PCT]
+    main = [g for g in kept if g[1] >= MINOR_PCT]
+    if not main:
+        return kept, False
+    return main, len(main) < len(kept)
 
 
 # ------------------------------------------------------------------ consulta WFS
-def _wfs_features(url: str, layer: str, bounds: tuple[float, float, float, float], get=None) -> list[dict[str, Any]]:
+def _http_json(url: str, params: dict[str, str], deadline: float) -> Any:
+    """GET com prazo total: o tempo limite do httpx vale por leitura, então quem manda bytes aos poucos
+    é cortado pelo relógio entre os pedaços."""
+    import httpx
+
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("prazo_total")
+    timeout = httpx.Timeout(min(WFS_TIMEOUT_S, remaining), connect=min(5.0, remaining))
+    chunks = []
+    with httpx.stream("GET", url, params=params, timeout=timeout,
+                      headers={"User-Agent": "Raio-X-Territorial/t1-solo-nacional"}) as r:
+        r.raise_for_status()
+        for chunk in r.iter_bytes():
+            chunks.append(chunk)
+            if time.monotonic() > deadline:
+                raise TimeoutError("prazo_total")
+    return json.loads(b"".join(chunks))
+
+
+def _wfs_features(url: str, layer: str, bounds: tuple[float, float, float, float], get=None, deadline: float | None = None) -> list[dict[str, Any]]:
     minx, miny, maxx, maxy = bounds
     params = {"service": "WFS", "version": "2.0.0", "request": "GetFeature", "typeNames": layer,
               "outputFormat": "application/json", "count": str(FEATURE_CAP),
               "bbox": f"{miny},{minx},{maxy},{maxx},urn:ogc:def:crs:EPSG::4326"}
     if get is None:
-        import httpx
+        limit = deadline if deadline is not None else time.monotonic() + WFS_DEADLINE_S
 
         def get(u, p):
-            r = httpx.get(u, params=p, timeout=httpx.Timeout(WFS_TIMEOUT_S, connect=5.0),
-                          headers={"User-Agent": "Raio-X-Territorial/t1-solo-nacional"})
-            r.raise_for_status()
-            return r.json()
+            return _http_json(u, p, limit)
     data = get(url, params)
     if not isinstance(data, dict) or not isinstance(data.get("features"), list):
         raise ValueError("wfs_sem_features")
-    return data["features"]
+    feats = data["features"]
+    for key in ("numberMatched", "totalFeatures"):
+        declared = data.get(key)
+        if isinstance(declared, int) and not isinstance(declared, bool) and declared > len(feats):
+            raise TruncatedResponse(f"{key}={declared}>{len(feats)}")
+    return feats
+
+
+def _polygonal(geom):
+    """Parte de área da geometria, consertada com make_valid quando inválida (laço, auto-interseção)."""
+    from shapely.geometry import MultiPolygon, Polygon
+    from shapely.ops import unary_union
+    from shapely.validation import make_valid
+
+    if geom is None or geom.is_empty:
+        return geom
+    if not geom.is_valid:
+        geom = make_valid(geom)
+    if isinstance(geom, (Polygon, MultiPolygon)):
+        return geom
+    parts = [g for g in getattr(geom, "geoms", []) if isinstance(g, (Polygon, MultiPolygon)) and not g.is_empty]
+    return unary_union(parts) if parts else Polygon()
 
 
 def units_in_property(features: list[dict[str, Any]], car_geometry: Any) -> list[dict[str, Any]]:
-    """Unidades de mapa que cruzam o imóvel, com a parte do imóvel (planar em graus: razão, não área)."""
+    """Unidades de mapa que cruzam o imóvel, com a parte do imóvel (planar em graus: razão, não área).
+
+    Erro de geometria levanta ``GeometryUnusable``: engolir o erro e seguir fazia a camada virar
+    "nenhuma unidade no imóvel" (not_found) e o selo dizer CONSULTADO.
+    """
     from shapely.geometry import shape
 
-    car = shape(car_geometry)
-    if car.is_empty or car.area <= 0:
-        return []
+    try:
+        car = _polygonal(shape(car_geometry))
+    except Exception as exc:  # noqa: BLE001 - geometria do CAR ilegível
+        raise GeometryUnusable(f"car:{type(exc).__name__}") from exc
+    if car is None or car.is_empty or car.area <= 0:
+        raise GeometryUnusable("car_sem_area")
     by_unit: dict[str, dict[str, Any]] = {}
     for feat in features:
         try:
-            geom = shape(feat.get("geometry"))
-            if not geom.intersects(car):
+            geom = _polygonal(shape(feat.get("geometry")))
+            if geom is None or geom.is_empty or not geom.intersects(car):
                 continue
             share = geom.intersection(car).area / car.area * 100.0
-        except Exception:
-            continue
+        except Exception as exc:  # noqa: BLE001 - mancha que não se deixa cruzar: resposta incompleta
+            raise GeometryUnusable(f"mancha:{type(exc).__name__}") from exc
         if share <= 0:
             continue
         props = {k: v for k, v in (feat.get("properties") or {}).items() if not isinstance(v, (dict, list))}
@@ -165,38 +278,67 @@ def units_in_property(features: list[dict[str, Any]], car_geometry: Any) -> list
     return out
 
 
-def _layer(key: str, car_geometry: Any, get=None) -> dict[str, Any]:
+def _layer(key: str, car_geometry: Any, get=None, deadline: float | None = None) -> dict[str, Any]:
     from shapely.geometry import shape
 
     url, layer = LAYERS[key]
     t0 = time.monotonic()
+    deadline = deadline if deadline is not None else t0 + WFS_DEADLINE_S
+    ms = lambda: round((time.monotonic() - t0) * 1000)  # noqa: E731
     last = "sem_resposta"
+    try:
+        bounds = shape(car_geometry).bounds
+    except Exception as exc:  # noqa: BLE001 - geometria ilegível não é "nenhuma unidade"
+        return {"state": "pending", "layer": layer, "detail": f"geometria:{type(exc).__name__}", "ms": ms()}
     for attempt in (1, 2):
+        if time.monotonic() >= deadline:
+            last = "prazo_total"
+            break
         try:
-            bounds = shape(car_geometry).bounds
-            feats = _wfs_features(url, layer, bounds, get=get)
+            feats = _wfs_features(url, layer, bounds, get=get, deadline=deadline)
             if len(feats) >= FEATURE_CAP:
-                return {"state": "pending", "layer": layer, "detail": "resposta_no_teto", "ms": round((time.monotonic() - t0) * 1000)}
+                return {"state": "pending", "layer": layer, "detail": "resposta_no_teto", "ms": ms()}
             units = units_in_property(feats, car_geometry)
             return {"state": "found" if units else "not_found", "layer": layer, "units": units,
                     "coverage_pct": round(min(sum(u["share_pct"] for u in units), 100.0), 2),
-                    "ms": round((time.monotonic() - t0) * 1000), "attempts": attempt}
+                    "ms": ms(), "attempts": attempt}
+        except (GeometryUnusable, TruncatedResponse) as exc:  # repetir não muda a resposta
+            return {"state": "pending", "layer": layer, "detail": f"{type(exc).__name__}:{exc}"[:160], "ms": ms()}
         except Exception as exc:  # noqa: BLE001 - fonte fora do ar vira pendência, nunca "nenhum"
             last = type(exc).__name__
-            if time.monotonic() - t0 > WFS_DEADLINE_S - WFS_TIMEOUT_S:
-                break
-    return {"state": "pending", "layer": layer, "detail": last, "ms": round((time.monotonic() - t0) * 1000)}
+    return {"state": "pending", "layer": layer, "detail": last, "ms": ms()}
 
 
-def query_solo_nacional(car_geometry: Any, get=None) -> dict[str, Any]:
-    """Pedologia (IBGE), aptidão e erodibilidade (Embrapa) no polígono do CAR, em paralelo."""
+def query_solo_nacional(car_geometry: Any, get=None, deadline_s: float | None = None) -> dict[str, Any]:
+    """Pedologia (IBGE), aptidão e erodibilidade (Embrapa) no polígono do CAR, em paralelo e com prazo total."""
     t0 = time.monotonic()
-    with ThreadPoolExecutor(max_workers=len(LAYERS), thread_name_prefix="rx-t1-solo") as ex:
-        futures = {k: ex.submit(_layer, k, car_geometry, get) for k in LAYERS}
-        layers = {k: f.result() for k, f in futures.items()}
+    deadline = t0 + (WFS_DEADLINE_S if deadline_s is None else float(deadline_s))
+    ex = ThreadPoolExecutor(max_workers=len(LAYERS), thread_name_prefix="rx-t1-solo")
+    layers: dict[str, dict[str, Any]] = {}
+    try:
+        futures = {k: ex.submit(_layer, k, car_geometry, get, deadline) for k in LAYERS}
+        wait(list(futures.values()), timeout=max(0.0, deadline - time.monotonic()))
+        for k, f in futures.items():
+            if not f.done():
+                layers[k] = {"state": "pending", "layer": LAYERS[k][1], "detail": "prazo_total",
+                             "ms": round((time.monotonic() - t0) * 1000)}
+                continue
+            try:
+                layers[k] = f.result()
+            except Exception as exc:  # noqa: BLE001 - erro inesperado é pendência
+                layers[k] = {"state": "pending", "layer": LAYERS[k][1], "detail": type(exc).__name__}
+    finally:
+        # não espera thread presa: a camada atrasada já foi dada como pendente e a leitura dela é cortada
+        # pelo prazo entre os pedaços da resposta
+        ex.shutdown(wait=False, cancel_futures=True)
     states = {k: v.get("state") for k, v in layers.items()}
     print(f"RX_T1_SOLO_NACIONAL={states}:{round((time.monotonic() - t0) * 1000)}ms", flush=True)
     return {"ok": any(s in ("found", "not_found") for s in states.values()), "version": "T1", **layers}
+
+
+def pending_result(detail: str) -> dict[str, Any]:
+    """Todas as camadas pendentes (prazo total estourado antes de a thread começar, erro inesperado)."""
+    return {"ok": False, "version": "T1", **{k: {"state": "pending", "layer": layer, "detail": detail} for k, (_url, layer) in LAYERS.items()}}
 
 
 # ------------------------------------------------------------------ textura (MapBiomas Solo)
@@ -240,18 +382,27 @@ def texture_summary(clay, sand, silt) -> dict[str, Any]:
     }
 
 
-def query_mapbiomas_solo(car_geometry: Any, reader=None) -> dict[str, Any]:
-    """Argila, areia e silte (0–30 cm) dentro do polígono; leitura em série, com trava e prazo de espera."""
+def query_mapbiomas_solo(car_geometry: Any, reader=None, deadline: float | None = None) -> dict[str, Any]:
+    """Argila, areia e silte (0–30 cm) dentro do polígono; leitura em série, com trava e prazo.
+
+    ``deadline`` (relógio monotônico) vem de quem pediu, para contar a fila de threads; sem ele, o prazo
+    conta daqui. Sem tempo para uma leitura inteira, nem espera a trava: devolve pendente na hora.
+    """
     t0 = time.monotonic()
+    deadline = deadline if deadline is not None else t0 + TEXTURE_DEADLINE_S
     base = {"ok": False, "source": SOURCE_TEXTURA, "version": "T1"}
-    if not _TEXTURE_LOCK.acquire(timeout=TEXTURE_LOCK_WAIT_S):
-        return {**base, "state": "pending", "detail": "leitura_anterior_ocupada"}
+    wait_s = min(TEXTURE_LOCK_WAIT_S, deadline - time.monotonic() - TEXTURE_MIN_READ_S)
+    got = _TEXTURE_LOCK.acquire(timeout=wait_s) if wait_s > 0 else _TEXTURE_LOCK.acquire(blocking=False)
+    if not got:
+        return {**base, "state": "pending", "detail": "leitura_anterior_ocupada", "ms": round((time.monotonic() - t0) * 1000)}
     try:
         from shapely.geometry import shape
 
         car = shape(car_geometry)
         arrays = {}
         for key, url in TEXTURE_FILES.items():
+            if time.monotonic() > deadline:
+                raise TimeoutError("prazo_da_textura")
             arrays[key] = (reader or _read_polygon)(url, car)
         summary = texture_summary(arrays["argila"], arrays["areia"], arrays["silte"])
         ms = round((time.monotonic() - t0) * 1000)
@@ -384,8 +535,11 @@ def _group_units(units: list[dict[str, Any]], label) -> list[tuple[str, float]]:
 
 
 def _parts_line(groups: list[tuple[str, float]], joiner=" em ") -> str:
-    counts = tenths([g[1] for g in groups])
-    pieces = [f"{name}{joiner}{parts_text(n)}" for (name, _share), n in zip(groups, counts)]
+    main, minor = split_minor(groups)
+    counts = tenths([g[1] for g in main])
+    pieces = [f"{name}{joiner}{share_phrase(share, n)}" for (name, share), n in zip(main, counts)]
+    if minor:
+        pieces.append(MINOR_TEXT)
     return "; ".join(pieces) + "."
 
 
@@ -462,15 +616,20 @@ def soil_reading(solo: dict[str, Any] | None, texture: dict[str, Any] | None, re
                 rows.append(["Textura descrita no mapa oficial", "; ".join(name for name, _ in described) + "."])
 
     apt = solo.get("aptidao") or {}
+    aptitude_classes = 0
     if apt.get("state") == "found":
-        groups = _group_units(apt.get("units") or [], _aptitude_label)
+        groups, minor = split_minor(_group_units(apt.get("units") or [], _aptitude_label))
         if groups:
             counts = tenths([g[1] for g in groups])
-            for (name, _share), n in zip(groups, counts):
-                aptitude_rows.append([name[:1].upper() + name[1:], parts_text(n)[:1].upper() + parts_text(n)[1:]])
+            phrases = [share_phrase(share, n) for (_name, share), n in zip(groups, counts)]
+            for (name, _share), phrase in zip(groups, phrases):
+                aptitude_rows.append([name[:1].upper() + name[1:], phrase[:1].upper() + phrase[1:]])
+            if minor:
+                aptitude_rows.append(["Outras classes", MINOR_TEXT[:1].upper() + MINOR_TEXT[1:] + "."])
             aptitude_rows.append(["Escala", "Mapa regional de aptidão (unidades 1:250.000): não enxerga detalhes de uma área deste tamanho; "
                                             "a decisão de uso pede visita técnica."])
-            screen["aptidao"] = "; ".join(f"{name} em {parts_text(n)}" for (name, _s), n in zip(groups, counts)) + "."
+            aptitude_classes = len(groups)
+            screen["aptidao"] = "; ".join([f"{name} em {phrase}" for (name, _s), phrase in zip(groups, phrases)] + ([MINOR_TEXT] if minor else [])) + "."
             checks.append({"factor": "Aptidão agrícola", "scope": "mapa regional Embrapa", "status": "consultada", "value": screen["aptidao"]})
     elif apt.get("state") == "pending":
         aptitude_rows.append(["Aptidão agrícola", PENDING_TEXT])
@@ -484,7 +643,7 @@ def soil_reading(solo: dict[str, Any] | None, texture: dict[str, Any] | None, re
             line = _parts_line([(f"erodibilidade {g}", s) for g, s in groups])
             text = line[:1].upper() + line[1:] + " " + ERODIBILITY_MEANING
             if relief and relief.get("flat_gentle_pct") is not None:
-                text += f" No imóvel, {num(relief['flat_gentle_pct'])}% do terreno medido é plano ou suave ondulado (até 8% de inclinação)."
+                text += f" No imóvel, {pct_text(relief['flat_gentle_pct'])} do terreno medido é plano ou suave ondulado (até 8% de inclinação)."
             rows.append(["Erodibilidade do solo (mapa oficial)", text])
             screen["erodibilidade"] = line[:1].upper() + line[1:]
     elif ero.get("state") == "pending":
@@ -494,7 +653,8 @@ def soil_reading(solo: dict[str, Any] | None, texture: dict[str, Any] | None, re
 
     if any(r[0] == "Tipo de solo no mapa oficial" and r[1] != PENDING_TEXT for r in rows):
         rows.append(["Escala do mapa", SCALE_NOTE])
-    return {"soil_rows": rows, "aptitude_rows": aptitude_rows, "sources": sources, "checks": checks, "screen": screen}
+    return {"soil_rows": rows, "aptitude_rows": aptitude_rows, "aptitude_classes": aptitude_classes,
+            "sources": sources, "checks": checks, "screen": screen}
 
 
 def compact_for_screen(solo: dict[str, Any] | None) -> dict[str, Any] | None:

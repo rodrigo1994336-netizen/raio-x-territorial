@@ -122,7 +122,7 @@ def comprehensive_truth_guard(payload:dict[str,Any],result:dict[str,Any],base_gu
         'restrições territoriais':cons.get('ok') is True,'outorgas':water.get('ok') is True,'pivôs':piv.get('ok') is True,
         # T1: solo e aptidão pela base nacional (qualquer UF); relevo medido no modelo de elevação, não na camada de MG.
         'clima':cl.get('ok') is True,'solo':((result.get('terra_nacional') or {}).get('pedologia') or {}).get('state') in ('found','not_found'),
-        'aptidão':((result.get('terra_nacional') or {}).get('aptidao') or {}).get('state') in ('found','not_found'),'declividade':(result.get('terrain_srtm') or {}).get('ok') is True,
+        'aptidão':((result.get('terra_nacional') or {}).get('aptidao') or {}).get('state') in ('found','not_found'),'declividade':(result.get('terrain_srtm') or {}).get('ok') is True or (result.get('terrain_srtm') or {}).get('state')=='not_found',
         'imagem Sentinel-2':sat.get('ok') is True,'MapBiomas cobertura':mb.get('ok') is True,
     }
     ready=[k for k,v in checks.items() if v];missing=[k for k,v in checks.items() if not v]

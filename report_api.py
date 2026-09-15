@@ -23,7 +23,7 @@ from climate_nasa import query_climate_nasa
 from ide_catalog import benchmark_targets, search_catalog
 from ide_layer_probe import probe_benchmark
 from critical_minerals import query_critical_minerals
-from solo_nacional_t1 import query_solo_nacional, compact_for_screen as _solo_screen
+from solo_nacional_t1 import WFS_DEADLINE_S as _SOLO_DEADLINE_S, pending_result as _solo_pending, query_solo_nacional, compact_for_screen as _solo_screen
 from live_report_adapter_v8 import generate_live_report
 from sicar_lookup_http import lookup_http_error
 
@@ -166,6 +166,17 @@ async def _safe_thread(label:str, fn, *args, source:str|None=None):
     except Exception as e: return {'ok':False,'source':source or label,'detail':f'{type(e).__name__}:{e}'}
 
 
+# T1: a base nacional de solo tem prazo total dentro dela (20 s); este é o limite de fora, que também conta a
+# fila de threads. Estourou: cada camada vira "pending", nunca "nenhuma unidade" e nunca espera sem fim.
+SOLO_NACIONAL_OUTER_S=_SOLO_DEADLINE_S+2.0
+
+
+async def _terra_nacional(geometry):
+    try: return await asyncio.wait_for(asyncio.to_thread(query_solo_nacional,geometry),timeout=SOLO_NACIONAL_OUTER_S)
+    except asyncio.TimeoutError: return _solo_pending('prazo_total')
+    except Exception as e: return _solo_pending(type(e).__name__)
+
+
 async def _analyze_uncached(car_code:str):
     result=await analyze_car(car_code); car=result.get('car') or {}
     # 404 only when SICAR answered without the property; a lookup that failed is 503 + Retry-After.
@@ -181,7 +192,7 @@ async def _analyze_uncached(car_code:str):
         _safe_thread('climate_nasa',query_climate_nasa,geometry,30,source='NASA POWER - Daily API'),
         _safe_async('critical_minerals',query_critical_minerals(geometry,result.get('anm')),'ANM/SIGMINE + SGB/GeoSGB'),
         # T1: solo, aptidão e erodibilidade pela base nacional (IBGE + Embrapa), prazo próprio por camada.
-        _safe_thread('terra_nacional',query_solo_nacional,geometry,source='IBGE BDiA + Embrapa GeoInfo'),
+        _terra_nacional(geometry),
     ]
     vals=await asyncio.gather(*jobs)
     result['autos_ibama'],result['fire_live'],result['territorial_constraints'],result['water_mg'],result['pivots_ana'],result['climate_nasa'],result['critical_minerals'],result['terra_nacional']=vals

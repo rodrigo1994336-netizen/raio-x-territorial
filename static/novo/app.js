@@ -356,7 +356,7 @@
       if (c && typeof c === 'object') {
         if (c.ok === true && isNum(c.rain_sum_mm) && isNum(c.available_days) && c.available_days > 0) {
           var period = ymd(c.period_start) && ymd(c.period_end) ? ' (' + ymd(c.period_start).slice(0, 5) + ' a ' + ymd(c.period_end) + ')' : '';
-          said.push('Nos últimos ' + int(c.available_days) + ' dias' + period + ', ' + int(c.rain_sum_mm) + ' mm de chuva' + (isNum(c.temp_avg_c) ? ' e temperatura média de ' + num(c.temp_avg_c, 1) + ' °C' : '') + '.');
+          said.push('Nos últimos ' + int(c.available_days) + ' dias' + period + ', ' + int(c.rain_sum_mm) + ' mm de chuva' + (isNum(c.temp_avg_c) ? ' e temperatura média de ' + num(c.temp_avg_c, 1) + ' °C' : '') + ' (estimativa regional da NASA POWER, grade de ~50 km; não é medição no imóvel).');
           src.push('NASA POWER');
         } else row.details.push('Clima dos últimos dias: consulta pendente.');
       }

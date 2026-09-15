@@ -146,9 +146,15 @@ def failing(*_a, **_k):
     raise TimeoutError("fonte fora do ar (gate)")
 
 
+def texture_offline(*_a, **_k):
+    """MapBiomas Solo lê por GDAL/libcurl, que o bloqueio de socket do Python não pega: no gate offline é pendente."""
+    return {"ok": False, "state": "pending", "version": "T1", "detail": "gate_offline"}
+
+
 def sources_patches(mode: str):
     import conab_armazens
     import deter_alertas
+    import live_report_adapter_v13 as v13
     import mapbiomas_alerta
     import prodes_image_platform_f2 as pip
 
@@ -157,11 +163,13 @@ def sources_patches(mode: str):
         return [patch.object(conab_armazens, "conab_warehouses_payload", conab_answer),
                 patch.object(deter_alertas, "deter_alerts_bundle", deter_answer),
                 patch.object(mapbiomas_alerta, "query_mapbiomas_alerta", alerts_answer),
-                patch.object(pip, "query_platforms_for_occurrences", lambda occ, lonlat=None: original_platforms(occ, lonlat=lonlat, post=landsat_post))]
+                patch.object(pip, "query_platforms_for_occurrences", lambda occ, lonlat=None: original_platforms(occ, lonlat=lonlat, post=landsat_post)),
+                patch.object(v13, "query_soil_texture", texture_offline)]
     return [patch.object(conab_armazens, "conab_warehouses_payload", failing),
             patch.object(deter_alertas, "deter_alerts_bundle", failing),
             patch.object(mapbiomas_alerta, "query_mapbiomas_alerta", lambda code, geometry=None, **k: mapbiomas_alerta._pending(code, "timeout")),
-            patch.object(pip, "query_platforms_for_occurrences", lambda occ, lonlat=None: original_platforms(occ, lonlat=lonlat, post=lambda u, b: None))]
+            patch.object(pip, "query_platforms_for_occurrences", lambda occ, lonlat=None: original_platforms(occ, lonlat=lonlat, post=lambda u, b: None)),
+            patch.object(v13, "query_soil_texture", texture_offline)]
 
 
 # ------------------------------------------------------------------ PDF

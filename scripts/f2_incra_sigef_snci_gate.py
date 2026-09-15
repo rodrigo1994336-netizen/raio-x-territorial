@@ -550,7 +550,10 @@ def report_wiring_contract(run_chain=True):
     from pypdf import PdfReader
 
     result = _legacy_result("vizinho_snci")
-    with patch.object(acervo, "curl_fetch", fixture_fetch(calls)), patch.object(acervo.time, "sleep", lambda _s: None):
+    import live_report_adapter_v13 as v13  # MapBiomas Solo lê por GDAL/libcurl: offline aqui, pendente
+
+    with patch.object(acervo, "curl_fetch", fixture_fetch(calls)), patch.object(acervo.time, "sleep", lambda _s: None), \
+            patch.object(v13, "query_soil_texture", lambda *_a, **_k: {"ok": False, "state": "pending", "version": "T1", "detail": "gate_offline"}):
         meta = v19.generate_live_report(result, SNCI_CAR)
     try:
         assert sorted(set(calls)) == sorted(ALL_THEMES), calls
