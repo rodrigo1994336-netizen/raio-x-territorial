@@ -1,14 +1,20 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
+import os
 import subprocess
 import threading
 import time
-from typing import Any, Callable, Sequence
+from typing import Any, Awaitable, Callable, Sequence
 
 _ACTIVE_LOCK = threading.RLock()
 _ACTIVE: dict[int, subprocess.Popen[bytes]] = {}
 _SERVER_STOPPING = threading.Event()
+# M1: escopos de cancelamento herdados pelo contexto. asyncio.to_thread e create_task copiam o contexto, então
+# um processo gerenciado nascido numa thread abandonada por um prazo (wait_for sobre to_thread) enxerga o
+# cancelamento do escopo mesmo quando quem chamou não repassou cancel_event.
+_SCOPES: contextvars.ContextVar[tuple[threading.Event, ...]] = contextvars.ContextVar("rx_external_process_scopes", default=())
 
 
 class ManagedProcessCancelled(RuntimeError):
@@ -24,7 +30,13 @@ class ManagedOperationTimeout(RuntimeError):
 
 
 def _is_cancelled(cancel_event: threading.Event | None) -> bool:
-    return _SERVER_STOPPING.is_set() or bool(cancel_event and cancel_event.is_set())
+    if _SERVER_STOPPING.is_set() or bool(cancel_event and cancel_event.is_set()):
+        return True
+    return any(scope.is_set() for scope in _SCOPES.get())
+
+
+def _open_scope(event: threading.Event) -> contextvars.Token:
+    return _SCOPES.set(_SCOPES.get() + (event,))
 
 
 def active_child_pids() -> list[int]:
@@ -110,6 +122,17 @@ def run_managed_process(
     finally:
         if proc.poll() is None:
             _stop_process(proc)
+        if os.name == "posix":
+            # M1: communicate() interrompido por prazo ou cancelamento deixa os pipes abertos enquanto alguém
+            # segurar o processo (uma exceção guardada em log, estado ou tarefa segura o quadro que o segura).
+            # Fecha aqui, na hora, sem depender de quem guarda o quê nem do coletor de ciclos.
+            # (No Windows as threads leitoras do communicate fecham os próprios pipes.)
+            for pipe in (proc.stdout, proc.stderr):
+                if pipe is not None:
+                    try:
+                        pipe.close()
+                    except OSError:
+                        pass
         with _ACTIVE_LOCK:
             _ACTIVE.pop(proc.pid, None)
 
@@ -128,9 +151,14 @@ async def run_sync_with_request_lifecycle(
     **kwargs: Any,
 ) -> Any:
     cancel_event = threading.Event()
-    task = asyncio.create_task(
-        asyncio.to_thread(func, *args, cancel_event=cancel_event, **kwargs)
-    )
+    token = _open_scope(cancel_event)
+    try:
+        # a tarefa copia o contexto agora: processos gerenciados de chamadas internas sem cancel_event também caem
+        task = asyncio.create_task(
+            asyncio.to_thread(func, *args, cancel_event=cancel_event, **kwargs)
+        )
+    finally:
+        _SCOPES.reset(token)
     deadline = None if timeout_seconds is None else time.monotonic() + max(0.05, float(timeout_seconds))
     try:
         while not task.done():
@@ -147,6 +175,38 @@ async def run_sync_with_request_lifecycle(
     except asyncio.CancelledError:
         cancel_event.set()
         await _drain_thread(task)
+        raise
+
+
+async def wait_for_cancelling_processes(aw: Awaitable[Any], timeout: float | None) -> Any:
+    """asyncio.wait_for que, ao estourar o prazo, ser cancelado ou falhar, cancela os processos externos
+    gerenciados nascidos dentro dele.
+
+    O wait_for sozinho abandona viva a thread de asyncio.to_thread, e com ela a cadeia inteira de curl que
+    ela ainda roda: no fetch_car_live_resilient com o SICAR travado são 10 curls de até 11 s em sequência
+    (~110 s). Devolve no prazo, como o wait_for; o filho cai em até ~0,1 s + a carência de parada, na
+    thread que o criou, e a thread não cria outro.
+
+    Só aceita corrotina ainda não iniciada (asyncio.to_thread(...) ou chamada async): a tarefa é criada
+    aqui, dentro do escopo, e herda o cancelamento. Tarefa ou Future criada antes já copiou o contexto sem
+    o escopo e passaria sem proteção, em silêncio — por isso é recusada com TypeError.
+
+    O escopo viaja pelo contexto (asyncio.to_thread e create_task o copiam). Não atravessa
+    ThreadPoolExecutor.submit, loop.run_in_executor nem threading.Thread: quem usa pool ou thread própria
+    precisa repassar cancel_event até o run_managed_process. Processo criado fora do run_managed_process
+    (subprocess.run direto) não é alcançado: fica limitado só pelo timeout dele."""
+    if asyncio.isfuture(aw):
+        raise TypeError("wait_for_cancelling_processes: passe a corrotina, não tarefa/Future já criada (ela não herda o escopo)")
+    event = threading.Event()
+    token = _open_scope(event)
+    try:
+        task = asyncio.ensure_future(aw)
+    finally:
+        _SCOPES.reset(token)
+    try:
+        return await asyncio.wait_for(task, timeout)
+    except BaseException:
+        event.set()
         raise
 
 

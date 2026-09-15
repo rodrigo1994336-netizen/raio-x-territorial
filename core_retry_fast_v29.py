@@ -4,6 +4,7 @@ import asyncio
 import time
 
 import deploy_app
+from external_process_lifecycle import wait_for_cancelling_processes
 import report_api as base
 import source_layer_guard as layer_guard
 
@@ -11,7 +12,8 @@ import source_layer_guard as layer_guard
 async def _bounded(label,coro,timeout_s:float):
     t0=time.monotonic()
     try:
-        value=await asyncio.wait_for(coro,timeout=timeout_s)
+        # M1: o prazo que estoura também derruba o curl gerenciado da thread abandonada
+        value=await wait_for_cancelling_processes(coro,timeout_s)
         ms=round((time.monotonic()-t0)*1000)
         print(f'RX_CORE_RETRY={label}:{ms}ms:ok={bool((value or {}).get("ok"))}',flush=True)
         return value

@@ -5,6 +5,7 @@ import asyncio
 import portal_v8
 from anm_resilient import query_anm_curl_exact
 from car_resilient import fetch_car_live_resilient
+from external_process_lifecycle import wait_for_cancelling_processes
 from critical_minerals import query_critical_minerals
 
 app=portal_v8.app
@@ -26,7 +27,7 @@ def _unavailable(code:str,detail:str):
 async def critical_minerals_v34(car_code:str):
     code=car_code.upper()
     try:
-        car=await asyncio.wait_for(asyncio.to_thread(fetch_car_live_resilient,code),timeout=9)
+        car=await wait_for_cancelling_processes(asyncio.to_thread(fetch_car_live_resilient,code),9)
     except Exception as e:
         return _unavailable(code,f'CAR/SICAR lento: {type(e).__name__}')
     if not car.get('ok'):
@@ -34,7 +35,7 @@ async def critical_minerals_v34(car_code:str):
     geom=car.get('geometry');bbox=car.get('bbox') or []
 
     try:
-        anm=await asyncio.wait_for(asyncio.to_thread(query_anm_curl_exact,geom,bbox),timeout=10)
+        anm=await wait_for_cancelling_processes(asyncio.to_thread(query_anm_curl_exact,geom,bbox),10)
     except Exception as e:
         anm={'ok':False,'detail':f'{type(e).__name__}:{str(e)[:160]}','exact':{'available':False,'occurrence_count':None}}
 
