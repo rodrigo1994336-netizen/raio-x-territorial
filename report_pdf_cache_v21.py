@@ -128,6 +128,8 @@ async def report_meta_v21(car_code:str,property_name:str|None=None):
     key,task=_ensure(car_code,property_name or '')
     if task:
         try:result,meta=await task
+        # A lookup answer (404 not located, 503 pending) keeps its status and text.
+        except HTTPException:raise
         except Exception as e:raise HTTPException(status_code=502,detail=f'Falha ao gerar relatório: {type(e).__name__}')
     else:
         st=_CACHE[key];meta=st['meta'];result=await base._analyze_with_live_addons(car_code.upper())
@@ -140,6 +142,7 @@ async def report_pdf_v21(car_code:str,property_name:str|None=None):
     key,task=_ensure(car_code,property_name or '')
     if task:
         try:_,meta=await task
+        except HTTPException:raise
         except Exception as e:raise HTTPException(status_code=502,detail=f'Falha ao gerar relatório: {type(e).__name__}')
     else:meta=_CACHE[key]['meta']
     pdf=Path(str(meta.get('pdf_path') or ''))

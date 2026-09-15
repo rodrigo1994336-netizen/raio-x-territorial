@@ -75,7 +75,8 @@ FULL_READING_UI = r'''
  const ha=v=>{if(window.rxNum&&typeof window.rxNum.ha==='function')return window.rxNum.ha(v);return isNum(v)?v.toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2})+' ha':''};
  const plural=(n,one,many)=>`${int(n)} ${n===1?one:many}`;
  const YES='sim',NO='nao',PEND='pendente',LABEL={sim:'Sim',nao:'Não',pendente:'Consulta pendente'};
- const when=at=>{try{const d=new Date(at);return d.toLocaleDateString('pt-BR')+', '+d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})}catch(e){return ''}};
+ // Date and time of data (INPE bulletin, consultation) in Brasília time, the same hour the PDF prints, whatever the device clock.
+ const when=at=>{const d=new Date(at),f=o=>d.toLocaleDateString('pt-BR',o)+', '+d.toLocaleTimeString('pt-BR',{...o,hour:'2-digit',minute:'2-digit'});try{return f({timeZone:'America/Sao_Paulo'})}catch(e){try{return f({})}catch(x){return ''}}};
  const clock=at=>{try{return new Date(at).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})}catch(e){return ''}};
  // INPE names each 10-minute bulletin by its time in UTC: focos_10min_YYYYMMDD_HHMM.csv
  function bulletin(name){const m=/focos_10min_(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})/.exec(String(name||''));if(!m)return null;const t=Date.UTC(+m[1],+m[2]-1,+m[3],+m[4],+m[5]);return isNum(t)?t:null}

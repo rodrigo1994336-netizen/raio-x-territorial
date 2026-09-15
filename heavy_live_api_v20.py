@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 import report_api
 from car_resilient import fetch_car_live_resilient
+from sicar_lookup_http import lookup_http_error
 from mapbiomas_coverage import query_mapbiomas_coverage
 from terrain_srtm import query_terrain_srtm
 from landuse_profile_v39 import classify_landuse_profile
@@ -18,7 +19,7 @@ app=report_api.app
 async def _car(code:str):
     car=await asyncio.to_thread(fetch_car_live_resilient,code.upper())
     if not car.get('ok'):
-        raise HTTPException(status_code=404 if car.get('not_found') else 502,detail='CAR não localizado ou SICAR indisponível')
+        raise lookup_http_error(car)
     return car
 
 

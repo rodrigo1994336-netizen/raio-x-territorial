@@ -8,6 +8,7 @@ from fastapi import HTTPException
 import report_api as base
 import report_v9_patch as prog
 from car_resilient import fetch_car_live_resilient
+from sicar_lookup_http import lookup_http_error
 
 app=base.app
 
@@ -36,7 +37,7 @@ async def quick_analysis_v24(car_code:str,deep:bool=False):
         except asyncio.TimeoutError:
             raise HTTPException(status_code=504,detail='SICAR demorou além de 6 segundos para confirmar o imóvel.')
         if not car.get('ok'):
-            raise HTTPException(status_code=404 if car.get('not_found') else 502,detail='CAR não localizado ou SICAR temporariamente indisponível.')
+            raise lookup_http_error(car)
         cached={'car':car}
         prog._quick_put(code,cached)
 

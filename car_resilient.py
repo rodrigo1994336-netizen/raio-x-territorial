@@ -5,12 +5,20 @@ import re
 from urllib.parse import urlencode
 
 import deploy_app
+from sicar_lookup_http import PENDING_DETAIL
 
 CAR_RE=re.compile(r'^[A-Z]{2}-\d{7}-[A-F0-9]{32}$',re.I)
 
 
 def _norm(v):
     return str(v or '').strip().upper()
+
+
+def _answered(raw) -> bool:
+    # SICAR answered only when it returned a FeatureCollection: a transport failure, an HTML
+    # error page or a GeoServer exception document (JSON without features) is not an answer.
+    data=raw.get('json') if isinstance(raw,dict) and raw.get('ok') else None
+    return isinstance(data,dict) and isinstance(data.get('features'),list)
 
 
 def _build_result(raw, code, strategy):
@@ -56,6 +64,8 @@ def fetch_car_live_resilient(car_code:str, *, cancel_event=None):
     mun=code[3:10]
     tn=f"sicar:sicar_imoveis_{'DF' if uf=='DF' else uf.lower()}"
     attempts=[]
+    # Absence needs an answer to an exact query; the municipality scan can stop early and never proves it.
+    answered=False
 
     strategies=[
         ('wfs1_equal',{
@@ -94,6 +104,7 @@ def fetch_car_live_resilient(car_code:str, *, cancel_event=None):
             if raw.get('cancelled'):
                 return {'ok':False,'source':'SICAR','cancelled':True,'detail':'request_cancelled','attempts':attempts}
             attempts.append({'strategy':name,'ok':raw.get('ok'),'bytes':raw.get('bytes',0),'detail':raw.get('detail')})
+            answered=answered or _answered(raw)
             result=_build_result(raw,code,name)
             if result:
                 result['attempts']=attempts
@@ -145,8 +156,8 @@ def fetch_car_live_resilient(car_code:str, *, cancel_event=None):
         attempts.append({'strategy':'municipality_scan','ok':False,'detail':f'{type(exc).__name__}:{str(exc)[:180]}'})
 
     return {
-        'ok':False,'source':'SICAR','not_found':True,'feature_count':0,
-        'detail':'CAR não localizado após múltiplas estratégias de consulta SICAR.',
+        'ok':False,'source':'SICAR','not_found':answered,'feature_count':0 if answered else None,
+        'detail':'CAR não localizado após múltiplas estratégias de consulta SICAR.' if answered else PENDING_DETAIL,
         'attempts':attempts,
     }
 

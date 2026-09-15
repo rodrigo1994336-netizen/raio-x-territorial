@@ -18,6 +18,8 @@ import re
 from datetime import datetime, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal
 
+# Brasília time as a fixed UTC-3 offset: Brazil has had no daylight saving time since 2019
+# (Decreto 9.772/2019), and a fixed offset needs no tzdata (absent on Windows).
 BRT = timezone(timedelta(hours=-3))
 
 _UNITS = (
@@ -134,6 +136,16 @@ def _iso_dt(m: re.Match) -> str:
         return m.group(0)
 
 
+def _inpe_bulletin(m: re.Match) -> str:
+    # INPE names each 10-minute fire file by its time in UTC; the client reads Brasília time.
+    y, mo, d, hh, mi = (int(x) for x in m.groups())
+    try:
+        local = datetime(y, mo, d, hh, mi, tzinfo=timezone.utc).astimezone(BRT)
+    except ValueError:
+        return m.group(0)
+    return f"arquivo de 10 minutos de {local.strftime('%d/%m/%Y %H:%M')}"
+
+
 def _iso_d(m: re.Match) -> str:
     y, mo, d = m.groups()
     try:
@@ -158,7 +170,7 @@ def _normalize_segment(out: str) -> str:
     out = re.sub(r"IDE-Sisema(?:[;,]\s*IDE-Sisema)+", "IDE-Sisema", _IDE_LAYER.sub("IDE-Sisema", out))
     for old, new in _PHRASES.items():
         out = out.replace(old, new)
-    out = _INPE_FILE.sub(lambda m: f"arquivo de 10 minutos de {m.group(3)}/{m.group(2)}/{m.group(1)} {m.group(4)}:{m.group(5)}", out)
+    out = _INPE_FILE.sub(_inpe_bulletin, out)
     out = _ISO_DT.sub(_iso_dt, out)
     out = _ISO_D.sub(_iso_d, out)
     out = _COMPACT_D.sub(lambda m: _iso_d(m) if 1 <= int(m.group(2)) <= 12 and 1 <= int(m.group(3)) <= 31 else m.group(0), out)
