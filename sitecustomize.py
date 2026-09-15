@@ -5,6 +5,9 @@ import threading
 import time
 
 IS_PORTAL = os.getenv('RX_RELEASE') == 'V8_OPERATIONAL_ZERO_COST'
+# Cache de blocos do GDAL com teto fixo (MB). Sem isso ele usa 5% da RAM que o contêiner enxerga, que no Render
+# pode ser a do host e não os 512 MB do plano; o T1 (MapBiomas Solo) somou até +75 MB de pico medido em 15/09.
+os.environ.setdefault('GDAL_CACHEMAX', '96')
 CORE_RUNTIME_READY = all(importlib.util.find_spec(name) is not None for name in ('fastapi', 'httpx', 'shapely'))
 
 
