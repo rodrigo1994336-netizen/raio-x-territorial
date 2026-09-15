@@ -36,7 +36,6 @@ a{color:inherit}
 .marca-nome{font-family:var(--serif);font-weight:600;font-size:20px;letter-spacing:.005em;white-space:nowrap}
 .menu{display:flex;align-items:center;gap:6px;flex:1;height:100%}
 .menu a{display:flex;align-items:center;min-height:var(--toque);padding:0 12px;border-radius:8px;text-decoration:none;font-size:16px;color:rgba(246,241,228,.82)}
-.menu a:hover{color:var(--creme);background:rgba(246,241,228,.08)}
 .menu a[aria-current="page"]{color:var(--creme);box-shadow:inset 0 -2px 0 var(--creme);border-radius:0}
 .menu .entrar{margin-left:auto;border:1px solid rgba(246,241,228,.45);border-radius:10px;padding:0 18px;color:var(--creme)}
 .menu .entrar[aria-current="page"]{box-shadow:none;background:rgba(246,241,228,.14)}
@@ -61,7 +60,7 @@ body.medindo .leaflet-container,body.medindo .leaflet-interactive{cursor:crossha
 .sugestoes{list-style:none;margin:6px 0 0;padding:6px;background:var(--papel);border:1px solid var(--fio);border-radius:12px;box-shadow:var(--sombra)}
 .sugestoes li{display:flex;align-items:center;gap:4px;min-height:var(--toque);padding:0 10px;border-radius:8px;cursor:pointer}
 .sugestoes li span{color:var(--tinta-2)}
-.sugestoes li:hover,.sugestoes li[aria-selected="true"]{background:var(--linho)}
+.sugestoes li[aria-selected="true"]{background:var(--linho)}
 .situacao{display:flex;align-items:center;flex-wrap:wrap;gap:4px 10px;margin:8px 0 0;padding:8px 12px;background:rgba(251,248,241,.94);border-radius:10px;font-size:14px;line-height:1.35;color:var(--tinta-2);box-shadow:0 4px 16px rgba(12,28,20,.22)}
 .situacao .pendente,.situacao .vazio{color:var(--tinta)}
 .link{min-height:var(--toque);padding:0 4px;border:0;background:none;color:var(--verde);font-weight:600;text-decoration:underline;text-underline-offset:3px}
@@ -71,24 +70,26 @@ body.medindo .leaflet-container,body.medindo .leaflet-interactive{cursor:crossha
 .ferramentas-fio{height:1px;background:var(--fio);margin:0 8px}
 .icone{display:inline-flex;align-items:center;justify-content:center;width:var(--toque);height:var(--toque);flex:none;padding:0;border:0;border-radius:10px;background:transparent;color:var(--tinta)}
 .ferramentas .icone{width:48px;height:46px;border-radius:0}
-.icone:hover{background:var(--linho)}
 .ferramentas .icone[aria-pressed="true"]{background:var(--verde);color:var(--creme)}
 .ferramentas .icone:focus-visible{outline-offset:-3px}
 
 /* ---------------------------------------------------------------- medida */
-.medida{position:absolute;z-index:950;left:50%;bottom:22px;transform:translateX(-50%);width:min(380px,calc(100% - 28px));padding:14px 16px;background:var(--papel);border:1px solid var(--fio);border-radius:14px;box-shadow:var(--sombra)}
+.medida{position:absolute;z-index:1050;left:50%;bottom:22px;transform:translateX(-50%);width:min(380px,calc(100% - 28px));padding:14px 16px;background:var(--papel);border:1px solid var(--fio);border-radius:14px;box-shadow:var(--sombra)}
 .medida-valor{display:flex;flex-wrap:wrap;gap:4px 18px;margin:0;font-size:16px}
 .medida-valor b{font-family:var(--serif);font-weight:600;font-size:22px}
 .medida-dica{color:var(--tinta-2)}
 .medida-nota{margin:6px 0 12px;font-size:13px;color:var(--tinta-2)}
 .medida-acoes{display:grid;grid-template-columns:1fr 1fr 1.2fr;gap:8px}
+.medida-acoes-feita{display:none;grid-template-columns:1fr 1fr;gap:8px}
+.medida.feita .medida-acoes{display:none}
+.medida.feita .medida-acoes-feita{display:grid}
+/* A finished measure steps aside while a bottom-sheet card is open (the drawing stays on the map). */
+body.cartao-folha .medida.feita{display:none}
 
 /* ---------------------------------------------------------------- botões */
 .botao{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:var(--toque);padding:0 14px;border-radius:10px;font-size:15px;font-weight:600;text-decoration:none;white-space:nowrap}
 .botao.principal{background:var(--verde);border:1px solid var(--verde);color:var(--creme)}
-.botao.principal:hover{background:var(--verde-escuro)}
 .botao.secundario{background:transparent;border:1px solid var(--fio);color:var(--tinta)}
-.botao.secundario:hover{background:var(--linho)}
 .botao:disabled{opacity:.45;cursor:default}
 
 /* ---------------------------------------------------------------- cartão */
@@ -102,6 +103,8 @@ body.medindo .leaflet-container,body.medindo .leaflet-interactive{cursor:crossha
 .cartao-topo{display:flex;align-items:flex-start;gap:6px}
 .placa{flex:1;min-width:0;margin:2px 0 0;font-family:var(--serif);font-weight:600;color:var(--tinta);line-height:1.12;letter-spacing:0}
 .placa span{display:block;overflow-wrap:anywhere}
+/* The card title receives focus after a selection (keyboard and screen readers start there); it is not a control, so no ring. */
+.placa[tabindex="-1"]:focus{outline:0}
 .placa span:first-child{font-size:24px}
 .placa span+span{font-size:16px;margin-top:3px;letter-spacing:0}
 .placa.com-nome span{font-size:23px}
@@ -119,6 +122,22 @@ body.medindo .leaflet-container,body.medindo .leaflet-interactive{cursor:crossha
 .cartao>.principal{width:100%;min-height:48px;font-size:16px}
 .acoes{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}
 .acoes .ico{width:19px;height:19px}
+.oficial{display:flex;align-items:center;justify-content:center;min-height:var(--toque);margin-top:4px;font-size:14.5px;font-weight:600;color:var(--verde);text-decoration:underline;text-underline-offset:3px}
+/* Bottom sheet: phone, short screen (phone lying down) or a card taller than the map. It scrolls, so no button is out of reach. */
+.cartao.folha{left:0;right:0;bottom:0;top:auto!important;width:auto;max-height:66%;overflow:auto;overscroll-behavior:contain;border-radius:18px 18px 0 0;border-bottom:0;padding:8px 16px 14px;box-shadow:0 -10px 34px rgba(12,28,20,.3)}
+.cartao.folha .campos{grid-template-columns:1fr 1fr 1fr;gap:8px 12px;margin-bottom:12px;padding-top:10px}
+.cartao.folha .campo dd{font-size:15px}
+.cartao.folha::before{content:"";display:block;width:40px;height:4px;margin:0 auto 10px;border-radius:2px;background:var(--fio)}
+/* Wide but short (phone lying down) or a card taller than the map: the card becomes a side panel on the left, like the
+   reading, and the search moves beside it. The main button stays in view while the panel scrolls. */
+@media (min-width:640px){
+  .cartao.folha{left:0;right:auto;top:0!important;bottom:0;width:360px;max-height:none;border-radius:0;border:0;border-right:1px solid var(--fio);padding:10px 14px 0 16px;box-shadow:12px 0 40px rgba(12,28,20,.28)}
+  .cartao.folha::before{display:none}
+  .cartao.folha .campos{grid-template-columns:1fr 1fr}
+  .cartao.folha>.principal{position:sticky;bottom:10px;z-index:1;box-shadow:0 10px 0 var(--papel),0 -6px 14px rgba(251,248,241,.9)}
+  .cartao.folha>.oficial{margin-bottom:10px}
+  body.cartao-folha .busca{left:374px;width:calc(100% - 374px - 76px)}
+}
 
 /* ---------------------------------------------------------------- Raio-X em uma olhada */
 .leitura{position:absolute;z-index:1100;top:0;left:0;bottom:0;width:470px;overflow:auto;overscroll-behavior:contain;background:var(--papel);border-right:1px solid var(--fio);box-shadow:12px 0 40px rgba(12,28,20,.28)}
@@ -132,7 +151,6 @@ body.medindo .leaflet-container,body.medindo .leaflet-interactive{cursor:crossha
 .perguntas{list-style:none;margin:0;padding:0;border-bottom:1px solid var(--fio)}
 .pergunta{border-top:1px solid var(--fio)}
 .pergunta-botao{display:grid;grid-template-columns:18px minmax(0,1fr) 24px;gap:14px;align-items:start;width:100%;min-height:var(--toque);padding:16px 18px 16px 22px;border:0;background:transparent;text-align:left}
-.pergunta-botao:hover{background:var(--linho)}
 .pergunta-botao:focus-visible{outline-offset:-3px}
 .pergunta-botao>.ico{margin-top:2px;color:var(--tinta-2);transition:transform .15s}
 .pergunta.aberta .pergunta-botao>.ico{transform:rotate(180deg)}
@@ -195,10 +213,6 @@ body.medindo .leaflet-container,body.medindo .leaflet-interactive{cursor:crossha
   .busca-campo{height:48px}
   .ferramentas{top:10px;right:10px}
   .ferramentas .icone{width:48px;height:44px}
-  .cartao.folha{left:0;right:0;bottom:0;top:auto!important;width:auto;max-height:66%;overflow:auto;overscroll-behavior:contain;border-radius:18px 18px 0 0;border-bottom:0;padding:8px 16px 14px;box-shadow:0 -10px 34px rgba(12,28,20,.3)}
-  .cartao.folha .campos{grid-template-columns:1fr 1fr 1fr;gap:8px 12px;margin-bottom:12px;padding-top:10px}
-  .cartao.folha .campo dd{font-size:15px}
-  .cartao.folha::before{content:"";display:block;width:40px;height:4px;margin:0 auto 10px;border-radius:2px;background:var(--fio)}
   .cartao .placa span:first-child{font-size:22px}
   .cartao .placa span+span{font-size:15.5px}
   .leitura{position:absolute;inset:0;width:auto;border-right:0;box-shadow:none}
@@ -210,10 +224,28 @@ body.medindo .leaflet-container,body.medindo .leaflet-interactive{cursor:crossha
   .esqueleto{padding-left:18px;gap:12px}
   .detalhe{padding:0 16px 14px 48px}
   .medida{bottom:12px}
-  body.com-cartao .medida{display:none}
   .pagina{padding-top:8vh}
   .pagina h1{font-size:36px}
   .pagina p{font-size:17.5px}
+}
+/* ---------------------------------------------------------------- tela baixa (celular deitado) */
+@media (max-height:520px) and (min-width:640px){
+  .medida{left:14px;transform:none;bottom:10px;width:min(660px,calc(100% - 100px));padding:8px 10px 8px 14px;display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:12px;align-items:center}
+  .medida-valor{grid-column:1;font-size:15px}
+  .medida-valor b{font-size:19px}
+  .medida-nota{grid-column:1;margin:1px 0 0;font-size:12.5px;line-height:1.3}
+  .medida-acoes,.medida-acoes-feita{grid-column:2;grid-row:1/span 2}
+  .medida-acoes{grid-template-columns:auto auto auto}
+  .medida-acoes-feita{grid-template-columns:auto auto}
+}
+/* Hover only where there is a mouse: on a phone the colour would stick to whatever was tapped last. */
+@media (hover:hover){
+  .menu a:hover{color:var(--creme);background:rgba(246,241,228,.08)}
+  .icone:hover{background:var(--linho)}
+  .botao.principal:hover{background:var(--verde-escuro)}
+  .botao.secundario:hover{background:var(--linho)}
+  .pergunta-botao:hover{background:var(--linho)}
+  .sugestoes li:hover{background:var(--linho)}
 }
 @media (prefers-reduced-motion:reduce){
   .cartao.entra,.barra,.gira{animation:none}

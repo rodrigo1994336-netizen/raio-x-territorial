@@ -19,9 +19,16 @@ Confere, no módulo real ``tela_nova_o2`` montado num app FastAPI vazio (sem o p
   R_FOCO     foco visível.
   R_FONTES   as três fontes OFL são os arquivos oficiais (SHA256SUMS) e as licenças estão junto.
   R_ENDPOINTS o JS usa os endpoints do portal, e cada um existe no repositório.
+  R_SICAR    o cartão tem o link "Consultar no SICAR (site oficial)" para a Consulta Pública oficial.
+  R_CSS      o app.css fecha cada chave que abre (uma chave solta faz o navegador jogar fora a regra seguinte inteira).
   N_*        regras puras do app.js rodadas no node com respostas montadas aqui: "Sim"/"Não" só com resposta,
              corte no teto com zero é pendente, achado vale mesmo com outra fonte pendente, pendente + nada nunca
-             vira "Não", IDE-Sisema só em MG, título só com nome validado, números pt-BR, busca, junção.
+             vira "Não", IDE-Sisema só em MG, título só com nome validado, números pt-BR, busca, junção; base que não veio
+             na resposta é pendente (nunca some da conta do "Não"); código do CAR copiado de PDF e coordenada em graus;
+             "nenhum registro" de água diz na própria resposta que não é falta de água.
+
+O comportamento na tela (leitura de outro imóvel, pendente que tenta sozinha, Voltar, celular deitado, medida) fica no
+scripts/o2_tela_nova_browser_gate.py, que roda num Chromium de verdade.
 
 Controle positivo: cada regra recebe um mutante que ela TEM de pegar (e o motivo da falha é conferido pelo id
 da regra). Mutante que passa derruba o gate.
@@ -60,7 +67,7 @@ M2 = re.compile(r"m²|m&sup2;|\bm2\b|area_m2|metros quadrados", re.I)
 PESSOA = re.compile(r"\bCPF\b|\bCNPJ\b|cpf_cnpj|autuad|titular|propriet[aá]ri|sample_properties|\bnearest\b|\d{3}\.\d{3}\.\d{3}-\d{2}|\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}", re.I)
 INTERNOS = re.compile(r"RISCO NÃO CLASSIFICADO|SISTEMA LIVE|NÃO CONSULTADA|INDISPONÍVEL|PREPARADO|BACKEND|not_classified|probable_impediment|diligence|sem pendências|Em acordo|\.risk\b")
 CORES = re.compile(r"#63e6a5|#48d995|#ff756f|#ff927a|#f5c96a|\bred\b|#f00\b|#ff0000", re.I)
-INTERACTIVE_RULES = (".icone{", ".ferramentas .icone{", ".botao{", ".sugestoes li{", ".pergunta-botao{", ".abas a{", ".link{", ".menu a{", ".marca{")
+INTERACTIVE_RULES = (".icone{", ".ferramentas .icone{", ".botao{", ".sugestoes li{", ".pergunta-botao{", ".abas a{", ".link{", ".menu a{", ".marca{", ".oficial{")
 ENDPOINTS = {
     "/v1/live/sicar/viewport-v46": "portal_map_v46.py",
     "/v1/live/car/": "deploy_app.py",
@@ -78,7 +85,20 @@ ENDPOINTS = {
 def static_rules(files: dict[str, str]) -> dict[str, list[str]]:
     """files: {'app.js', 'app.css', 'index.html', 'module'} -> {rule: [problems]} (empty list = passes)."""
     js, css, html, mod = files["app.js"], files["app.css"], files["index.html"], files["module"]
-    out: dict[str, list[str]] = {k: [] for k in ("R_MAPA", "R_M2", "R_PESSOA", "R_INTERNOS", "R_CORES", "R_TOQUE", "R_FOCO", "R_INLINE", "R_ISOLADO", "R_ENDPOINTS")}
+    out: dict[str, list[str]] = {k: [] for k in ("R_MAPA", "R_M2", "R_PESSOA", "R_INTERNOS", "R_CORES", "R_TOQUE", "R_FOCO", "R_INLINE", "R_ISOLADO", "R_ENDPOINTS", "R_SICAR", "R_CSS")}
+    depth = 0
+    for n, line in enumerate(re.sub(r"/\*.*?\*/", lambda m: "\n" * m.group(0).count("\n"), css, flags=re.S).split("\n"), 1):
+        for ch in line:
+            depth += (ch == "{") - (ch == "}")
+            if depth < 0:
+                out["R_CSS"].append(f"app.css line {n}: closing brace without an opening one")
+                depth = 0
+    if depth:
+        out["R_CSS"].append(f"app.css ends with {depth} unclosed brace(s)")
+    if not re.search(r'href="https://consulta\.car\.gov\.br/"[^>]*>Consultar no SICAR \(site oficial\)</a>', js):
+        out["R_SICAR"].append("card without the official SICAR link")
+    if ".oficial{" in css and not re.search(r"\.oficial\{[^}]*min-height:var\(--toque\)", css):
+        out["R_TOQUE"].append(".oficial{ without var(--toque)")
     for name, text in (("app.js", js), ("app.css", css), ("index.html", html)):
         out["R_MAPA"] += [f"{name}: {m.group(0)}" for m in TOOLTIP.finditer(text)]
         out["R_M2"] += [f"{name}: {m.group(0)}" for m in M2.finditer(text)]
@@ -231,6 +251,20 @@ t('N17_pending_plus_none_never_nao', () => { const a = clean(); a.territorial_co
 t('N18_all_water_pending_is_pending', () => { const a = clean(); a.water_mg = { ok: false }; a.pivots_ana = { ok: false }; return row(a, 'agua').seal === 'pendente' || row(a, 'agua').seal; });
 t('N19_view_param', () => { const v = R.parseView('-18.89126,-44.18186,16'); return (v && v.z === 16 && R.parseView('x') === null && R.parseView('-91,0,5') === null) || JSON.stringify(v); });
 t('N20_cells_match_server_grid', () => { const k = R.cellKeys(0.04, -44.2, -18.92, -44.16, -18.88); return (k.length === 1 && k[0] === '0.04:-1105:-473' && R.stepFor(-44.3, -19, -44.1, -18.8, 0) === 0.08) || JSON.stringify([k, R.stepFor(-44.3, -19, -44.1, -18.8, 0)]); });
+t('N22_missing_base_is_pending', () => {
+  const a = clean(); delete a.territorial_constraints.services.floresta_publica;
+  const b = clean(); delete b.territorial_constraints.services.embargo_icmbio;
+  const ra = row(a, 'protegida'), rb = row(b, 'embargo');
+  return (ra.seal === 'pendente' && !/^Não/.test(ra.lead) && rb.seal === 'pendente' && !/^Não/.test(rb.lead)) || JSON.stringify([ra.seal, ra.lead, rb.seal, rb.lead]);
+});
+t('N23_search_pdf_code_and_dms', () => {
+  const a = R.parseQuery('MG 3120904 DFB380BECD7A4323AD8AA68FA14D011F'), b = R.parseQuery('mg3120904dfb380becd7a4323ad8aa68fa14d011f'), c = R.parseQuery("18°53'28\"S 44°10'54\"W"), d = R.parseQuery('Três Marias');
+  return (a.kind === 'car' && a.code === car.cod_imovel && b.kind === 'car' && b.code === car.cod_imovel && c.kind === 'coord-dms' && d.kind === 'city') || JSON.stringify([a, b, c, d]);
+});
+t('N24_water_none_says_not_lack_of_water', () => {
+  const r = row(clean(), 'agua'); const a = clean(); a.water_mg.inside_count = 2; const r2 = row(a, 'agua');
+  return (r.q === 'Tem uso de água registrado?' && /não quer dizer que falta água/.test(r.lead) && !/não quer dizer que falta água/.test(r2.lead) && r2.details.some(x => /não quer dizer que falta água/.test(x))) || JSON.stringify([r, r2]);
+});
 t('N21_measure_area', () => { const sq = [{ lat: 0, lng: 0 }, { lat: 0, lng: 0.01 }, { lat: 0.01, lng: 0.01 }, { lat: 0.01, lng: 0 }]; const a = R.geodesicArea(sq) / 10000; return (a > 123 && a < 124) || a; });
 process.stdout.write(JSON.stringify(out));
 """
@@ -371,6 +405,12 @@ def main() -> int:
         ("N11_title_only_validated", "unvalidated name as title", {"app.js": sub(js, "p.validated_name_state === 'validated' && p.panel_name_eligible === true ?", "p.validated_name ?")}),
         ("N13_ptbr_numbers", "en-US numbers", {"app.js": sub(js, "return n.toLocaleString('pt-BR', { minimumFractionDigits: digits, maximumFractionDigits: digits });", "return n.toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits });")}),
         ("N16_merge_keeps_answers", "later pending replaces answer", {"app.js": sub(js, "if (r.seal === PEND && n && n.seal !== PEND) { changed = true; return n; }", "if (n) { changed = true; return n; }")}),
+        ("R_CSS", "stray closing brace", {"app.css": sub(css, ".oficial{display:flex;", "}\n.oficial{display:flex;")}),
+        ("R_SICAR", "official link removed", {"app.js": sub(js, ">Consultar no SICAR (site oficial)</a>", ">SICAR</a>")}),
+        ("R_TOQUE", "small official link", {"app.css": sub(css, ".oficial{display:flex;align-items:center;justify-content:center;min-height:var(--toque);", ".oficial{display:flex;align-items:center;justify-content:center;min-height:30px;")}),
+        ("N22_missing_base_is_pending", "missing base left out", {"app.js": sub(js, "    if (!s || typeof s !== 'object') return { label: label, state: PEND };", "    if (!s || typeof s !== 'object') return null;")}),
+        ("N23_search_pdf_code_and_dms", "PDF code and DMS not understood", {"app.js": sub(sub(js, "    if (bare) return { kind: 'car', code: bare[1] + '-' + bare[2] + '-' + bare[3] };\n", ""), "    if (/[°º'\"′″]/.test(raw) && /\\d/.test(raw)) return { kind: 'coord-dms' };\n", "")}),
+        ("N24_water_none_says_not_lack_of_water", "caveat hidden in the detail", {"app.js": sub(js, "row.lead = said.join(' ') + (found ? '' : ' ' + caveat);", "row.lead = said.join(' ');")}),
         ("N15_answer_words_and_seals", "seal on declaration", {"app.js": sub(js, "var f = fact || {}, row = { id: 'car', q: 'O que o CAR declara?', seal: null,", "var f = fact || {}, row = { id: 'car', q: 'O que o CAR declara?', seal: 'sim',")}),
     ]
     for rule, label, change in mutants:

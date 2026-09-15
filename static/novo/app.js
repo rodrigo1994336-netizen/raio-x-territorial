@@ -34,13 +34,16 @@
       return new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', year: 'numeric' }).format(new Date(t));
     } catch (e) { return ''; }
   }
+  // Every time on this screen is Brasília time (the SICAR and the engine dates too), whatever the device zone.
+  function hour(t) {
+    if (!isNum(t)) return '';
+    try { return new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit' }).format(new Date(t)); } catch (e) { return ''; }
+  }
   function dateTime(t) {
     if (!isNum(t)) return '';
     try {
-      var d = new Date(t);
-      var day = new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', year: 'numeric' }).format(d);
-      var hour = new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit' }).format(d);
-      return day + ', às ' + hour;
+      var day = new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', year: 'numeric' }).format(new Date(t));
+      return day + ', às ' + hour(t);
     } catch (e) { return ''; }
   }
   function ymd(s) { var m = /^(\d{4})(\d{2})(\d{2})$/.exec(String(s || '')); return m ? m[3] + '/' + m[2] + '/' + m[1] : ''; }
@@ -101,7 +104,11 @@
     if (!raw) return { kind: 'empty' };
     var compact = raw.replace(/\s+/g, '').toUpperCase();
     if (CAR_RE.test(compact)) return { kind: 'car', code: compact };
+    // Copied from a PDF: "MG 3120904 DFB380..." or without separators -> the same code.
+    var bare = /^([A-Z]{2})[\s\-._/]*(\d{7})[\s\-._/]*([0-9A-F]{32})$/.exec(raw.toUpperCase());
+    if (bare) return { kind: 'car', code: bare[1] + '-' + bare[2] + '-' + bare[3] };
     if (/^[A-Z]{2}-\d{7}-?[0-9A-F]*$/.test(compact)) return { kind: 'car-partial' };
+    if (/[°º'"′″]/.test(raw) && /\d/.test(raw)) return { kind: 'coord-dms' };
     // "-18.8912, -44.1819" (decimal point, comma or semicolon between) or "-18,8912 -44,1819" (decimal comma, space or semicolon between)
     var m = /^(-?\d{1,3}(?:\.\d+)?)\s*[,;]\s*(-?\d{1,3}(?:\.\d+)?)$/.exec(raw) || /^(-?\d{1,3}(?:[.,]\d+)?)\s*(?:;|\s)\s*(-?\d{1,3}(?:[.,]\d+)?)$/.exec(raw);
     if (m) {
@@ -158,6 +165,7 @@
   // ---------------------------------------------------------- Raio-X em uma olhada (puro)
   var SIM = 'sim', NAO = 'nao', PEND = 'pendente';
   var ANSWER = { sim: 'Sim', nao: 'Não', pendente: 'Consulta pendente' };
+  var QUESTIONS = ['Tem desmatamento registrado?', 'Tem embargo ou auto de infração no local?', 'Está em área protegida ou tem mineração?', 'O que o CAR declara?', 'Tem uso de água registrado?', 'Como é a terra e o clima?'];
   function exactPart(obj, label) {
     if (!obj || typeof obj !== 'object') return { label: label, state: PEND };
     var ex = obj.exact || {}, n = ex.occurrence_count;
@@ -175,7 +183,8 @@
   function servicePart(services, key, label) {
     if (!services || typeof services !== 'object') return { label: label, state: PEND };
     var s = services[key];
-    if (!s || typeof s !== 'object') return null;
+    // A base missing from the answer was not consulted: pending, never left out of a "Não".
+    if (!s || typeof s !== 'object') return { label: label, state: PEND };
     var n = s.occurrence_count;
     if (s.ok === true && isNum(n) && n >= 0) return { label: label, state: n > 0 ? SIM : NAO, n: n, ha: isNum(s.area_unique_ha) ? s.area_unique_ha : null };
     return { label: label, state: PEND };
@@ -296,11 +305,12 @@
 
     // 5 - água (sem selo: falta de autorização registrada não é falta de água)
     (function () {
-      var row = { id: 'agua', q: 'Tem água?', seal: null, lead: '', details: [], source: '', when: when }, said = [], src = [];
+      var row = { id: 'agua', q: QUESTIONS[4], seal: null, lead: '', details: [], source: '', when: when }, said = [], src = [], found = false;
       var w = a.water_mg, outside = w && /outside_source_coverage|não aplicável/i.test(String(w.detail || ''));
       if (w && typeof w === 'object' && !outside) {
         var n = w.inside_count;
         if (w.ok === true && isNum(n) && n >= 0) {
+          if (n > 0) found = true;
           said.push(n > 0 ? 'Há ' + plural(n, 'outorga', 'outorgas') + ' de uso de água com ponto dentro do imóvel.' : 'Outorga de uso de água com ponto dentro do imóvel: nenhuma no cadastro consultado.');
           src.push('IGAM e ANA');
         } else row.details.push('Outorgas de uso de água: consulta pendente.');
@@ -310,13 +320,16 @@
         var k = pv.intersection_count, partial = isNum(pv.parsed_feature_count) && isNum(pv.feature_count_bbox) && pv.parsed_feature_count < pv.feature_count_bbox;
         var yr = isNum(pv.reference_year) ? ' no mapeamento da ANA de ' + pv.reference_year : ' no mapeamento da ANA';
         if (pv.ok === true && isNum(k) && k >= 0 && !(partial && k === 0)) {
+          if (k > 0) found = true;
           said.push(k > 0 ? plural(k, 'pivô central de irrigação', 'pivôs centrais de irrigação') + ' no imóvel' + (pv.intersection_area_unique_ha > 0 ? ', ' + ha(pv.intersection_area_unique_ha) : '') + yr + '.' : 'Pivô central de irrigação:' + ' nenhum' + yr + '.');
           src.push('ANA');
         } else row.details.push('Pivôs centrais: consulta pendente.');
       }
       if (said.length) {
-        row.lead = said.join(' ');
-        row.details.unshift('Não ter autorização registrada não quer dizer que falta água no imóvel.');
+        // "Nenhum registro" must never read as "no water": the caveat goes in the answer itself, not hidden in the detail.
+        var caveat = 'Não ter registro não quer dizer que falta água no imóvel.';
+        row.lead = said.join(' ') + (found ? '' : ' ' + caveat);
+        if (found) row.details.unshift(caveat);
       } else { row.seal = PEND; row.lead = 'Consulta pendente. As bases de água não responderam nesta consulta.'; }
       row.source = src.indexOf('IGAM e ANA') >= 0 ? 'IGAM e ANA' : (src[0] || 'IGAM e ANA');
       rows.push(row);
@@ -381,7 +394,8 @@
   var API = {
     CAR_RE: CAR_RE, num: num, ha: ha, int: int, date: date, modulos: modulos, facts: facts, identity: identity,
     parseQuery: parseQuery, parseView: parseView, viewParam: viewParam, stepFor: stepFor, cellKeys: cellKeys,
-    geodesicArea: geodesicArea, distanceText: distanceText, glance: glance, mergeRows: mergeRows, hasPending: hasPending, ANSWER: ANSWER
+    geodesicArea: geodesicArea, distanceText: distanceText, glance: glance, mergeRows: mergeRows, hasPending: hasPending, ANSWER: ANSWER,
+    QUESTIONS: QUESTIONS, hour: hour
   };
   root.RXO2 = API;
   if (typeof document === 'undefined' || typeof root.L === 'undefined') return;
@@ -393,7 +407,9 @@
   var M = root.RXO2_METRICS = { start: performance.now() };
   function mark(name) { if (M[name] === undefined) { M[name] = Math.round(performance.now()); try { performance.mark('rx:' + name); } catch (e) {} } }
   var sleep = function (ms) { return new Promise(function (r) { setTimeout(r, ms); }); };
-  var narrow = function () { return root.matchMedia('(max-width: 639px)').matches; };
+  // phone: the reading covers the whole map. sheetScreen: the card is a bottom sheet (phone, or a short screen such as a phone lying down).
+  var phone = function () { return root.matchMedia('(max-width: 639px)').matches; };
+  var sheetScreen = function () { return root.matchMedia('(max-width: 639px), (max-height: 520px)').matches; };
 
   var ICON = function (id) { return '<svg class="ico" aria-hidden="true" focusable="false"><use href="#i-' + id + '"></use></svg>'; };
 
@@ -454,7 +470,8 @@
   var renderer = L.canvas({ pane: 'imoveis', padding: 0.5, tolerance: root.matchMedia('(pointer: coarse)').matches ? 6 : 2 });
   var parcelLayer = L.layerGroup().addTo(map);
   var selLayer = L.layerGroup().addTo(map);
-  var PARCEL = { color: '#F6F1E4', weight: 1.2, opacity: 0.85, fillColor: '#F6F1E4', fillOpacity: 0.07 };
+  // Property outlines in a colour the reference layer never uses (its borders are white/grey), so a border is never read as a property.
+  var PARCEL = { color: '#E3F25C', weight: 1.3, opacity: 0.95, fillColor: '#E3F25C', fillOpacity: 0.14 };
 
   // ---- parcels by cell (one request per cell, center first, 6 at a time, one retry)
   var G = { step: 0, box: null, cells: new Map(), parcelCells: new Map(), index: new Map(), queue: [], active: 0, epoch: 0 };
@@ -575,7 +592,19 @@
   }
 
   // ---- state
-  var S = { page: body.dataset.route === 'imovel' ? 'mapa' : (body.dataset.route || 'mapa'), sel: null, measuring: false, pts: [], panelFlight: new Map(), reading: new Map() };
+  var S = { page: body.dataset.route === 'imovel' ? 'mapa' : (body.dataset.route || 'mapa'), sel: null, measure: 'off', pts: [], panelFlight: new Map(), reading: new Map(), known: new Map(), wantCar: null };
+
+  // ---- history: the phone Back button closes the reading, then the card, and only then leaves the site.
+  // Each map entry carries {layer: 'mapa' | 'cartao' | 'leitura', car, pushed}; pushed = there is an entry of ours below it.
+  function hstate() { var s = history.state; return s && typeof s === 'object' ? s : {}; }
+  function remember(layer, code, mode) {
+    if (S.page !== 'mapa') return;
+    var cur = hstate(), c = map.getCenter();
+    var st = { page: 'mapa', layer: layer, car: code || null, pushed: mode === 'push' ? true : (layer === 'mapa' ? false : !!cur.pushed) };
+    var u = (code ? '/novo/imovel/' + code : '/novo') + '?v=' + viewParam(c.lat, c.lng, map.getZoom());
+    if (mode === 'push') history.pushState(st, '', u); else history.replaceState(st, '', u);
+    doc.title = code ? code + ' · Raio-X Territorial' : 'Raio-X Territorial';
+  }
 
   // ---- selection and card
   function selectionStyle(g) {
@@ -595,33 +624,54 @@
     }
     return p;
   }
+  // opts.history: 'push' (the person chose it on the map or in the search), 'replace' (opened by a link), 'none' (Back/Forward).
   function select(props, geometry, opts) {
     opts = opts || {};
     var f = facts(props);
     if (!f.code) return;
-    closeMeasure();
+    carSeq++; // a property link still loading never replaces what the person chose afterwards
+    var readingOpen = !$('#leitura').hidden;
+    if (readingOpen && S.sel && S.sel.code === f.code) return;
+    if (S.measure === 'on') finishMeasure();
+    // The reading on screen belongs to the property it was opened for: another property closes it and shows its own card.
+    if (readingOpen) closeReading(true);
+    S.wantCar = null;
+    // A CAR code left in the search box from another property would read as this one's.
+    var box = $('#q'), typed = box.value.replace(/\s+/g, '').toUpperCase();
+    if (CAR_RE.test(typed) && typed !== f.code) box.value = '';
     S.sel = { code: f.code, props: props || {}, geometry: geometry || null, panel: null, at: Date.now() };
+    S.known.set(f.code, { props: props || {}, geometry: geometry || null });
+    if (S.known.size > 40) S.known.delete(S.known.keys().next().value);
     selectionStyle(geometry);
-    setUrl('/novo/imovel/' + f.code);
+    if (opts.history === 'push') { var cur = hstate().layer; remember('cartao', f.code, cur === 'cartao' || cur === 'leitura' ? 'replace' : 'push'); }
+    else if (opts.history === 'replace') remember('cartao', f.code, 'replace');
+    else doc.title = f.code + ' · Raio-X Territorial';
     renderCard();
     if (opts.fit && geometry) fitSelection(opts.animate);
+    if (opts.history === 'push') { var t = $('#cartaoTitulo'); if (t && !$('#cartao').hidden) t.focus({ preventScroll: true }); }
     mark('cartao');
     panelOnce(f.code).then(function (r) {
       if (!S.sel || S.sel.code !== f.code || !(r.ok && r.data && r.data.ok === true && String(r.data.car_code || '').toUpperCase() === f.code)) return;
       S.sel.panel = r.data;
       if (!S.sel.geometry && r.data.geometry) { S.sel.geometry = r.data.geometry; selectionStyle(r.data.geometry); }
+      var focused = doc.activeElement && doc.activeElement.id === 'cartaoTitulo';
       renderCard(true);
-      if (!$('#leitura').hidden) renderReadingHead();
+      if (focused) { var t2 = $('#cartaoTitulo'); if (t2) t2.focus({ preventScroll: true }); }
+      if (!$('#leitura').hidden) { renderReadingHead(); renderReading(); }
     });
     wakeLater();
   }
   function fitSelection(animate) {
     if (!S.sel || !S.sel.geometry) return;
-    var b = L.geoJSON(S.sel.geometry).getBounds(), size = map.getSize();
+    var b = L.geoJSON(S.sel.geometry).getBounds(), size = map.getSize(), card = $('#cartao');
     var readingOpen = !$('#leitura').hidden;
-    var opt = narrow()
-      ? { paddingTopLeft: [24, 76], paddingBottomRight: [24, readingOpen ? 40 : Math.min(size.y * 0.7, ($('#cartao').offsetHeight || 380) + 20)], maxZoom: 17 }
-      : { paddingTopLeft: [readingOpen ? 480 : 60, 90], paddingBottomRight: [readingOpen ? 80 : Math.min(420, size.x * 0.4), 60], maxZoom: 17 };
+    if (readingOpen && phone()) return;
+    var sheet = !readingOpen && (sheetScreen() || card.classList.contains('folha'));
+    var opt = sheet && phone()
+      ? { paddingTopLeft: [24, 70], paddingBottomRight: [24, Math.min(size.y * 0.6, (card.offsetHeight || 380) + 16)], maxZoom: 17 }
+      : sheet
+      ? { paddingTopLeft: [(card.offsetWidth || 360) + 24, 70], paddingBottomRight: [70, 16], maxZoom: 17 }
+      : { paddingTopLeft: [readingOpen ? Math.min(480, size.x * 0.6) : 60, 90], paddingBottomRight: [readingOpen ? 80 : Math.min(420, size.x * 0.4), 60], maxZoom: 17 };
     opt.animate = animate !== false;
     map.fitBounds(b, opt);
   }
@@ -630,11 +680,12 @@
     return '<div class="campo"><dt>' + esc(label) + '</dt><dd>' + esc(value) + (note ? '<span class="nota">' + esc(note) + '</span>' : '') + '</dd></div>';
   }
   function plate(id, cls) {
-    return '<h2 class="placa ' + (cls || '') + (id.named ? ' com-nome' : '') + '" id="' + (cls === 'placa-leitura' ? 'leituraTitulo' : 'cartaoTitulo') + '">' + id.lines.map(function (l) { return '<span>' + esc(l) + '</span>'; }).join('') + '</h2>';
+    var reading = cls === 'placa-leitura';
+    return '<h2 class="placa ' + (cls || '') + (id.named ? ' com-nome' : '') + '" id="' + (reading ? 'leituraTitulo' : 'cartaoTitulo') + '"' + (reading ? '' : ' tabindex="-1"') + '>' + id.lines.map(function (l) { return '<span>' + esc(l) + '</span>'; }).join('') + '</h2>';
   }
   function renderCard(update) {
     var el = $('#cartao'), sel = S.sel;
-    if (!sel) { el.hidden = true; el.innerHTML = ''; body.classList.remove('com-cartao'); return; }
+    if (!sel) { el.hidden = true; el.innerHTML = ''; body.classList.remove('com-cartao', 'cartao-folha'); return; }
     var f = facts(sel.props, sel.panel), id = identity(f.code, sel.panel);
     el.innerHTML =
       '<span class="seta" aria-hidden="true"></span>' +
@@ -647,31 +698,37 @@
       field('Tamanho', f.modulos) + field('Inscrito em', f.inscricao) + field('Atualizado em', f.atualizacao) + '</dl>' +
       '<button type="button" class="botao principal" data-acao="abrir-leitura">Ver Raio-X</button>' +
       '<div class="acoes"><button type="button" class="botao secundario" data-acao="compartilhar-imovel">' + ICON('compartilhar') + '<span>Compartilhar</span></button>' +
-      '<a class="botao secundario" href="/v1/exports/property/' + encodeURIComponent(f.code) + '/kml" download>' + ICON('baixar') + '<span>Mapa KML</span></a></div>';
+      '<a class="botao secundario" href="/v1/exports/property/' + encodeURIComponent(f.code) + '/kml" download>' + ICON('baixar') + '<span>Mapa KML</span></a></div>' +
+      '<a class="oficial" href="https://consulta.car.gov.br/" target="_blank" rel="noopener noreferrer" data-acao="sicar-oficial">Consultar no SICAR (site oficial)</a>';
     el.hidden = !$('#leitura').hidden;
     body.classList.toggle('com-cartao', !el.hidden);
     el.dataset.car = f.code;
     if (!update) { el.classList.remove('entra'); void el.offsetWidth; el.classList.add('entra'); }
     placeCard();
   }
-  // Desktop: the card sits beside the property (never over it), with a pointer. Phone: bottom sheet.
+  // Desktop: the card sits beside the property (never over it), with a pointer. Phone, short screen or a card taller
+  // than the map: bottom sheet that scrolls, so every button stays reachable.
   function placeCard() {
     var el = $('#cartao');
-    if (el.hidden || !S.sel) return;
-    if (narrow() || !S.sel.geometry) {
+    if (el.hidden || !S.sel) { body.classList.remove('cartao-folha'); return; }
+    var size = map.getSize();
+    var sheet = sheetScreen() || !S.sel.geometry;
+    if (!sheet) { el.classList.remove('folha'); sheet = el.offsetHeight > size.y - 100; }
+    body.classList.toggle('cartao-folha', sheet);
+    if (sheet) {
       el.classList.add('folha'); el.style.left = el.style.top = '';
-      // Phone: the sheet covers the bottom of the map, so the property moves into the part that stays visible.
+      // The sheet covers the bottom of the map, so the property moves into the part that stays visible.
       if (S.sel.geometry && !S.sel.moved) {
         S.sel.moved = true;
         var gb = L.geoJSON(S.sel.geometry).getBounds(), top = map.latLngToContainerPoint(gb.getNorthWest()), bot = map.latLngToContainerPoint(gb.getSouthEast());
-        var free = map.getSize().y - el.offsetHeight, lo = 70, hi = free - 12;
-        if (bot.y - top.y > hi - lo || bot.x - top.x > map.getSize().x - 24) fitSelection(true);
-        else if (top.y < lo || bot.y > hi) map.panBy([0, (top.y + bot.y) / 2 - (lo + hi) / 2]);
+        // Free part of the map: above the bottom sheet (phone) or right of the side panel (wide and short).
+        var lo = 66, hi = phone() ? size.y - el.offsetHeight - 10 : size.y - 12, left = phone() ? 12 : el.offsetWidth + 16, right = size.x - (phone() ? 12 : 70);
+        if (bot.y - top.y > hi - lo || bot.x - top.x > right - left) fitSelection(true);
+        else if (top.y < lo || bot.y > hi || top.x < left || bot.x > right) map.panBy([top.x < left || bot.x > right ? (top.x + bot.x) / 2 - (left + right) / 2 : 0, top.y < lo || bot.y > hi ? (top.y + bot.y) / 2 - (lo + hi) / 2 : 0]);
       }
       return;
     }
-    el.classList.remove('folha');
-    var b = L.geoJSON(S.sel.geometry).getBounds(), size = map.getSize();
+    var b = L.geoJSON(S.sel.geometry).getBounds();
     var nw = map.latLngToContainerPoint(b.getNorthWest()), se = map.latLngToContainerPoint(b.getSouthEast());
     var w = el.offsetWidth, h = el.offsetHeight, gap = 18, right = size.x - 76, topMin = 84;
     var cy = Math.max(topMin, Math.min((nw.y + se.y) / 2, size.y - 16));
@@ -694,20 +751,27 @@
     var arrow = $('.seta', el);
     if (arrow) arrow.style.top = Math.round(Math.max(22, Math.min(cy - y, h - 22))) + 'px';
   }
+  function dropPin() { if (pin) { map.removeLayer(pin); pin = null; } }
+  // Closes without touching the history (used by Back and by the history-aware close below).
+  function closeCardNow() {
+    S.sel = null; S.wantCar = null; selectionStyle(null); closeReading(true); renderCard(); dropPin();
+    doc.title = 'Raio-X Territorial';
+  }
   function closeCard() {
-    S.sel = null; selectionStyle(null); renderCard(); closeReading(true);
-    setUrl('/novo');
+    var st = hstate();
+    if ((st.layer === 'cartao' || st.layer === 'leitura') && st.pushed) { history.back(); return; }
+    closeCardNow(); remember('mapa', null, 'replace');
   }
 
   function onParcelClick(e, feature) {
-    if (S.measuring) return;
+    if (S.measure === 'on') return;
     L.DomEvent.stopPropagation(e);
     M.clique = Math.round(performance.now());
     var p = feature.properties || {};
-    select(p, feature.geometry, {});
+    select(p, feature.geometry, { history: 'push' });
   }
   map.on('click', function (e) {
-    if (S.measuring) { addPoint(e.latlng); return; }
+    if (S.measure === 'on') { addPoint(e.latlng); return; }
     if (map.getZoom() < MIN_Z) return;
     // A click on no drawn outline asks SICAR at the point only when the cell there is not a complete answer.
     var k = cellKeys(G.step || 0.04, e.latlng.lng, e.latlng.lat, e.latlng.lng + 1e-7, e.latlng.lat + 1e-7)[0], c = G.cells.get(k);
@@ -722,7 +786,7 @@
     if (mine !== resolving) return;
     if (r.ok && r.data && r.data.ok && r.data.property) {
       var p = r.data.property;
-      select({ cod_imovel: p.car_code, municipio: p.municipality, uf: p.uf, area: p.area_ha, status_imovel: p.status, condicao: p.condition, tipo_imovel: p.type, m_fiscal: p.fiscal_modules }, r.data.geometry, {});
+      select({ cod_imovel: p.car_code, municipio: p.municipality, uf: p.uf, area: p.area_ha, status_imovel: p.status, condicao: p.condition, tipo_imovel: p.type, m_fiscal: p.fiscal_modules }, r.data.geometry, { history: 'push' });
       $('#aviso').hidden = true;
     } else if (r.status === 404 && r.data && r.data.detail && r.data.detail !== 'Not Found') toast('O SICAR não tem imóvel neste ponto.');
     else toast('A consulta ao SICAR não respondeu agora. Toque de novo para tentar.');
@@ -774,6 +838,7 @@
     return null;
   }
   function readingAlive(code, entry) { return S.reading.get(code) === entry; }
+  function readingFact(code) { var k = S.sel && S.sel.code === code ? S.sel : (S.known.get(code) || {}); return facts(k.props, k.panel); }
   async function startReading(code, manual) {
     var entry = S.reading.get(code);
     if (entry && (entry.phase === 'loading' || (!manual && entry.phase === 'ready'))) { renderReading(); return; }
@@ -789,9 +854,13 @@
     if (!readingAlive(code, entry)) return;
     if (res) {
       entry.phase = 'ready'; entry.analysis = res.analysis; entry.at = res.at !== null ? res.at : null; entry.received = Date.now();
+      entry.rows = glance(entry.analysis, readingFact(code), readingWhen(entry));
     } else entry.phase = 'failed';
     entry.done = Date.now();
     mark('leituraPronta');
+    // Rule 2: a source that did not answer is asked again by itself, once, when the engine cache has expired.
+    // "Consultar de novo" only appears after that attempt.
+    if (entry.phase === 'ready' && hasPending(entry.rows)) refill(code, entry);
     renderReading();
   }
   async function refill(code, entry) {
@@ -804,7 +873,7 @@
     try { res = await readingAttempt(code, function () { return readingAlive(code, entry); }); } catch (e) { res = null; }
     if (!readingAlive(code, entry)) return;
     if (res) {
-      var fact = facts(S.sel && S.sel.code === code ? S.sel.props : {}, S.sel && S.sel.panel);
+      var fact = readingFact(code);
       var m = mergeRows(entry.rows || glance(entry.analysis, fact, readingWhen(entry)), glance(res.analysis, fact, res.at !== null ? res.at : readingWhen({ received: Date.now() })));
       entry.rows = m.rows; if (m.changed) entry.refilled = res.at || Date.now();
     }
@@ -816,9 +885,17 @@
     var d1 = date(new Date(entry.received).toISOString()), d0 = date(new Date(entry.received - ENGINE_CACHE_MS).toISOString());
     return d1 && d1 === d0 ? d1 : '';
   }
+  // The open reading must be the selected property's; anything else closes it (never a header of one property over the answers of another).
+  function readingMatches() {
+    var el = $('#leitura');
+    if (el.hidden) return false;
+    if (S.sel && el.dataset.car === S.sel.code) return true;
+    closeReading(true); renderCard(true);
+    return false;
+  }
   function renderReadingHead() {
     var sel = S.sel, head = $('#leituraCabeca');
-    if (!sel || !head) return;
+    if (!sel || !head || !readingMatches()) return;
     var f = facts(sel.props, sel.panel), id = identity(f.code, sel.panel);
     head.innerHTML = plate(id, 'placa-leitura') + (f.place ? '<p class="lugar">' + esc(f.place) + '</p>' : '');
   }
@@ -831,9 +908,10 @@
     var t = row.seal ? row.lead.replace(/^(Sim|Não|Consulta pendente)\.\s*/, '') : row.lead;
     return t ? t.charAt(0).toUpperCase() + t.slice(1) : '';
   }
-  function rowHtml(row, i) {
+  // The consultation time is written once, at the top; a row repeats it only when its answer came at another time.
+  function rowHtml(row, i, topWhen) {
     var answer = row.seal ? ANSWER[row.seal] : '';
-    var metaWhen = row.when ? '<span>' + esc(row.id === 'car' ? row.when : 'Consulta de ' + row.when) + '</span>' : '';
+    var metaWhen = row.when && (row.id === 'car' || row.when !== topWhen) ? '<span>' + esc(row.id === 'car' ? row.when : 'Consulta de ' + row.when) + '</span>' : '';
     return '<li class="pergunta ' + (row.seal || 'info') + '" data-pergunta="' + esc(row.id) + '">' +
       '<button type="button" class="pergunta-botao" aria-expanded="false" aria-controls="detalhe-' + i + '">' + sealHtml(row) +
       '<span class="pergunta-texto"><span class="q">' + esc(row.q) + '</span>' +
@@ -844,15 +922,21 @@
   }
   function renderReading() {
     var box = $('#leituraCorpo'), sel = S.sel;
-    if (!box || !sel || $('#leitura').hidden) return;
+    if (!box || !sel || !readingMatches()) return;
     var entry = S.reading.get(sel.code), status = $('#leituraSituacao');
+    var fact = facts(sel.props, sel.panel);
+    // What the CAR declares is already known from the card: it is shown at once, the other answers come from the reading.
+    var carRow = glance(null, fact, '').filter(function (r) { return r.id === 'car'; })[0];
     box.setAttribute('aria-busy', entry && entry.phase === 'loading' ? 'true' : 'false');
     if (!entry || entry.phase === 'loading') {
       var waited = entry ? Date.now() - entry.started : 0;
-      status.innerHTML = '<span class="gira" aria-hidden="true"></span><span>Consultando as fontes oficiais. ' + (waited > 20000 ? 'Algumas fontes oficiais demoram a responder; a leitura aparece aqui assim que chegar.' : 'Costuma levar de alguns segundos a dois minutos.') + '</span>';
-      box.innerHTML = '<ol class="perguntas carregando">' + ['Tem desmatamento registrado?', 'Tem embargo ou auto de infração no local?', 'Está em área protegida ou tem mineração?', 'O que o CAR declara?', 'Tem água?', 'Como é a terra e o clima?'].map(function (q) {
+      status.innerHTML = '<span class="gira" aria-hidden="true"></span><span>Consultando as fontes oficiais. ' + (waited > 20000 ? 'Algumas fontes oficiais demoram a responder; as respostas aparecem aqui assim que chegarem.' : 'Costuma levar de alguns segundos a dois minutos.') + '</span>';
+      var carOpen = box.querySelector('[data-pergunta="car"] .pergunta-botao[aria-expanded="true"]');
+      box.innerHTML = '<ol class="perguntas carregando">' + QUESTIONS.map(function (q, i) {
+        if (i === 3 && carRow && carRow.seal === null) return rowHtml(carRow, i, '');
         return '<li class="pergunta esqueleto"><span class="selo vazio" aria-hidden="true"></span><span class="pergunta-texto"><span class="q">' + esc(q) + '</span><span class="barra"></span></span></li>';
       }).join('') + '</ol>';
+      if (carOpen) { var b0 = box.querySelector('[data-pergunta="car"] .pergunta-botao'); if (b0) toggleRow(b0, true); }
       if (entry && !entry.tick) entry.tick = setTimeout(function () { entry.tick = null; if (entry.phase === 'loading') renderReading(); }, 21000);
       return;
     }
@@ -861,21 +945,22 @@
       box.innerHTML = '<div class="estado pendente"><span class="selo pendente" aria-hidden="true"></span><div><p><strong>Consulta pendente.</strong> As fontes oficiais não responderam agora; nada foi presumido.</p><button type="button" class="botao secundario" data-acao="ler-de-novo">Consultar de novo</button></div></div>';
       return;
     }
-    var fact = facts(sel.props, sel.panel);
-    var rows = entry.rows || glance(entry.analysis, fact, readingWhen(entry));
+    var baseWhen = readingWhen(entry), topWhen = isNum(baseWhen) ? dateTime(baseWhen) : baseWhen;
+    var rows = entry.rows || glance(entry.analysis, fact, baseWhen);
     entry.rows = rows;
-    var stamp = isNum(entry.at) ? 'Consulta feita em ' + dateTime(entry.at) + '.' : (readingWhen(entry) ? 'Consulta de ' + readingWhen(entry) + '.' : '');
+    if (carRow) rows = rows.map(function (r) { return r.id === 'car' && r.seal === null && carRow.seal === null ? carRow : r; });
+    var stamp = isNum(entry.at) ? 'Consulta feita em ' + dateTime(entry.at) + ' (horário de Brasília).' : (baseWhen ? 'Consulta de ' + baseWhen + '.' : '');
     if (isNum(entry.refilled)) stamp += ' Pendências consultadas de novo em ' + dateTime(entry.refilled) + '.';
     status.innerHTML = '<span>' + esc(stamp) + '</span>';
     var fill = '';
     if (hasPending(rows)) {
       var fl = entry.fill || {};
-      if (fl.state === 'scheduled') fill = '<p class="refazer">Nova tentativa das consultas pendentes às ' + esc(new Intl.DateTimeFormat('pt-BR', { hour: '2-digit', minute: '2-digit' }).format(new Date(fl.when))) + '.</p>';
+      if (fl.state === 'scheduled') fill = '<p class="refazer">Nova tentativa das consultas pendentes às ' + esc(hour(fl.when)) + '.</p>';
       else if (fl.state === 'running') fill = '<p class="refazer"><span class="gira" aria-hidden="true"></span>Consultando de novo as fontes pendentes…</p>';
-      else fill = '<p class="refazer"><span>Há consultas pendentes.</span><button type="button" class="botao secundario" data-acao="ler-de-novo">Consultar de novo</button></p>';
+      else if (fl.tried) fill = '<p class="refazer"><span>Há consultas pendentes.</span><button type="button" class="botao secundario" data-acao="ler-de-novo">Consultar de novo</button></p>';
     }
     var open = Array.from(box.querySelectorAll('.pergunta-botao[aria-expanded="true"]')).map(function (b) { return b.parentNode.dataset.pergunta; });
-    box.innerHTML = '<ol class="perguntas">' + rows.map(rowHtml).join('') + '</ol>' + fill +
+    box.innerHTML = '<ol class="perguntas">' + rows.map(function (r, i) { return rowHtml(r, i, topWhen); }).join('') + '</ol>' + fill +
       '<p class="rodape-leitura">Consultas em bases públicas oficiais. Não substitui certidão de cartório, vistoria ou laudo técnico.</p>';
     open.forEach(function (id) { var li = box.querySelector('[data-pergunta="' + id + '"]'); if (li) toggleRow(li.querySelector('.pergunta-botao'), true); });
   }
@@ -883,26 +968,34 @@
     var li = btn.parentNode, det = li.querySelector('.detalhe'), on = force !== undefined ? force : btn.getAttribute('aria-expanded') !== 'true';
     btn.setAttribute('aria-expanded', on ? 'true' : 'false'); det.hidden = !on; li.classList.toggle('aberta', on);
   }
-  var lastFocus = null;
-  function openReading() {
+  // sync = true when Back/Forward asks for it (the history already holds the entry).
+  function openReading(sync) {
     if (!S.sel) return;
-    lastFocus = doc.activeElement;
     var el = $('#leitura');
     el.innerHTML = '<div class="leitura-topo"><button type="button" class="icone voltar" data-acao="fechar-leitura" aria-label="Voltar ao cartão">' + ICON('voltar') + '</button><p class="leitura-marca">Raio-X em uma olhada</p></div>' +
       '<div id="leituraCabeca" class="leitura-cabeca"></div><p id="leituraSituacao" class="leitura-situacao" role="status" aria-live="polite"></p><div id="leituraCorpo" class="leitura-corpo"></div>';
+    el.dataset.car = S.sel.code;
     el.hidden = false; body.classList.add('com-leitura');
-    $('#cartao').hidden = true;
+    $('#cartao').hidden = true; body.classList.remove('com-cartao', 'cartao-folha');
+    if (!sync) remember('leitura', S.sel.code, 'push');
     renderReadingHead(); renderReading();
     startReading(S.sel.code, false);
     wake();
-    if (!narrow()) fitSelection();
+    if (!phone()) fitSelection();
     var t = $('.voltar', el); if (t) t.focus({ preventScroll: true });
   }
+  // silent = close without showing the card again. Never touches the history.
   function closeReading(silent) {
     var el = $('#leitura');
     if (el.hidden) return;
-    el.hidden = true; el.innerHTML = ''; body.classList.remove('com-leitura');
+    el.hidden = true; el.innerHTML = ''; el.dataset.car = ''; body.classList.remove('com-leitura');
     if (!silent && S.sel) { $('#cartao').hidden = false; body.classList.add('com-cartao'); placeCard(); var b = $('[data-acao="abrir-leitura"]'); if (b) b.focus({ preventScroll: true }); }
+  }
+  function closeReadingByUser() {
+    var st = hstate();
+    if (st.layer === 'leitura' && st.pushed) { history.back(); return; }
+    closeReading(false);
+    if (S.sel) remember('cartao', S.sel.code, 'replace');
   }
 
   // ---- search
@@ -926,23 +1019,42 @@
     if (r.ok && r.data && Array.isArray(r.data.items)) return r.data.items;
     return r.status === 422 ? [] : null;
   }
+  // The municipality opens where its properties can be seen: the whole municipality when it fits at the parcel zoom,
+  // otherwise its centre at that zoom (never a satellite view with no property and no word about it).
   function goCity(it) {
-    hideSuggestions();
-    var bb = (it.boundingbox || []).map(Number);
-    if (bb.length === 4 && bb.every(isFinite)) map.fitBounds([[bb[0], bb[2]], [bb[1], bb[3]]], { maxZoom: 13 });
-    else if (isFinite(it.lat) && isFinite(it.lon)) map.setView([it.lat, it.lon], 12);
-    $('#q').value = it.name + ' (' + it.uf + ')';
+    hideSuggestions(); dropPin();
+    if (S.measure !== 'off') clearMeasure(); // a drawing left in another place would only confuse
     say('');
+    S.wantCar = null;
+    $('#q').value = it.name + ' (' + it.uf + ')';
+    var bb = (it.boundingbox || []).map(Number), lat = Number(it.lat), lon = Number(it.lon);
+    if (bb.length === 4 && bb.every(isFinite)) {
+      var box = L.latLngBounds([[bb[0], bb[2]], [bb[1], bb[3]]]);
+      var z = map.getBoundsZoom(box, false, L.point(40, 40));
+      if (z >= MIN_Z) map.fitBounds(box, { maxZoom: 13, padding: [20, 20] });
+      else {
+        var c = isFinite(lat) && isFinite(lon) && box.contains([lat, lon]) ? L.latLng(lat, lon) : box.getCenter();
+        map.setView(c, MIN_Z);
+        toast('Centro de ' + it.name + ' (' + it.uf + '). Arraste o mapa para ver o resto do município.');
+      }
+    } else if (isFinite(lat) && isFinite(lon)) map.setView([lat, lon], 12);
+    if (S.sel) closeCard();
   }
-  async function openCar(code, fromLink) {
+  var carSeq = 0;
+  async function openCar(code, fromLink, hist) {
+    var mine = ++carSeq;
+    S.wantCar = code;
+    $('#q').value = code;
     say('Buscando o imóvel no SICAR…');
+    var slow = setTimeout(function () { if (mine === carSeq && S.pin && !S.sel) say('O SICAR está demorando para responder. Continuamos esperando…'); }, 10000);
     var early = fromLink && !S.hasView ? setTimeout(baseLayers, 1200) : null;
     var r = await api('/v1/live/car/' + encodeURIComponent(code), { timeout: 80000 });
-    clearTimeout(early);
+    clearTimeout(early); clearTimeout(slow);
+    if (mine !== carSeq) return false;
     var car = r.data && r.data.car;
     if (r.ok && car && car.ok && car.geometry && String((car.properties || {}).cod_imovel || '').toUpperCase() === code) {
       say('');
-      select(car.properties, car.geometry, { fit: !fromLink || !S.hasView, animate: false });
+      select(car.properties, car.geometry, { fit: !fromLink || !S.hasView, animate: false, history: hist || (fromLink ? 'replace' : 'push') });
       baseLayers();
       mark('cartaoPeloLink');
       return true;
@@ -950,8 +1062,11 @@
     var nf = r.status === 404 && r.data && r.data.detail && r.data.detail.car && r.data.detail.car.not_found === true;
     baseLayers();
     if (fromLink && !S.hasView) map.fitBounds(BRASIL, { animate: false });
-    say(nf ? 'O SICAR não tem imóvel com este código do CAR.' : 'O SICAR não respondeu agora. Tente de novo em instantes.', nf ? 'vazio' : 'pendente');
-    if (fromLink && !nf) { var el = $('#situacao'); el.insertAdjacentHTML('beforeend', '<button type="button" class="link" data-acao="abrir-link">Tentar de novo</button>'); }
+    // The code stays in the box and in the address, so the person sees which code failed and keeps the link.
+    S.wantCar = code;
+    if (!S.sel) { setUrl(currentPath()); doc.title = code + ' · Raio-X Territorial'; }
+    say(nf ? 'O SICAR não tem imóvel com o código ' + code + '.' : 'O SICAR não respondeu agora. Tente de novo em instantes.', nf ? 'vazio' : 'pendente');
+    if (!nf) { var el = $('#situacao'); el.insertAdjacentHTML('beforeend', '<button type="button" class="link" data-acao="abrir-link">Tentar de novo</button>'); }
     return false;
   }
   var pin = null;
@@ -961,15 +1076,18 @@
     if (sugg.active >= 0 && sugg.items[sugg.active]) return goCity(sugg.items[sugg.active]);
     var q = parseQuery(text);
     hideSuggestions();
-    if (q.kind === 'car') { input.value = q.code; return openCar(q.code); }
+    if (q.kind !== 'car') { S.wantCar = null; carSeq++; }
+    if (q.kind === 'car') { dropPin(); input.value = q.code; return openCar(q.code); }
     if (q.kind === 'car-partial') return say('O código do CAR está incompleto. Ele tem este formato: MG-3120904-DFB380BECD7A4323AD8AA68FA14D011F.', 'vazio');
     if (q.kind === 'coord') {
       say('');
+      if (S.measure !== 'off') clearMeasure();
       map.setView([q.lat, q.lon], 16);
-      if (pin) map.removeLayer(pin);
+      dropPin();
       pin = L.circleMarker([q.lat, q.lon], { pane: 'medida', radius: 7, color: '#FFFFFF', weight: 3, fillColor: '#1F4D3A', fillOpacity: 1, interactive: false }).addTo(map);
       return resolvePoint(q.lat, q.lon);
     }
+    if (q.kind === 'coord-dms') return say('Use a coordenada em graus decimais, por exemplo -18.8912, -44.1819.', 'vazio');
     if (q.kind === 'coord-outside') return say('A coordenada fica fora do Brasil. Use latitude e longitude, por exemplo -18.8912, -44.1819.', 'vazio');
     if (q.kind === 'coord-invalid') return say('Não entendemos a coordenada. Use latitude e longitude, por exemplo -18.8912, -44.1819.', 'vazio');
     if (q.kind === 'city') {
@@ -1018,22 +1136,34 @@
       toast(err && err.code === 1 ? 'A localização está bloqueada. Libere nas permissões do navegador.' : 'Não foi possível obter sua localização agora.');
     }, { enableHighAccuracy: true, timeout: 12000, maximumAge: 60000 });
   }
+  // Measure: 'on' = marking points; 'done' = the drawing and the numbers stay on screen until "Apagar medida".
   var measureLayer = L.layerGroup().addTo(map);
-  function toggleMeasure() { if (S.measuring) closeMeasure(); else openMeasure(); }
-  function openMeasure() {
-    S.measuring = true; S.pts = [];
-    body.classList.add('medindo');
-    $('[data-ferramenta="medir"]').setAttribute('aria-pressed', 'true');
-    $('#medida').hidden = false;
+  function setMeasure(state) {
+    S.measure = state;
+    body.classList.toggle('medindo', state === 'on');
+    body.classList.toggle('medida-feita', state === 'done');
+    $('[data-ferramenta="medir"]').setAttribute('aria-pressed', state === 'on' ? 'true' : 'false');
+    var panel = $('#medida');
+    panel.hidden = state === 'off';
+    panel.classList.toggle('feita', state === 'done');
+  }
+  function toggleMeasure() {
+    if (S.measure === 'on') finishMeasure();
+    else openMeasure(S.measure === 'done');
+  }
+  function openMeasure(keep) {
+    // On a sheet screen the card would cover the tool: it closes (the property stays one tap away).
+    if (S.sel && !$('#cartao').hidden && $('#cartao').classList.contains('folha')) closeCard();
+    if (!keep) S.pts = [];
+    setMeasure('on');
     drawMeasure();
   }
-  function closeMeasure() {
-    if (!S.measuring) return;
-    S.measuring = false; S.pts = []; measureLayer.clearLayers();
-    body.classList.remove('medindo');
-    $('[data-ferramenta="medir"]').setAttribute('aria-pressed', 'false');
-    $('#medida').hidden = true;
+  function finishMeasure() {
+    if (S.measure !== 'on') return;
+    if (S.pts.length < 2) { clearMeasure(); return; }
+    setMeasure('done'); drawMeasure();
   }
+  function clearMeasure() { S.pts = []; measureLayer.clearLayers(); setMeasure('off'); }
   function addPoint(ll) { S.pts.push(ll); drawMeasure(); }
   function drawMeasure() {
     measureLayer.clearLayers();
@@ -1066,19 +1196,18 @@
 
   // ---- routes and address bar
   var urlTimer = null;
-  function currentPath() { return S.sel ? '/novo/imovel/' + S.sel.code : '/novo'; }
+  function currentPath() { var code = S.sel ? S.sel.code : S.wantCar; return code ? '/novo/imovel/' + code : '/novo'; }
   function setUrl(path) {
     if (S.page !== 'mapa') return;
     var c = map.getCenter(), u = path + '?v=' + viewParam(c.lat, c.lng, map.getZoom());
-    if (location.pathname + location.search !== u) history.replaceState({ page: 'mapa' }, '', u);
-    doc.title = S.sel ? S.sel.code + ' · Raio-X Territorial' : 'Raio-X Territorial';
+    if (location.pathname + location.search !== u) history.replaceState(Object.assign({}, hstate(), { page: 'mapa' }), '', u);
   }
   map.on('moveend', function () {
     clearTimeout(urlTimer); urlTimer = setTimeout(function () { setUrl(currentPath()); }, 400);
     loadParcels(); placeCard();
   });
   map.on('movestart', function () { $('#situacao').dataset.msg = ''; });
-  map.on('move', function () { if (!narrow()) root.requestAnimationFrame(placeCard); });
+  map.on('move', function () { if (!sheetScreen()) root.requestAnimationFrame(placeCard); });
   map.on('zoomend', notice);
 
   var PAGES = {
@@ -1105,13 +1234,32 @@
       if (push) history.pushState({ page: S.page }, '', '/novo/' + (S.page === 'nao-encontrado' ? '' : S.page));
       var h = $('h1', pv); if (h) h.focus({ preventScroll: true });
     } else {
-      if (push) history.pushState({ page: 'mapa' }, '', viewUrl(currentPath()).replace(location.origin, ''));
+      if (push) history.pushState({ page: 'mapa', layer: S.sel ? ($('#leitura').hidden ? 'cartao' : 'leitura') : 'mapa', car: S.sel ? S.sel.code : null, pushed: false }, '', viewUrl(currentPath()).replace(location.origin, ''));
+      doc.title = S.sel ? S.sel.code + ' · Raio-X Territorial' : 'Raio-X Territorial';
       setTimeout(function () { map.invalidateSize(); notice(); placeCard(); }, 0);
     }
   }
+  // Back and Forward: pages first, then the map layers (reading -> card -> map).
+  function syncLayer(st) {
+    var fromPath = /^\/novo\/imovel\/([A-Z]{2}-\d{7}-[0-9A-F]{32})\/?$/.exec(location.pathname);
+    var code = CAR_RE.test(st.car || '') ? st.car : (fromPath ? fromPath[1] : null);
+    var layer = st.layer || (code ? 'cartao' : 'mapa');
+    if (layer === 'mapa' || !code) { if (S.sel || !$('#leitura').hidden) closeCardNow(); setUrl(currentPath()); return; }
+    if (!S.sel || S.sel.code !== code) {
+      closeReading(true);
+      var k = S.known.get(code);
+      if (!k) { S.sel = null; selectionStyle(null); renderCard(); openCar(code, false, 'none'); return; }
+      select(k.props, k.geometry, { history: 'none' });
+    }
+    if (layer === 'leitura') { if ($('#leitura').hidden) openReading(true); }
+    else closeReading(false);
+    setUrl(currentPath());
+  }
   root.addEventListener('popstate', function () {
     var m = /^\/novo\/(prospeccao|precos|entrar)\/?$/.exec(location.pathname);
-    showPage(m ? m[1] : 'mapa', false);
+    if (m) { showPage(m[1], false); return; }
+    if (S.page !== 'mapa') showPage('mapa', false);
+    syncLayer(hstate());
   });
 
   // ---- events (one delegated listener)
@@ -1136,22 +1284,27 @@
       if (navigator.clipboard) navigator.clipboard.writeText(code).then(function () { toast('Código do CAR copiado.'); }, function () { toast('Não foi possível copiar o código.'); });
       else toast('Não foi possível copiar o código.');
     }
+    // The official site opens in a new tab (the link itself); the code goes to the clipboard to paste there.
+    else if (act === 'sicar-oficial' && S.sel && navigator.clipboard) navigator.clipboard.writeText(S.sel.code).then(function () { toast('Código do CAR copiado. Cole no campo de consulta do SICAR.'); }, function () {});
     else if (act === 'compartilhar-imovel' && S.sel) share(viewUrl('/novo/imovel/' + S.sel.code), S.sel.code);
-    else if (act === 'abrir-leitura') openReading();
-    else if (act === 'fechar-leitura') closeReading(false);
+    else if (act === 'abrir-leitura') openReading(false);
+    else if (act === 'fechar-leitura') closeReadingByUser();
     else if (act === 'ler-de-novo' && S.sel) startReading(S.sel.code, true);
     else if (act === 'desfazer-ponto') { S.pts.pop(); drawMeasure(); }
     else if (act === 'limpar-medida') { S.pts = []; drawMeasure(); }
-    else if (act === 'fechar-medida') closeMeasure();
+    else if (act === 'concluir-medida') finishMeasure();
+    else if (act === 'continuar-medida') openMeasure(true);
+    else if (act === 'apagar-medida') clearMeasure();
     else if (act === 'recarregar') { Array.from(G.cells.values()).forEach(function (c) { if (c.state === 'fail' || c.partial) { c.state = 'fail'; c.tries = 0; } }); G.box = null; loadParcels(); }
-    else if (act === 'abrir-link') openCar(body.dataset.car, true);
+    else if (act === 'abrir-link') openCar(S.wantCar || body.dataset.car, true);
   });
   doc.addEventListener('pointerover', function (e) { if (e.target.closest && e.target.closest('[data-acao="abrir-leitura"]')) wake(); });
   doc.addEventListener('keydown', function (e) {
     if (e.key !== 'Escape') return;
-    if (S.measuring) closeMeasure();
-    else if (!$('#leitura').hidden) closeReading(false);
+    if (S.measure === 'on') finishMeasure();
+    else if (!$('#leitura').hidden) closeReadingByUser();
     else if (S.sel) closeCard();
+    else if (S.measure === 'done') clearMeasure();
   });
   $('#busca').addEventListener('submit', onSearch);
   $('#q').addEventListener('input', function () { if (S.pin) { S.pin = false; } onInput(); });
@@ -1168,6 +1321,7 @@
   // A property link without a view waits for the property before asking for satellite tiles (no Brazil-wide tiles thrown away).
   if (!linkCar || v) baseLayers();
   showPage(S.page, false);
+  if (S.page === 'mapa' && !linkCar) history.replaceState(Object.assign({}, hstate(), { page: 'mapa', layer: 'mapa', car: null, pushed: false }), '', location.pathname + location.search);
   if (linkCar) openCar(body.dataset.car, true);
   loadParcels(); notice();
 })(typeof window !== 'undefined' ? window : globalThis);
