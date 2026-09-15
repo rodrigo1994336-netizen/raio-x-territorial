@@ -214,16 +214,26 @@ def _carry_forward(old:dict[str,Any]|None,new:dict[str,Any])->dict[str,Any]:
     return out
 
 
+# Values that change without anything changing on the property (the INPE file name rolls every 10 minutes).
+VOLATILE_KEYS=frozenset({'fire_latest_file'})
+
+
 def snapshot_signature(payload:dict[str,Any])->str:
-    raw=json.dumps(payload,sort_keys=True,ensure_ascii=False,separators=(',',':')).encode('utf-8');return hashlib.sha256(raw).hexdigest()
+    stable={k:v for k,v in (payload or {}).items() if k not in VOLATILE_KEYS}
+    raw=json.dumps(stable,sort_keys=True,ensure_ascii=False,separators=(',',':')).encode('utf-8');return hashlib.sha256(raw).hexdigest()
+
+
+# W1 public name for the H1 rule (a source that did not answer keeps its last answered value:
+# trying is not answering). One implementation only.
+merge_answered=_carry_forward
 
 
 def _diff(old:dict[str,Any]|None,new:dict[str,Any])->dict[str,Any]:
     if old is None:return {'initial_snapshot':True}
-    # Unknown on either side (pending source, or a key the old snapshot did not track) and
-    # counts from a different base are not a change.
+    # Unknown on either side (pending source, or a key the old snapshot did not track),
+    # counts from a different base and values that roll by themselves are not a change.
     return {k:{'before':old.get(k),'after':new.get(k)} for k in sorted(set(old)|set(new))
-            if k not in _META_KEYS and old.get(k) is not None and new.get(k) is not None and _comparable(old,new,k) and old.get(k)!=new.get(k)}
+            if k not in _META_KEYS and k not in VOLATILE_KEYS and old.get(k) is not None and new.get(k) is not None and _comparable(old,new,k) and old.get(k)!=new.get(k)}
 
 
 def _number(v:Any)->float:
@@ -235,7 +245,7 @@ def _increased(diff:dict[str,Any],key:str)->bool:
     row=diff.get(key) or {};return _number(row.get('after'))>_number(row.get('before'))
 
 
-def _classify_alert(diff:dict[str,Any])->tuple[str,str]:
+def classify_alert(diff:dict[str,Any])->tuple[str,str]:
     critical=[];attention=[]
     for key,label in (('ibama_embargo_count','novo embargo IBAMA'),('icmbio_embargo_count','novo embargo ICMBio'),('fire_inside_count','novo foco de calor dentro do imóvel'),('indigenous_count','mudança em Terra Indígena'),('conservation_count','mudança em Unidade de Conservação')):
         if key in diff and _increased(diff,key):critical.append(label)
@@ -244,6 +254,9 @@ def _classify_alert(diff:dict[str,Any])->tuple[str,str]:
     if critical:return 'critical','Alerta crítico: '+'; '.join(critical[:4])
     if attention:return 'attention','Atenção: '+'; '.join(attention[:5])
     return 'info','Mudança detectada em dados monitorados do imóvel'
+
+
+_classify_alert=classify_alert
 
 
 def save_snapshot(monitor_id:int,payload:dict[str,Any])->dict[str,Any]:

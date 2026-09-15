@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
+import json
 import os
 import re
 import time
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Callable, Awaitable
-from urllib.parse import unquote
+from urllib.parse import unquote, urlsplit
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request, Query
@@ -16,6 +20,15 @@ COORD_RE=re.compile(r'(?<!\d)(-?\d{1,2}(?:[\.,]\d+)?)\s*[,; ]\s*(-?\d{1,3}(?:[\.
 URL_RE=re.compile(r'https?://\S+',re.I)
 _SESSION:dict[str,dict[str,Any]]={}
 SESSION_TTL=6*3600
+# Only Google Maps links are ever fetched: a link typed by anyone must not make the server call arbitrary hosts.
+MAPS_HOSTS=frozenset({'maps.app.goo.gl','goo.gl','google.com','www.google.com','maps.google.com','google.com.br','www.google.com.br','maps.google.com.br'})
+# Meta retries a webhook that is slow or fails; the same message must not be answered twice.
+_SEEN_IDS:dict[str,float]={}
+SEEN_TTL=24*3600
+_RATE:dict[str,list[float]]={}
+RATE_WINDOW_SECONDS=600
+RATE_MAX_MESSAGES=20
+_TASKS:set[asyncio.Task]=set()
 
 MENU=(
     '🌾 *RAIO-X TERRITORIAL*\n'
@@ -39,6 +52,7 @@ def _enabled() -> bool:
 def _config():
     return {
         'verify_token':os.getenv('WHATSAPP_VERIFY_TOKEN',''),
+        'app_secret':os.getenv('WHATSAPP_APP_SECRET',''),
         'access_token':os.getenv('WHATSAPP_ACCESS_TOKEN',''),
         'phone_number_id':os.getenv('WHATSAPP_PHONE_NUMBER_ID',''),
         'api_version':os.getenv('WHATSAPP_GRAPH_VERSION','v24.0'),
@@ -53,7 +67,49 @@ def _session_get(phone:str):
     return {}
 
 
+def signature_valid(raw:bytes,header:str|None,secret:str)->bool:
+    """Meta signs every webhook with the app secret (X-Hub-Signature-256)."""
+    if not secret or not header or not header.startswith('sha256='):return False
+    expected=hmac.new(secret.encode('utf-8'),raw or b'',hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected,header[7:].strip().lower())
+
+
+def first_time_message(message_id:str|None)->bool:
+    now=time.monotonic()
+    for k,ts in list(_SEEN_IDS.items()):
+        if now-ts>SEEN_TTL:_SEEN_IDS.pop(k,None)
+    if not message_id:return True
+    if message_id in _SEEN_IDS:return False
+    _SEEN_IDS[message_id]=now;return True
+
+
+def rate_allowed(phone:str)->bool:
+    now=time.monotonic();hits=[t for t in _RATE.get(phone,[]) if now-t<RATE_WINDOW_SECONDS]
+    if len(hits)>=RATE_MAX_MESSAGES:
+        _RATE[phone]=hits;return False
+    hits.append(now);_RATE[phone]=hits;return True
+
+
+def maps_url_allowed(url:str)->bool:
+    try:
+        parts=urlsplit(url);port=parts.port
+    except Exception:return False
+    return (parts.scheme=='https' and (parts.hostname or '').lower() in MAPS_HOSTS
+            and not parts.username and not parts.password and port in (None,443))
+
+
+def _format_ha(value:Any)->str:
+    # Half-up on the value as written: 14.795 -> 14,80 (binary float rounding would print 14,79).
+    try:text=f"{Decimal(str(float(value))).quantize(Decimal('0.01'),rounding=ROUND_HALF_UP):,.2f}"
+    except Exception:return ''
+    return text.replace(',','X').replace('.',',').replace('X','.')+' ha'
+
+
 def _session_set(phone:str,**values):
+    if len(_SESSION)>5000:
+        now=time.monotonic()
+        for k,v in list(_SESSION.items()):
+            if now-v.get('ts',0)>=SESSION_TTL:_SESSION.pop(k,None)
     s=_session_get(phone).copy();s.update(values);s['ts']=time.monotonic();_SESSION[phone]=s;return s
 
 
@@ -77,6 +133,21 @@ async def _send_text(to: str, body: str) -> dict[str,Any]:
     headers={'Authorization':f"Bearer {cfg['access_token']}",'Content-Type':'application/json'}
     payload={'messaging_product':'whatsapp','recipient_type':'individual','to':to,'type':'text','text':{'preview_url':True,'body':body[:4096]}}
     async with httpx.AsyncClient(timeout=25,follow_redirects=True) as c:r=await c.post(url,headers=headers,json=payload)
+    try:data=r.json()
+    except Exception:data={'text':r.text[:500]}
+    return {'ok':r.is_success,'status':r.status_code,'response':data}
+
+
+async def _send_template(to: str, template: str, language: str, params: list[str]) -> dict[str,Any]:
+    """Business-initiated message (an alert) outside the 24 h window: Meta only delivers approved templates."""
+    cfg=_config()
+    if not (_enabled() and cfg['access_token'] and cfg['phone_number_id']):return {'ok':False,'disabled':True}
+    url=f"https://graph.facebook.com/{cfg['api_version']}/{cfg['phone_number_id']}/messages"
+    headers={'Authorization':f"Bearer {cfg['access_token']}",'Content-Type':'application/json'}
+    payload={'messaging_product':'whatsapp','recipient_type':'individual','to':to,'type':'template',
+             'template':{'name':template,'language':{'code':language},
+                         'components':[{'type':'body','parameters':[{'type':'text','text':str(p)[:1000]} for p in params]}]}}
+    async with httpx.AsyncClient(timeout=25,follow_redirects=False) as c:r=await c.post(url,headers=headers,json=payload)
     try:data=r.json()
     except Exception:data={'text':r.text[:500]}
     return {'ok':r.is_success,'status':r.status_code,'response':data}
@@ -109,14 +180,22 @@ async def _coords_from_maps_url(text:str):
     m=URL_RE.search(text or '')
     if not m:return None
     url=m.group(0).rstrip('.,)]')
-    # Resolve short Google Maps links. We only extract coordinates from the final URL;
-    # no page scraping or private data is performed.
+    if not maps_url_allowed(url):return None
+    # Resolve short Google Maps links hop by hop, never leaving Google Maps hosts.
+    # We only extract coordinates from the final URL; no page scraping or private data.
+    final=url
     try:
-        async with httpx.AsyncClient(timeout=12,follow_redirects=True,headers={'User-Agent':'Raio-X-Territorial/WhatsApp'}) as c:
-            r=await c.get(url)
-        final=unquote(str(r.url))
+        async with httpx.AsyncClient(timeout=12,follow_redirects=False,headers={'User-Agent':'Raio-X-Territorial/WhatsApp'}) as c:
+            for _hop in range(5):
+                r=await c.get(final)
+                location=r.headers.get('location')
+                if not (r.is_redirect and location):break
+                nxt=str(httpx.URL(final).join(location))
+                if not maps_url_allowed(nxt):break
+                final=nxt
     except Exception:
-        final=unquote(url)
+        pass
+    final=unquote(final)
     for pattern in (
         re.compile(r'@(-?\d{1,2}\.\d+),(-?\d{1,3}\.\d+)'),
         re.compile(r'[?&](?:q|query|ll)=(-?\d{1,2}\.\d+),(-?\d{1,3}\.\d+)'),
@@ -140,7 +219,7 @@ def _result_header(result,car):
         '🌾 *RAIO-X TERRITORIAL*',
         f"📍 {p.get('municipio') or '-'} / {p.get('uf') or '-'}",
         f"CAR: {car}",
-        f"Área: {p.get('area') or '-'} ha",
+        f"Área: {_format_ha(p.get('area')) or 'não informada'}",
     ]
 
 
@@ -187,20 +266,20 @@ def register_routes(app: FastAPI, analyze_fn: Callable[..., Awaitable[dict[str,A
         if intent=='kml':
             return await _send_text(to,f'📄 *KML do imóvel*\n{base}/v1/exports/property/{car}/kml\n\nAbra o arquivo no Google Earth. O limite é obtido do CAR consultado.')
         if intent=='report':
-            return await _send_text(to,f'📑 *Relatório completo do Raio-X Territorial*\n{base}/v1/reports/property/{car}\n\nO PDF é gerado com as fontes que responderem nesta emissão; fonte indisponível aparece explicitamente.')
+            return await _send_text(to,f'📑 *Relatório completo do Raio-X Territorial*\n{base}/v1/reports/property/{car}\n\nO PDF é gerado com as fontes oficiais que responderem nesta emissão; a que não responder aparece como consulta pendente.')
         if intent=='monitor':
             try:
                 import monitoring_store as store
                 if not store.readiness().get('ready'):
-                    return await _send_text(to,'🔍 O motor de monitoramento já está implementado, mas a persistência do banco ainda não está vinculada. Assim que o DATABASE_URL estiver ligado, este mesmo comando ativa o acompanhamento contínuo por WhatsApp.')
+                    return await _send_text(to,'🔍 O monitoramento pelo WhatsApp ainda não está disponível neste número. O imóvel continua salvo nesta conversa.')
                 mon=await asyncio.to_thread(store.add_monitor,car,'whatsapp',to)
                 try:
                     result=await analyze_fn(car)
                     await asyncio.to_thread(store.save_snapshot,mon['id'],store.compact_snapshot(result))
                 except Exception:pass
                 return await _send_text(to,f'🔍 *Monitoramento ativado* para {car}.\nVou acompanhar mudanças nas fontes configuradas e enviar alerta aqui quando houver alteração relevante.')
-            except Exception as e:
-                return await _send_text(to,f'🔍 Não consegui ativar o monitoramento agora ({type(e).__name__}). O imóvel continua salvo nesta conversa.')
+            except Exception:
+                return await _send_text(to,'🔍 Não consegui ativar o monitoramento agora. Tente de novo em alguns minutos; o imóvel continua salvo nesta conversa.')
 
         try:
             result=await analyze_fn(car)
@@ -227,7 +306,7 @@ def register_routes(app: FastAPI, analyze_fn: Callable[..., Awaitable[dict[str,A
                 lines += ['🌧️ *Precipitação e clima*']
                 if cl.get('ok'):
                     lines += [f"Chuva acumulada: {cl.get('rain_sum_mm')} mm",f"Período: {cl.get('period_start')} a {cl.get('period_end')}",f"Temperatura média: {cl.get('temp_avg_c')} °C"]
-                else:lines += ['Fonte climática indisponível nesta consulta. Isso não é interpretado como chuva zero.']
+                else:lines += ['Consulta de chuva pendente; tente de novo em alguns minutos. Isso não significa chuva zero.']
             elif intent=='soil':
                 ide=result.get('ide_layers') or {};soil=ide.get('soil') or {};chem=result.get('soil_composition') or {}
                 lines += ['🌱 *Solo*']
@@ -237,7 +316,7 @@ def register_routes(app: FastAPI, analyze_fn: Callable[..., Awaitable[dict[str,A
                         p=s.get('properties') or {};v=p.get('legenda') or p.get('classe') or p.get('nome')
                         if v and v not in labels:labels.append(str(v))
                     lines += [f"Classe pedológica: {'; '.join(labels) if labels else str(soil.get('exact_count',0))+' interseção(ões)'}"]
-                else:lines += ['Mapa pedológico: fonte indisponível/parcial nesta consulta.']
+                else:lines += ['Mapa de solos: consulta pendente.']
                 if chem.get('ok'):
                     vals=chem.get('values') or {};lines += [f"Argila: {vals.get('clay_pct','-')}% | Areia: {vals.get('sand_pct','-')}% | Silte: {vals.get('silt_pct','-')}%",f"pH: {vals.get('ph_h2o','-')} | CTC: {vals.get('cec_cmolckg','-')} | C orgânico: {vals.get('soc_gkg','-')} g/kg | N: {vals.get('nitrogen_gkg','-')} g/kg"]
                 else:lines += ['Composição físico-química estimada ainda não respondeu nesta emissão.']
@@ -245,29 +324,41 @@ def register_routes(app: FastAPI, analyze_fn: Callable[..., Awaitable[dict[str,A
             elif intent=='fire':
                 fire=result.get('fire_live') or {};lines += ['🔥 *Fogo e queimadas*']
                 if fire.get('ok'):lines += [f"Focos dentro: {fire.get('inside_count',0)}",f"Focos próximos: {fire.get('near_count',0)}",f"Janela: {fire.get('window_note') or '-'}"]
-                else:lines += ['Programa Queimadas indisponível nesta consulta.']
+                else:lines += ['Focos de calor: consulta pendente; tente de novo em alguns minutos.']
             elif intent=='mining':
                 m=result.get('critical_minerals') or {};a=m.get('anm') or {};s=m.get('sgb') or {};anm_ok=(result.get('anm') or {}).get('ok') is True;lines += ['⛏️ *Mineração, minerais críticos e terras raras*',f"Processos ANM: {a.get('process_count',0) if anm_ok else 'consulta pendente'}",f"Processos classificados como minerais críticos: {a.get('critical_process_count',0) if anm_ok else 'consulta pendente'}",f"Sinal de terras raras: {'SIM — TRIAGEM' if m.get('rare_earth_signal') else ('não identificado' if anm_ok and m.get('ok') is True else 'consulta pendente')}",f"Camadas SGB com sinal: {len(s.get('hit_layers') or [])}",'Triagem geológica/mineral não comprova jazida, recurso ou reserva.']
             await _send_text(to,'\n'.join(lines))
         except Exception:
-            await _send_text(to,'Não consegui concluir esta consulta agora. Alguma fonte externa pode estar indisponível. Tente novamente; o sistema não transforma falha de fonte em resultado negativo.')
+            await _send_text(to,'As fontes oficiais não responderam agora. Tente de novo em alguns minutos; o sistema não trata consulta sem resposta como resultado negativo.')
+
+    async def respond_safely(to:str,msg:dict):
+        try:await respond(to,msg)
+        except Exception as exc:print(f'RX_WHATSAPP_RESPOND_FAILED={type(exc).__name__}',flush=True)
 
     @app.post('/webhooks/whatsapp')
     async def whatsapp_inbound(req: Request):
-        payload=await req.json()
         if not _enabled():return {'ok':True,'enabled':False,'processed':0}
-        msgs=_extract_messages(payload);processed=0
-        for msg in msgs:
+        cfg=_config()
+        # Fail closed: without the app secret no webhook can be authenticated.
+        if not cfg['app_secret']:raise HTTPException(status_code=503,detail='whatsapp_signature_not_configured')
+        raw=await req.body()
+        if not signature_valid(raw,req.headers.get('X-Hub-Signature-256'),cfg['app_secret']):raise HTTPException(status_code=403,detail='invalid_signature')
+        try:payload=json.loads(raw or b'{}')
+        except Exception:raise HTTPException(status_code=400,detail='invalid_json')
+        accepted=0
+        for msg in _extract_messages(payload):
             to=msg.get('from')
-            if not to:continue
-            await respond(to,msg);processed+=1
-        return {'ok':True,'enabled':True,'processed':processed}
+            if not to or not first_time_message(msg.get('id')) or not rate_allowed(to):continue
+            # Answer Meta at once; the consultation runs after the acknowledgement.
+            task=asyncio.create_task(respond_safely(to,msg));_TASKS.add(task);task.add_done_callback(_TASKS.discard);accepted+=1
+        return {'ok':True,'enabled':True,'accepted':accepted}
 
     @app.get('/v1/whatsapp/status')
     def whatsapp_status():
         cfg=_config()
         return {
-            'enabled':_enabled(),'configured':bool(cfg['verify_token'] and cfg['access_token'] and cfg['phone_number_id']),
+            'enabled':_enabled(),'configured':bool(cfg['verify_token'] and cfg['app_secret'] and cfg['access_token'] and cfg['phone_number_id']),
+            'signature_verification':'x-hub-signature-256','deduplication':True,'rate_limit_per_phone':f'{RATE_MAX_MESSAGES}/{RATE_WINDOW_SECONDS}s',
             'mode':'official-meta-cloud-api','assistant_menu':True,'car':True,'maps_link':True,'shared_location':True,
             'kml':True,'monitoring':True,'rain_30d':True,'soil':True,'fire':True,'critical_minerals':True,'pdf_report':True,
             'conversation_last_property_ttl_hours':SESSION_TTL/3600,

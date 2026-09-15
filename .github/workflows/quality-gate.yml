@@ -29,6 +29,10 @@ jobs:
         run: PYTHONPATH=. python scripts/d0_source_registry_gate.py
       - name: D1a CAR title provenance gate
         run: PYTHONPATH=. python scripts/d1a_identity_title_gate.py
+      - name: W1 WhatsApp and monitoring readiness gate
+        env:
+          RX_RELEASE: OFF
+        run: PYTHONPATH=. python scripts/w1_whatsapp_ready_gate.py
       - name: F2 CONAB warehouses and DETER alerts gate (rules and positive controls)
         env:
           RX_RELEASE: OFF
