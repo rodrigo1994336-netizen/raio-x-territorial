@@ -1,6 +1,7 @@
 // F1B part 2 harness: runs the FINAL served card script (V46, with the C2 number/date formatter) and the
 // report-engine wake script in node vm contexts with a minimal fake window. No network.
-// stdin: {"format": "<C2 script>", "v46": "<V46 script>", "wake": "<wake script>", "wake_disabled": "<wake script, no URL>"}
+// stdin: {"format": "<C2 script>", "v46": "<V46 script>", "wake": "<wake script>", "wake_disabled": "<wake script, no URL>",
+//         "coord": "<served coordinateSearch function>", "mappanel": "<served rxMapPanelOnce statement>"}
 // stdout: JSON observations; the Python gate (scripts/f1b_tela_gate.py) judges them.
 'use strict';
 const vm = require('vm');
@@ -13,7 +14,7 @@ const strip = s => String(s || '').replace(/<[^>]*>/g, '');
 function baseWindow(extra) {
   const listeners = {};
   const document = {
-    readyState: 'complete', querySelector() { return null; }, querySelectorAll() { return []; }, getElementById() { return null; },
+    readyState: 'complete', __listeners: listeners, querySelector() { return null; }, querySelectorAll() { return []; }, getElementById() { return null; },
     addEventListener(t, fn) { (listeners[t] = listeners[t] || []).push(fn); }, createElement() { return {}; },
   };
   const win = Object.assign({
@@ -87,27 +88,32 @@ function wakeEnv(code, opts) {
     ? { getItem() { throw new Error('denied'); }, setItem() { throw new Error('denied'); } }
     : { getItem: k => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)) };
   const selectCalls = [];
-  const original = function (p) { selectCalls.push(p && p.car_code); return 'painted'; };
+  let win = null;
+  // the painted card of the selection stays on screen until closed
+  const original = function (p) { selectCalls.push(p && p.car_code); if (p && p.car_code) { win.current = { car_code: p.car_code }; win.__open = p.car_code; } return 'painted'; };
   original.__rxShareW1a = true; original.__rxIdentitySanitizedV49 = true;
-  const win = baseWindow({
+  win = baseWindow({
     Date: FakeDate, sessionStorage,
     fetch: (url, init) => { fetches.push({ url: String(url), method: init && init.method, keepalive: !!(init && init.keepalive) }); return o.fetchRejects ? Promise.reject(new Error('offline')) : Promise.resolve({ ok: true, status: 202 }); },
     rxV46SelectProperty: original,
   });
+  win.document.querySelector = sel => (win.__open && String(sel).includes(`.rx46-card[data-car="${win.__open}"]`) ? {} : null);
+  const close = () => { win.__open = null; win.current = {}; };
   const err = run(win, code, 'wake');
-  return { win, fetches, selectCalls, clock, store, err };
+  return { win, fetches, selectCalls, clock, store, err, close };
 }
+const intentTarget = hit => ({ closest: sel => (hit && String(sel).includes('data-rx46-action="full"') ? {} : null) });
 
 async function wakeCases() {
   const out = {};
   if (!input.wake) return { fatal: 'wake script missing' };
-  // five cards opened in a row in one tab
+  // five cards opened in a row in one tab, the last one stays open
   let e = wakeEnv(input.wake);
   out.load_error = e.err;
   const sel = () => e.win.rxV46SelectProperty;
   out.wrapped = !!(sel() && sel().__rxWakeF1b) && sel().__rxShareW1a === true && sel().__rxIdentitySanitizedV49 === true;
   const r1 = sel()({ car_code: CAR });
-  out.sync_fetches = e.fetches.length; // nothing leaves before the card is painted
+  out.sync_fetches = e.fetches.length; // nothing leaves before the card is painted and looked at
   out.returns = r1;
   for (let i = 0; i < 4; i++) sel()({ car_code: CAR });
   await tick(20);
@@ -116,6 +122,17 @@ async function wakeCases() {
   out.after_9min = e.fetches.length;
   e.clock.now += 60 * 1000 + 1; sel()({ car_code: CAR }); await tick(20);
   out.after_10min = e.fetches.length;
+  // a glance: the card is closed before the dwell -> no wake
+  const glance = wakeEnv(input.wake);
+  glance.win.rxV46SelectProperty({ car_code: CAR }); glance.close(); await tick(20);
+  out.glance = glance.fetches.length;
+  // intention without dwell: pointer/focus/finger on "Ver análise completa" or "PDF"
+  const hover = wakeEnv(input.wake);
+  const fire = (env, type, hit) => (env.win.document.__listeners[type] || []).forEach(f => f({ type, target: intentTarget(hit) }));
+  fire(hover, 'pointerover', false); fire(hover, 'focusin', false);
+  out.intent_elsewhere = hover.fetches.length;
+  fire(hover, 'pointerover', true); fire(hover, 'touchstart', true); fire(hover, 'focusin', true);
+  out.intent = hover.fetches.length;
   // a reload in the same tab keeps sessionStorage: still limited
   const reload = wakeEnv(input.wake, { clock: e.clock, store: e.store });
   reload.win.rxV46SelectProperty({ car_code: CAR }); await tick(20);
@@ -138,21 +155,63 @@ async function wakeCases() {
   let threw = false; try { offline.win.rxV46SelectProperty({ car_code: CAR }); } catch (x) { threw = true; }
   await tick(20);
   out.offline = { threw, fetches: offline.fetches.length, select_calls: offline.selectCalls.length };
-  // no service URL configured: nothing is sent, ever
+  // no service URL / not production: nothing is sent, ever
   if (input.wake_disabled) {
     const off = wakeEnv(input.wake_disabled);
     for (let i = 0; i < 3; i++) off.win.rxV46SelectProperty({ car_code: CAR });
     off.clock.now += 3600 * 1000; off.win.rxV46SelectProperty({ car_code: CAR });
+    fire(off, 'pointerover', true);
     await tick(20);
     out.disabled = { fetches: off.fetches.length, select_calls: off.selectCalls.length, enabled: off.win.rxReportWakeF1b && off.win.rxReportWakeF1b.enabled };
   }
   return out;
 }
 
+// ------------------------------------------------------------------ coordinate search message (1B.6)
+async function coordCases() {
+  if (!input.coord) return { fatal: 'coordinate search function missing' };
+  const out = {};
+  for (const [name, status, body] of [['sicar_502', 502, { detail: 'pending' }], ['none_404', 404, { detail: 'none' }], ['found_200', 200, { property: { car_code: CAR }, geometry: {} }]]) {
+    const toasts = [], shown = [];
+    const win = baseWindow({
+      fetch: async () => ({ ok: status < 300, status, json: async () => body }),
+      toast: t => toasts.push(String(t)), showProperty: (p) => shown.push(p && p.car_code),
+    });
+    const err = run(win, input.coord + '\n;window.__cs=coordinateSearch;', 'coord');
+    if (err) { out[name] = { error: err }; continue; }
+    // coordinateSearch reads the map through m(): absent here (no map), as on a page still loading
+    win.m = () => null;
+    let handled = null;
+    try { handled = await win.__cs('-20.1, -47.4'); } catch (x) { out[name] = { error: String(x) }; continue; }
+    out[name] = { handled, toasts, shown };
+  }
+  return out;
+}
+
+// ------------------------------------------------------------------ shared /map-panel request (1B.3)
+async function mapPanelCases() {
+  if (!input.mappanel) return { fatal: 'rxMapPanelOnce missing' };
+  const calls = [];
+  let answer = 'fail';
+  const win = baseWindow({
+    fetch: async (url) => { calls.push(String(url)); return answer === 'fail' ? { ok: false, status: 503, json: async () => ({ ok: false, detail: 'x' }) } : { ok: true, status: 200, json: async () => ({ ok: true, car: CAR }) }; },
+  });
+  const err = run(win, input.mappanel, 'mappanel');
+  if (err) return { fatal: err };
+  const r1 = await win.rxMapPanelOnce(CAR);
+  const r2 = await win.rxMapPanelOnce(CAR);          // a failure is never memorised: this goes to the network
+  answer = 'ok';
+  const r3 = await win.rxMapPanelOnce(CAR);
+  const r4 = await win.rxMapPanelOnce(CAR);          // an answer is memorised: no network
+  return { calls: calls.length, r1_ok: r1.ok, r2_ok: r2.ok, r3_ok: r3.ok, r4_ok: r4.ok, r4_d: r4.d && r4.d.ok };
+}
+
 (async () => {
   const res = {};
   try { res.card = cardCases(); } catch (e) { res.card = { fatal: String(e && e.stack || e).slice(0, 400) }; }
   try { res.wake = await wakeCases(); } catch (e) { res.wake = { fatal: String(e && e.stack || e).slice(0, 400) }; }
+  try { res.coord = await coordCases(); } catch (e) { res.coord = { fatal: String(e && e.stack || e).slice(0, 400) }; }
+  try { res.mappanel = await mapPanelCases(); } catch (e) { res.mappanel = { fatal: String(e && e.stack || e).slice(0, 400) }; }
   process.stdout.write(JSON.stringify(res));
   process.exit(0);
 })();

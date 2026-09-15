@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import time
+from collections import OrderedDict
+
 from fastapi import HTTPException, Request
 from shapely.geometry import Point, mapping, shape
 
@@ -101,6 +104,24 @@ def _local_ufs(west:float,south:float,east:float,north:float)->list[str]|None:
 
 
 RESOLVE_EPS=.0018
+# F1B: an answer for the same point (to 0,1 m) is reused for 2 min, so a repeated or looping anonymous call
+# does not fan out to every UF layer again. Only answers are kept: a pending consultation (502) is never.
+RESOLVE_CACHE_TTL_S=120.0
+RESOLVE_CACHE_MAX=256
+_RESOLVE_CACHE:OrderedDict[tuple[float,float],tuple[float,int,object]]=OrderedDict()
+
+
+def _resolve_cached(key:tuple[float,float]):
+    item=_RESOLVE_CACHE.get(key)
+    if item is None:return None
+    if time.monotonic()-item[0]>=RESOLVE_CACHE_TTL_S:
+        _RESOLVE_CACHE.pop(key,None);return None
+    return item
+
+
+def _resolve_keep(key:tuple[float,float],status:int,body:object)->None:
+    _RESOLVE_CACHE[key]=(time.monotonic(),status,body);_RESOLVE_CACHE.move_to_end(key)
+    while len(_RESOLVE_CACHE)>RESOLVE_CACHE_MAX:_RESOLVE_CACHE.popitem(last=False)
 
 
 async def resolve_v19(lat:float,lon:float,request:Request=None):
@@ -113,6 +134,11 @@ async def resolve_v19(lat:float,lon:float,request:Request=None):
     """
     if not (-90<=lat<=90 and -180<=lon<=180):raise HTTPException(status_code=422,detail='Coordenadas inválidas.')
     eps=RESOLVE_EPS
+    key=(round(float(lat),6),round(float(lon),6))
+    hit=_resolve_cached(key)
+    if hit is not None:
+        if hit[1]==404:raise HTTPException(status_code=404,detail=hit[2])
+        return hit[2]
     local=_local_ufs(lon-eps,lat-eps,lon+eps,lat+eps)
     ufs=local if local is not None else await _resolve_ufs(lat,lon)
     if not ufs:raise HTTPException(status_code=404,detail='Nenhum imóvel do SICAR foi localizado exatamente neste ponto.')
@@ -130,16 +156,25 @@ async def resolve_v19(lat:float,lon:float,request:Request=None):
             errors.append(f'{code}:{type(err).__name__}')
             continue
         asked.append(code)
-        for f in (fetched or {}).get('data',{}).get('features') or []:
+        feats=(fetched or {}).get('data',{}).get('features') or []
+        # 30 is not all: a layer that filled its cap may hold the property further down the list.
+        if len(feats)>=int((fetched or {}).get('cap') or 30):errors.append(f'{code}:capped')
+        for f in feats:
             try:
                 g=shape(f.get('geometry'))
                 if g.contains(point) or g.touches(point):candidates.append((code,f))
             except Exception:continue
     if not candidates:
-        if errors:raise HTTPException(status_code=502,detail='SICAR indisponível para os estados candidatos: '+', '.join(errors))
+        if errors:
+            # The failing UFs and exception names go to the log only; the caller learns it is pending.
+            print('RX_RESOLVE_V19_PENDING='+','.join(errors),flush=True)
+            raise HTTPException(status_code=502,detail='O SICAR não respondeu para este ponto agora. Consulta pendente.')
+        _resolve_keep(key,404,'Nenhum imóvel do SICAR foi localizado exatamente neste ponto.')
         raise HTTPException(status_code=404,detail='Nenhum imóvel do SICAR foi localizado exatamente neste ponto.')
     code,chosen=candidates[0];props=chosen.get('properties') or {}
-    return {'ok':True,'source':'SICAR/WFS público · UF pelos limites do IBGE','uf':props.get('uf') or code,'ufs_consultadas':asked,'property':{'car_code':props.get('cod_imovel'),'municipality':props.get('municipio'),'uf':props.get('uf') or code,'area_ha':props.get('area'),'status':props.get('status_imovel'),'condition':props.get('condicao'),'type':props.get('tipo_imovel'),'fiscal_modules':props.get('m_fiscal'),'created_at':props.get('dat_criacao'),'updated_at':props.get('data_atualizacao')},'geometry':chosen.get('geometry'),'candidate_count':len(candidates),'exact_count':len(candidates)}
+    body={'ok':True,'source':'SICAR/WFS público · UF pelos limites do IBGE','uf':props.get('uf') or code,'ufs_consultadas':asked,'property':{'car_code':props.get('cod_imovel'),'municipality':props.get('municipio'),'uf':props.get('uf') or code,'area_ha':props.get('area'),'status':props.get('status_imovel'),'condition':props.get('condicao'),'type':props.get('tipo_imovel'),'fiscal_modules':props.get('m_fiscal'),'created_at':props.get('dat_criacao'),'updated_at':props.get('data_atualizacao')},'geometry':chosen.get('geometry'),'candidate_count':len(candidates),'exact_count':len(candidates)}
+    _resolve_keep(key,200,body)
+    return body
 
 # Replace map routes after all previous SICAR compatibility patches.
 app.router.routes=[r for r in app.router.routes if getattr(r,'path',None) not in {'/v1/live/sicar/viewport','/v1/live/resolve'}]

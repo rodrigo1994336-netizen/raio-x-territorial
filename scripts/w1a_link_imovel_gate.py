@@ -124,11 +124,12 @@ def check_final_html(html: str) -> str:
     assert html.index("window.rxV46SelectProperty=function(p,g,latlng){const m=mapRef();") < html.index(
         "window.rxV46SelectProperty=selectWrapped") < start, "W1a must wrap the final, sanitized selection entry"
 
-    # The share control lives in the card head (no extra card height); nothing after the CTA.
+    # The share control lives in the card head (no extra card height). After the CTA only the INCRA reference,
+    # which F1B moved below it: it arrives with /map-panel and must never push the button away from the finger.
     head_hook = ('<span class="rx46-spacer"></span>${window.rxShareW1a?window.rxShareW1a.html(car,id.place):\'\'}'
                  '<button type="button" class="rx46-linkbtn" data-rx46-action="kml">Mapa KML</button>')
     assert html.count(head_hook) == 1, "V46 card head must render the W1a share control before Mapa KML"
-    assert "VER ANÁLISE COMPLETA</button></div>`}" in html, "nothing may be added under the CTA (card height)"
+    assert "VER ANÁLISE COMPLETA</button>${sigefRef(p)}</div>`}" in html, "nothing but the INCRA reference may be added under the CTA (card height)"
     assert "const id=identity(p),car=id.code" in html and "window.rxCardIdentityC2=cardIdentity" in html, "card title contract changed"
 
     # One validation for browser and gate.

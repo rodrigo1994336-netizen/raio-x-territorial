@@ -224,9 +224,10 @@ async def assert_contract(page, label, sina_source):
     await box.wait_for(state="visible", timeout=3000)
     detail = await box.inner_text()
     detail_folded = detail.casefold()
-    assert detail_folded.count("pendente de implementação") == 6, (label, detail)
+    # F1B: no "pendente de implementação" catalogue and no source nobody asked in the client's box.
+    assert "pendente de implementação" not in detail_folded and "não consultada" not in detail_folded, (label, detail)
     for hidden in HIDDEN_FUTURE:
-        assert hidden.casefold() in detail_folded, (label, hidden, detail)
+        assert hidden.casefold() not in detail_folded, (label, hidden, detail)
     assert detail_folded.count("sinaflor — supressão") == 1, (label, detail)
     sina_status = (await sina.locator('.rx48-check-status').inner_text()).strip().casefold()
     assert sina_status in detail_folded, (label, "audit_not_reflecting_live_sinaflor_state", sina_status, detail)

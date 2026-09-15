@@ -79,14 +79,6 @@ UI = r'''
 (function(){
  const q=s=>document.querySelector(s);
  const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
- const hidden=[
-  ['IBAMA — embargos por área','IBAMA'],
-  ['IBAMA — autos por área','IBAMA'],
-  ['ICMBio — embargos por área','ICMBio'],
-  ['ICMBio — autos por área','ICMBio'],
-  ['INCRA — assentamento rural','INCRA'],
-  ['INCRA — território quilombola','INCRA']
- ];
  const fmtDate=v=>{if(!v)return '';const s=String(v);const m=s.match(/^(\d{4})-(\d{2})-(\d{2})/);return m?`${m[3]}/${m[2]}/${m[1]}`:s};
  const fmtQuery=v=>{if(!v)return 'não realizada';try{return new Date(v).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'})}catch(e){return String(v)}};
  function body(el,label,status,reason,meta){el.innerHTML=`<i class="rx45-dot ${esc(el.dataset.state||'not_consulted')}"></i><span class="rx48-check-body"><span class="rx48-check-label">${esc(label)}</span><span class="rx48-check-status">${esc(status)}</span><span class="rx48-check-reason">${esc(reason)}</span>${meta?`<span class="rx48-check-meta">${esc(meta)}</span>`:''}</span>`}
@@ -106,8 +98,29 @@ UI = r'''
  function enhance(card){const S=window.rxPanelSourcesF2;if(!card||!S)return;const el=card.querySelector('.rx45-check[data-source="mte_slave_labor"]');if(!el)return;card.dataset.rx48Enhanced='1';S.settle(MTE_ID,card.dataset.car,mteQuery,mtePaint)}
  function enhanceCar(car){if(!car)return;const card=q(`.rx45-panel-card[data-car="${CSS.escape(car)}"]`);if(card)enhance(card)}
  function auditItem(label,status,detail){return `<div class="rx48-audit-item"><b>${esc(label)}</b><span><em>${esc(status)}</em>${esc(detail)}</span></div>`}
- function auditStateLabel(state){return ({NOT_QUERIED:'NÃO CONSULTADA',QUERYING:'CONSULTANDO',ANSWERED_CLEAR:'RESPONDEU · SEM OCORRÊNCIA',ANSWERED_HIT:'RESPONDEU',BLOCKED:'BLOQUEADA',FAILED:'CONSULTA PENDENTE'})[state]||'ESTADO INVÁLIDO'}
- function buildAudit(card){let box=card.querySelector('.rx48-audit-box');if(!box){box=document.createElement('div');box.className='rx48-audit-box';card.querySelector('.rx45-audit-count')?.after(box)}const a=auditModel(card),items=[];if(!a){items.push(auditItem('Auditoria','INDISPONÍVEL NESTA CONSULTA','O registro canônico de fontes não pôde ser reconstruído com segurança. Nenhum número foi inferido.'))}else{a.registry.forEach(source=>{const row=source.id==='car'?null:card.querySelector(`.rx45-check[data-source="${CSS.escape(source.id)}"]`),status=row?.querySelector('.rx48-check-status')?.textContent?.trim()||auditStateLabel(source.state),detail=source.id==='car'?'Perímetro e atributos cadastrais do CAR.':(row?.querySelector('.rx48-check-reason')?.textContent?.trim()||'Estado desta fonte nesta consulta.');items.push(auditItem(source.label,status,detail))})}hidden.forEach(([label,source])=>items.push(auditItem(label,'PENDENTE DE IMPLEMENTAÇÃO',`Fonte catalogada: ${source}. Não integra o contador até a implementação existir.`)));box.innerHTML=items.join('');return box}
+ // F1B: the box lists only what THIS consultation knows — the CAR, each source that answered, is pending or is
+ // being asked, and, once "Análise completa" ran, its own answers (the same Sim/Não/pendente of the panel,
+ // with the time the data was produced). A source nobody asked is not listed (campo vazio não aparece), and
+ // registry sources that the full analysis answers are listed once, from the analysis.
+ const READING_SOURCES=new Set(['embargo','prodes','indigenous_land','conservation_unit','public_forest']);
+ const READING_STATUS={sim:'RESPONDEU · COM OCORRÊNCIA',nao:'RESPONDEU · SEM OCORRÊNCIA',pendente:'CONSULTA PENDENTE'};
+ function readingOf(card){try{const F=window.rxFullReadingF1b;return F&&card?.dataset?.car?F.peek(card.dataset.car):null}catch(e){return null}}
+ function buildAudit(card){let box=card.querySelector('.rx48-audit-box');if(!box){box=document.createElement('div');box.className='rx48-audit-box';card.querySelector('.rx45-audit-count')?.after(box)}const a=auditModel(card),R=readingOf(card),items=[];
+  if(!a){items.push(auditItem('Fontes','CONSULTA PENDENTE','A lista de fontes desta consulta não pôde ser montada agora. Nada foi presumido.'))}
+  else{a.registry.forEach(source=>{
+   if(source.id==='car'){items.push(auditItem(source.label,'RESPONDEU','Perímetro e atributos cadastrais do CAR.'));return}
+   if(R&&READING_SOURCES.has(source.id))return;
+   const row=card.querySelector(`.rx45-check[data-source="${CSS.escape(source.id)}"]`);
+   if(!row||!row.dataset.state)return;
+   const status=row.querySelector('.rx48-check-status')?.textContent?.trim();if(!status)return;
+   items.push(auditItem(source.label,status,row.querySelector('.rx48-check-reason')?.textContent?.trim()||''))})}
+  if(R&&R.phase==='loading')items.push(auditItem('Análise completa','CONSULTANDO','Embargos, desmatamento, áreas protegidas, mineração, queimadas e água.'));
+  else if(R&&R.phase==='ready'&&Array.isArray(R.rows))R.rows.forEach(r=>items.push(auditItem(r.source||r.q,READING_STATUS[r.answer]||READING_STATUS.pendente,r.q+(Number.isFinite(R.at)?` · consulta: ${fmtQuery(R.at)}`:''))));
+  else if(R)items.push(auditItem('Análise completa','CONSULTA PENDENTE','As fontes oficiais não responderam agora. Nada foi presumido.'));
+  box.innerHTML=items.join('');return box}
+ // Called by the full analysis when it repaints: an open box follows it.
+ window.rxV48RefreshAudit=function(card){const box=card?.querySelector?.('.rx48-audit-box.open');if(box)buildAudit(card)};
+ window.rxV48Audit={build:buildAudit};
  function toggleAudit(card,button){if(!card)return;const box=buildAudit(card),open=!box.classList.contains('open');box.classList.toggle('open',open);button?.setAttribute('aria-expanded',open?'true':'false')}
  function interceptAudit(e){const button=e.target.closest?.('#rx45Audit');if(!button)return;const card=button.closest('.rx45-panel-card');if(!card)return;e.preventDefault();e.stopImmediatePropagation();toggleAudit(card,button)}
  function install(){if(window.__rx48MteEventWired)return;window.__rx48MteEventWired=true;document.addEventListener('click',interceptAudit,true);window.rxPanelSourcesF2?.onRendered(enhanceCar)}

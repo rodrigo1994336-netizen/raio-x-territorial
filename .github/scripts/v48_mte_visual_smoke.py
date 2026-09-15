@@ -152,8 +152,11 @@ async def assert_contract(page, label):
     detail_folded = audit_detail.casefold()
     assert detail_folded.count("mte — trabalho escravo") == 1, (label, audit_detail)
     assert "não verificada" in detail_folded, (label, audit_detail)
-    for expected in ORIGINAL_EIGHT.values():
-        assert expected.casefold() in detail_folded, (label, expected, audit_detail)
+    assert "car / sicar" in detail_folded, (label, audit_detail)
+    # F1B: the box lists only what this consultation knows; a source nobody asked is not listed and no
+    # development wording reaches the client.
+    for absent in ("não consultada", "pendente de implementação", "contador", "reserva legal", "matrícula"):
+        assert absent not in detail_folded, (label, absent, audit_detail)
     await audit.locator('#rx45Audit').click()
 
     geometry = await page.evaluate(

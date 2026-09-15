@@ -24,7 +24,8 @@ async def quick_analysis_v24(car_code:str,deep:bool=False):
         if deep:prog._ensure_deep(code)
         elapsed=round((time.monotonic()-t0)*1000)
         summary=base._report_summary(cached_full)
-        summary['progressive']={'state':'quick-cache','deep_analysis':'ready','elapsed_ms':elapsed}
+        # F1B: the time the cached data was produced travels with it (never the time of this answer).
+        summary['progressive']={'state':'quick-cache','deep_analysis':'ready','elapsed_ms':elapsed,'completed_at':prog.completed_at(code)}
         print(f'RX_QUICK_V24_CACHE={code}:{elapsed}ms:deep={deep}',flush=True)
         return {'ok':True,'mode':'quick-cache','elapsed_ms':elapsed,'analysis':summary,'deep_state':prog._PROGRESS.get(code,{'state':'ready','stage':'complete'})}
 

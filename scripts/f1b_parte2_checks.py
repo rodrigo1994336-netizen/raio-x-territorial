@@ -12,11 +12,21 @@
       * served card script (node): fresh cell -> 7 fields and no placeholder; cell older than 5 min -> status,
         condition and update date hidden and kept as unlabeled placeholders while the live answer comes;
         answered or failed -> no placeholder, absent field not shown, never a label with an empty value.
+1B.6  (also)
+      * /v1/live/resolve reuses an answer for the same point for 2 min, never keeps a pending one, and its 502
+        never names internal exceptions; the served coordinate search says "pendente" for a SICAR 502 and
+        "nenhum CAR exato" only for a 404; the advanced search municipality box answers no ambiguous prefix.
+1B.7  (also) the shared /map-panel request never memorises a failure (the C3 retries reach the network).
+1B.3  (also) the engine state poll is one short try with a total limit, never a wait for the engine, and the
+      browser timeouts cover the portal proxy budget.
 1B.8  the report engine wake:
-      * server lock: 25 simultaneous calls -> 1 ping to {WORKER}/health; another only after 10 min; daily cap;
-        the answer never waits for the ping; a failing ping raises nothing; no URL -> no network at all;
-      * served script (node): 1 POST per tab per 10 min whatever the number of cards, after the card is
-        painted, per tab (sessionStorage) and still limited when storage is blocked; nothing without a URL.
+      * server lock: 25 simultaneous calls -> 1 ping to {WORKER}/health; another only after 10 min; no ping
+        while the portal talked to the engine in the last 10 min; 12 per UTC day and 3 per client; the answer is
+        always the same {"ok": true} 202 (no lock state); it never waits for the ping; a failing ping raises
+        nothing; no URL, or not production (no explicit RX_REPORT_WORKER_URL and not on Render) -> no network;
+      * served script (node): only with intention (the card still open after the dwell, or pointer/focus/touch
+        on "Ver análise completa"/"PDF"); 1 POST per tab per 10 min, per tab (sessionStorage) and still limited
+        when storage is blocked; nothing when the served flag is off.
 
 Each rule has positive controls: the defect is reintroduced (source or served-script mutation, or a module
 attribute swap) and the rule must FAIL for its own reason.
@@ -97,6 +107,11 @@ def square(lat: float, lon: float, code: str, d: float = 0.004) -> dict:
 def mutate_function(fn: Callable, old: str, new: str) -> Callable:
     """Source mutation of a module-level function: same globals, one exact replacement."""
     src = inspect.getsource(fn)
+    # never re-run a route decorator: the mutant must not register itself on the portal app
+    lines = src.split("\n")
+    while lines and lines[0].lstrip().startswith("@"):
+        lines.pop(0)
+    src = "\n".join(lines)
     assert src.count(old) == 1, f"positive control anchor missing in {fn.__name__}: {old[:60]}"
     ns: dict[str, Any] = {}
     exec(compile(src.replace(old, new), f"<mutant {fn.__name__}>", "exec"), fn.__globals__, ns)
@@ -124,7 +139,9 @@ def resolve_observations(resolve: Callable | None = None, local_ufs: Callable | 
     saved_fetch, saved_local = sicar._fetch_sicar_bbox, v19._local_ufs
     obs: dict[str, Any] = {}
 
-    def run_case(name, point, layers, failing=()):
+    def run_case(name, point, layers, failing=(), keep_cache=False):
+        if not keep_cache:
+            v19._RESOLVE_CACHE.clear()
         asked: list[str] = []
 
         async def fake_fetch(request, west, south, east, north, uf, limit):  # the real signature: request first
@@ -143,7 +160,8 @@ def resolve_observations(resolve: Callable | None = None, local_ufs: Callable | 
             sicar._fetch_sicar_bbox = saved_fetch
         prop = body.get("property") if isinstance(body, dict) else None
         obs[name] = {"status": code, "asked": sorted(set(asked)), "car": (prop or {}).get("car_code"),
-                     "created_at": (prop or {}).get("created_at"), "net": spy.urls[:3]}
+                     "created_at": (prop or {}).get("created_at"), "net": spy.urls[:3],
+                     "detail": body if isinstance(body, str) else ""}
 
     if local_ufs is not None:
         v19._local_ufs = local_ufs
@@ -155,6 +173,14 @@ def resolve_observations(resolve: Callable | None = None, local_ufs: Callable | 
         run_case("border_none_all_answered", BORDER, {})
         run_case("interior", INTERIOR, {"MG": [square(*INTERIOR, CAR_MG)]})
         run_case("ocean", OCEAN, {})
+        # the same point again within 2 min: the answer is reused, SICAR is not asked again
+        run_case("repeat_first", INTERIOR, {"MG": [square(*INTERIOR, CAR_MG)]})
+        run_case("repeat_again", INTERIOR, {"MG": [square(*INTERIOR, CAR_MG)]}, keep_cache=True)
+        # a pending consultation is never kept: the next call asks again
+        run_case("pending_first", BORDER, {}, failing=("MG",))
+        run_case("pending_again", BORDER, {"MG": [square(*BORDER, CAR_MG)]}, keep_cache=True)
+        # the layer filled its 30-feature cap without the property: 30 is not all -> pending, never "no property"
+        run_case("capped", INTERIOR, {"MG": [square(INTERIOR[0] + 0.01 * (i + 1), INTERIOR[1], f"MG-3120904-{i:032d}", d=0.001) for i in range(30)]})
     finally:
         v19._local_ufs = saved_local
     return obs
@@ -179,6 +205,15 @@ def judge_resolve(o: dict) -> list[str]:
         p.append("point answer without the SICAR dates")
     if o["ocean"]["status"] != 404 or o["ocean"]["asked"]:
         p.append(f"point outside Brazil asked SICAR: {o['ocean']}")
+    if o["repeat_first"]["status"] != 200 or o["repeat_again"]["status"] != 200 or o["repeat_again"]["asked"] or o["repeat_again"]["car"] != CAR_MG:
+        p.append(f"repeated point fans out to SICAR again: {o['repeat_again']}")
+    if o["pending_first"]["status"] != 502 or o["pending_again"]["status"] != 200 or not o["pending_again"]["asked"]:
+        p.append(f"pending consultation kept in the cache: {o['pending_first']['status']} -> {o['pending_again']}")
+    if o["capped"]["status"] != 502:
+        p.append(f"layer cut at its cap answered 'no property here': {o['capped']['status']}")
+    leak = o["border_none_one_failed"].get("detail") or ""
+    if re.search(r"[A-Z][a-z]+(Error|Exception|Timeout)\b|MG:|HTTPException", leak):
+        p.append(f"502 detail exposes internal exception names: {leak}")
     nets = [x for v in o.values() for x in v["net"]]
     if nets:
         p.append(f"Nominatim/external network asked: {nets[:2]}")
@@ -300,6 +335,16 @@ def rule_mappings(html: str) -> list[str]:
     return p
 
 
+CTA_THEN_REF = 'VER ANÁLISE COMPLETA</button>${sigefRef(p)}</div>`}'
+
+
+def rule_cta_never_pushed(html: str) -> list[str]:
+    """The INCRA reference arrives with /map-panel (up to 17 s cold): it is drawn under the CTA, never above it."""
+    if html.count(CTA_THEN_REF) != 1 or '${sigefRef(p)}<button type="button" class="rx46-cta"' in html:
+        return ["INCRA reference drawn above the card CTA (the button jumps when /map-panel answers)"]
+    return []
+
+
 # ------------------------------------------------------------------ node harness (card + wake script)
 def served_script(html: str, sid: str) -> str:
     i = html.index(f'<script id="{sid}">')
@@ -380,6 +425,10 @@ def judge_wake_script(w: dict) -> list[str]:
         p.append(f"per-tab memory wrong: reload={w.get('reload_same_tab')} other_tab={w.get('other_tab')}")
     if w.get("storage_blocked") != 1:
         p.append(f"tab limit broken when storage is blocked: {w.get('storage_blocked')}")
+    if w.get("glance") != 0:
+        p.append(f"wake without intention: a card closed before the dwell woke the engine ({w.get('glance')})")
+    if w.get("intent_elsewhere") != 0 or w.get("intent") != 1:
+        p.append(f"intention on 'Ver análise completa'/'PDF' wrong: elsewhere={w.get('intent_elsewhere')} on_button={w.get('intent')}")
     if w.get("no_car") != 0:
         p.append("wake without a property")
     o = w.get("offline") or {}
@@ -392,12 +441,19 @@ def judge_wake_script(w: dict) -> list[str]:
 
 
 # ------------------------------------------------------------------ 1B.8 server lock
-def wake_server_observations() -> dict:
+class FakeRequest:
+    def __init__(self, ip: str = "203.0.113.7", forwarded: str | None = None):
+        self.headers = {"x-forwarded-for": forwarded} if forwarded else {}
+        self.client = type("C", (), {"host": ip})()
+
+
+def wake_server_observations(endpoint: Callable | None = None) -> dict:
     import httpx
     import portal_pdf_v21
     import portal_report_wake_f1b as W
 
-    saved_client, saved_worker = httpx.AsyncClient, portal_pdf_v21.WORKER
+    endpoint = endpoint or W.report_engine_wake
+    saved_client, saved_worker, saved_env, saved_last_ok = httpx.AsyncClient, portal_pdf_v21.WORKER, W.WAKE_ENV_ENABLED, getattr(portal_pdf_v21, "LAST_WORKER_OK_MONO", None)
     gets: list[str] = []
     mode = {"delay": 0.25, "raise": False}
 
@@ -423,7 +479,8 @@ def wake_server_observations() -> dict:
             return R()
 
     def reset():
-        W.STATE.update({"last": None, "day": "", "count": 0, "task": None, "sent": 0, "refused": 0, "last_result": None})
+        W.STATE.update({"last": None, "day": "", "count": 0, "clients": {}, "task": None, "sent": 0, "refused": 0, "last_refusal": None, "last_result": None})
+        portal_pdf_v21.LAST_WORKER_OK_MONO = None
 
     async def settle():
         t = W.STATE.get("task")
@@ -433,33 +490,69 @@ def wake_server_observations() -> dict:
             except Exception:
                 pass
 
+    async def call(req=None):
+        r = await endpoint(req or FakeRequest())
+        return {"status": r.status_code, "body": json.loads(r.body)}
+
     obs: dict[str, Any] = {}
     httpx.AsyncClient = FakeClient
     portal_pdf_v21.WORKER = "https://worker.fixture.invalid"
+    W.WAKE_ENV_ENABLED = True
     try:
         async def burst():
             reset()
-            res = await asyncio.gather(*(W.report_engine_wake() for _ in range(25)))
+            res = await asyncio.gather(*(call() for _ in range(25)))
             await settle()
-            sent = [json.loads(r.body)["sent"] for r in res]
-            again = json.loads((await W.report_engine_wake()).body)
+            after_burst = len(gets)
+            again = await call()
             W.STATE["last"] -= W.WAKE_INTERVAL_S + 1
-            later = json.loads((await W.report_engine_wake()).body)
+            await call()
             await settle()
+            after_later = len(gets)
             W.STATE["last"] = None
             W.STATE["count"] = W.WAKE_DAILY_CAP
-            capped = json.loads((await W.report_engine_wake()).body)
-            return {"sent": sum(sent), "gets_after_burst": 0, "again": again, "later": later, "capped": capped}
+            await call(FakeRequest("198.51.100.9"))
+            await settle()
+            return {"answers": sorted({json.dumps(x["body"], sort_keys=True) for x in res + [again]}), "statuses": sorted({x["status"] for x in res + [again]}), "after_burst": after_burst,
+                    "after_later": after_later, "after_cap": len(gets)}
 
         gets.clear()
         obs["burst"] = asyncio.run(burst())
         obs["burst"]["gets"] = list(gets)
 
+        async def engine_awake():
+            reset()
+            before = len(gets)
+            portal_pdf_v21.LAST_WORKER_OK_MONO = time.monotonic() - 60  # the portal talked to the worker a minute ago
+            await call()
+            await settle()
+            awake = len(gets) - before
+            portal_pdf_v21.LAST_WORKER_OK_MONO = time.monotonic() - W.ENGINE_RECENT_S - 1
+            await call()
+            await settle()
+            return {"awake": awake, "idle": len(gets) - before - awake}
+
+        obs["engine_awake"] = asyncio.run(engine_awake())
+
+        async def per_client():
+            reset()
+            before = len(gets)
+            for _ in range(W.WAKE_PER_CLIENT_DAILY + 2):
+                await call(FakeRequest("192.0.2.1", forwarded="192.0.2.50, 10.0.0.1"))
+                await settle()
+                W.STATE["last"] = None
+            same = len(gets) - before
+            await call(FakeRequest("192.0.2.1", forwarded="192.0.2.51"))
+            await settle()
+            return {"same_client": same, "other_client": len(gets) - before - same}
+
+        obs["per_client"] = asyncio.run(per_client())
+
         async def slow():
             reset()
             mode["delay"] = 2.0
             t0 = time.perf_counter()
-            r = await W.report_engine_wake()
+            r = await call()
             ms = round((time.perf_counter() - t0) * 1000)
             t = W.STATE.get("task")
             if t is not None:
@@ -469,17 +562,17 @@ def wake_server_observations() -> dict:
                 except BaseException:
                     pass
             mode["delay"] = 0.25
-            return {"ms": ms, "status": r.status_code}
+            return {"ms": ms, "status": r["status"]}
 
         obs["non_blocking"] = asyncio.run(slow())
 
         async def failing():
             reset()
             mode["raise"] = True
-            r = await W.report_engine_wake()
+            r = await call()
             await settle()
             mode["raise"] = False
-            return {"status": r.status_code, "last_result": W.STATE.get("last_result")}
+            return {"status": r["status"], "last_result": W.STATE.get("last_result")}
 
         obs["failing"] = asyncio.run(failing())
 
@@ -487,14 +580,30 @@ def wake_server_observations() -> dict:
             reset()
             portal_pdf_v21.WORKER = ""
             before = len(gets)
-            r = await W.report_engine_wake()
+            r = await call()
             await settle()
-            return {"body": json.loads(r.body), "gets": len(gets) - before, "ui_disabled": "const ENABLED=false," in W.ui_html()}
+            ui = W.ui_html()
+            portal_pdf_v21.WORKER = "https://worker.fixture.invalid"
+            return {"body": r["body"], "status": r["status"], "gets": len(gets) - before, "ui_disabled": "const ENABLED=false," in ui}
 
         obs["unconfigured"] = asyncio.run(unconfigured())
+
+        async def not_production():
+            reset()
+            W.WAKE_ENV_ENABLED = False  # a local server, a smoke run or CI: no explicit worker URL, not on Render
+            before = len(gets)
+            r = await call()
+            await settle()
+            ui = W.ui_html()
+            W.WAKE_ENV_ENABLED = True
+            return {"body": r["body"], "gets": len(gets) - before, "ui_disabled": "const ENABLED=false," in ui}
+
+        obs["not_production"] = asyncio.run(not_production())
     finally:
         httpx.AsyncClient = saved_client
         portal_pdf_v21.WORKER = saved_worker
+        portal_pdf_v21.LAST_WORKER_OK_MONO = saved_last_ok
+        W.WAKE_ENV_ENABLED = saved_env
         reset()
     return obs
 
@@ -502,14 +611,19 @@ def wake_server_observations() -> dict:
 def judge_wake_server(o: dict) -> list[str]:
     p = []
     b = o["burst"]
-    if b["sent"] != 1 or len([g for g in b["gets"][:1] if g.endswith("/health")]) != 1:
-        p.append(f"server lock broken: {b['sent']} sent for 25 simultaneous calls, gets={b['gets'][:3]}")
-    if b["again"].get("sent") or not b["later"].get("sent"):
-        p.append(f"server interval wrong: again={b['again']} later={b['later']}")
-    if b["capped"].get("sent") or b["capped"].get("reason") != "daily_cap":
-        p.append(f"daily cap not enforced: {b['capped']}")
-    if len(b["gets"]) != 2:
-        p.append(f"server lock broken: worker pinged {len(b['gets'])}x (expected 2)")
+    if b["after_burst"] != 1 or len([g for g in b["gets"][:1] if g.endswith("/health")]) != 1:
+        p.append(f"server lock broken: worker pinged {b['after_burst']}x for 25 simultaneous calls, gets={b['gets'][:3]}")
+    if b["after_later"] != 2:
+        p.append(f"server interval wrong: {b['after_later']} pings after the 10 min interval (expected 2)")
+    if b["after_cap"] != 2:
+        p.append(f"daily cap not enforced: {b['after_cap']} pings")
+    if b["answers"] != ['{"ok": true}'] or b["statuses"] != [202]:
+        p.append(f"wake answer leaks the lock state: {b['answers']} {b['statuses']}")
+    if o["engine_awake"]["awake"] != 0 or o["engine_awake"]["idle"] != 1:
+        p.append(f"pinged an engine the portal knows is awake: {o['engine_awake']}")
+    pc = o["per_client"]
+    if pc["same_client"] != 3 or pc["other_client"] != 1:
+        p.append(f"per-client cap wrong: {pc}")
     nb = o["non_blocking"]
     if nb["ms"] > 500 or nb["status"] != 202:
         p.append(f"wake answer blocks on the worker: {nb}")
@@ -517,8 +631,11 @@ def judge_wake_server(o: dict) -> list[str]:
     if f["status"] != 202 or f["last_result"] != "ConnectTimeout":
         p.append(f"failing ping not contained: {f}")
     u = o["unconfigured"]
-    if u["body"].get("configured") is not False or u["body"].get("sent") or u["gets"] or not u["ui_disabled"]:
+    if u["body"] != {"ok": True} or u["gets"] or not u["ui_disabled"]:
         p.append(f"wake without a configured service URL: {u}")
+    n = o["not_production"]
+    if n["gets"] or not n["ui_disabled"] or n["body"] != {"ok": True}:
+        p.append(f"a local server / CI pings the production worker: {n}")
     return p
 
 
@@ -548,11 +665,132 @@ def rule_wake_static(html: str) -> list[str]:
         p.append("wake route is not one POST route")
     import portal_report_wake_f1b as W
 
-    if W.WAKE_INTERVAL_S < 600 or W.CLIENT_GAP_MS < 600000 or W.WAKE_DAILY_CAP > 96:
-        p.append(f"wake limits loosened: server={W.WAKE_INTERVAL_S}s tab={W.CLIENT_GAP_MS}ms cap={W.WAKE_DAILY_CAP}")
+    if (W.WAKE_INTERVAL_S < 600 or W.CLIENT_GAP_MS < 600000 or W.WAKE_DAILY_CAP > 12 or W.WAKE_PER_CLIENT_DAILY > 3
+            or W.ENGINE_RECENT_S < 600 or W.DWELL_MS < 3000):
+        p.append(f"wake limits loosened: server={W.WAKE_INTERVAL_S}s tab={W.CLIENT_GAP_MS}ms cap={W.WAKE_DAILY_CAP} "
+                 f"per_client={W.WAKE_PER_CLIENT_DAILY} engine_recent={W.ENGINE_RECENT_S}s dwell={W.DWELL_MS}ms")
+    import os
+
+    expected_env = bool(os.getenv("RX_REPORT_WORKER_URL", "").strip() or os.getenv("RENDER", "").strip())
+    if W.WAKE_ENV_ENABLED != expected_env:
+        p.append(f"wake enabled outside production (no explicit worker URL, not on Render): {W.WAKE_ENV_ENABLED}")
     enabled = "const ENABLED=true," in served_script(html, "rxReportWakeScriptF1b")
     if enabled != bool(W.worker_url()):
         p.append("served wake flag differs from the configured service URL")
+    return p
+
+
+# ------------------------------------------------------------------ status proxy (the browser poll never outlives its own timeout)
+def status_proxy_observations(endpoint: Callable | None = None) -> dict:
+    import portal_pdf_v21 as pdf
+    from fastapi import HTTPException
+
+    endpoint = endpoint or pdf.portal_progress_proxy
+    saved = (pdf._proxy, pdf._wait_worker_ready, pdf.STATUS_PROXY_TIMEOUT_S)
+    waits: list[float] = []
+    mode = {"proxy": "hang"}
+
+    async def fake_wait(car_code, name="", max_wait=70.0):
+        waits.append(max_wait)
+        await asyncio.sleep(0.5)
+        return True
+
+    async def fake_proxy(method, path, params=None, timeout=25, retries=0):
+        if mode["proxy"] == "hang":
+            await asyncio.sleep(5)  # an engine that trickles: longer than the total limit under test
+        raise HTTPException(status_code=502, detail="Worker de análise indisponível: ConnectTimeout")
+
+    obs: dict[str, Any] = {}
+    pdf._proxy, pdf._wait_worker_ready, pdf.STATUS_PROXY_TIMEOUT_S = fake_proxy, fake_wait, 0.3
+    try:
+        for m in ("hang", "down"):
+            mode["proxy"] = m
+            t0 = time.perf_counter()
+            code, detail = status_of(endpoint(CAR_MG))
+            obs[m] = {"status": code, "ms": round((time.perf_counter() - t0) * 1000), "detail": detail}
+        obs["ready_waits"] = len(waits)
+    finally:
+        pdf._proxy, pdf._wait_worker_ready, pdf.STATUS_PROXY_TIMEOUT_S = saved
+    return obs
+
+
+def judge_status_proxy(o: dict, html: str) -> list[str]:
+    import portal_pdf_v21 as pdf
+
+    p = []
+    if o["ready_waits"]:
+        p.append("status poll waits for the engine to be ready (outlives the browser timeout)")
+    if o["hang"]["status"] != 503 or o["hang"]["ms"] > 2500:
+        p.append(f"status poll without a total time limit: {o['hang']}")
+    if o["down"]["status"] != 503 or "ConnectTimeout" in str(o["down"]["detail"]):
+        p.append(f"status poll failure not a short generic 503: {o['down']}")
+    f1b = served_script(html, "rxFullReadingScriptF1b")
+    m = re.search(r"QUICK_TIMEOUT_MS=(\d+),STATUS_TIMEOUT_MS=(\d+)", f1b)
+    if not m:
+        p.append("browser timeouts not found in the served reading")
+    else:
+        quick, status = int(m.group(1)), int(m.group(2))
+        # quick proxy: engine ready wait 70 s + 22 s + 2 s pause + 22 s retry
+        if quick < 116000 or status < (pdf.STATUS_PROXY_TIMEOUT_S + 1) * 1000:
+            p.append(f"browser gives up before the portal proxy budget: quick={quick} status={status}")
+    return p
+
+
+# ------------------------------------------------------------------ municipality box of the advanced search: an ambiguous prefix is no answer
+def judge_find(find: Callable) -> list[str]:
+    p = []
+    got = find("Santa", "MG")
+    if got is not None:
+        p.append(f"ambiguous municipality prefix answered with one of them: {got.get('name')}")
+    one = find("Curvel", "MG")
+    if not one or one.get("name") != "Curvelo":
+        p.append(f"unique prefix not found: {one}")
+    exact = find("sao joao del rei", "mg")
+    if not exact or exact.get("name") != "São João del Rei":
+        p.append(f"exact accent-insensitive name not found: {exact}")
+    return p
+
+
+def served_statement(html: str, start: str) -> str:
+    """The balanced-brace statement that begins with `start` (e.g. 'if(!window.rxMapPanelOnce){')."""
+    i = html.index(start)
+    depth, j = 0, i
+    while j < len(html):
+        c = html[j]
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return html[i:j + 1]
+        j += 1
+    raise ValueError("unbalanced statement: " + start)
+
+
+def judge_coord(c: dict) -> list[str]:
+    p = []
+    if c.get("fatal"):
+        return [f"coordinate search not runnable: {c['fatal']}"]
+    s502, s404, s200 = c.get("sicar_502") or {}, c.get("none_404") or {}, c.get("found_200") or {}
+    for name, v in (("502", s502), ("404", s404), ("200", s200)):
+        if v.get("error"):
+            p.append(f"coordinate search crashed on {name}: {v['error']}")
+    t502, t404 = " ".join(s502.get("toasts") or []), " ".join(s404.get("toasts") or [])
+    if "nenhum CAR" in t502 or "pendente" not in t502:
+        p.append(f"SICAR that did not answer shown as 'no CAR here': {t502!r}")
+    if "nenhum CAR exato" not in t404:
+        p.append(f"answered absence not said: {t404!r}")
+    if s200.get("shown") != [CAR_MG]:
+        p.append(f"found property not opened: {s200}")
+    return p
+
+
+def judge_mappanel(m: dict) -> list[str]:
+    if m.get("fatal"):
+        return [f"shared /map-panel request not runnable: {m['fatal']}"]
+    p = []
+    if m.get("calls") != 3 or m.get("r2_ok") is not False or m.get("r4_ok") is not True or m.get("r4_d") is not True:
+        p.append(f"failed /map-panel answer memorised (the retry never reaches the network): calls={m.get('calls')} {m}")
     return p
 
 
@@ -581,15 +819,28 @@ def run_all(html: str, check: Callable[[bool, str], bool]) -> None:
     check(not probs, f"1B.6 search box lists municipalities without waiting for the property search {probs if probs else ''}".rstrip())
     probs = guarded("vp", lambda: judge_viewport(viewport_observations())) + guarded("map", lambda: rule_mappings(html))
     check(not probs, f"1B.7 dates travel with the drawn feature and every card mapping {probs if probs else ''}".rstrip())
+    probs = rule_cta_never_pushed(html)
+    check(not probs, f"1B.7 late INCRA reference drawn under the card CTA {probs if probs else ''}".rstrip())
+    check(any("jumps" in x for x in rule_cta_never_pushed(html.replace(
+        '<button type="button" class="rx46-cta" data-rx46-action="full">VER ANÁLISE COMPLETA</button>${sigefRef(p)}</div>`}',
+        '${sigefRef(p)}<button type="button" class="rx46-cta" data-rx46-action="full">VER ANÁLISE COMPLETA</button></div>`}'))),
+          "positive control catches: 1B.7 INCRA reference back above the CTA (for its reason: 'jumps')")
 
+    coord_line = next(line for line in html.split("\n") if line.startswith("async function coordinateSearch(raw){"))
     payload = {"format": served_script(html, "rxNumberFormatC2"), "v46": served_script(html, "rxMapV46Script"),
-               "wake": served_script(html, "rxReportWakeScriptF1b")}
-    saved_worker = __import__("portal_pdf_v21").WORKER
-    __import__("portal_pdf_v21").WORKER = ""
+               "coord": coord_line, "mappanel": served_statement(html, "if(!window.rxMapPanelOnce){")}
+    # the served wake script, enabled and disabled, whatever this machine's environment is
+    saved_env = W.WAKE_ENV_ENABLED
     try:
+        W.WAKE_ENV_ENABLED = True
+        payload["wake"] = W.ui_html().split("\n", 1)[1].split("</script>")[0]
+        W.WAKE_ENV_ENABLED = False
         payload["wake_disabled"] = W.ui_html().split("\n", 1)[1].split("</script>")[0]
     finally:
-        __import__("portal_pdf_v21").WORKER = saved_worker
+        W.WAKE_ENV_ENABLED = saved_env
+    served_wake = served_script(html, "rxReportWakeScriptF1b")
+    if served_wake.split(">", 1)[1].replace("const ENABLED=false,", "const ENABLED=true,") != payload["wake"].split(">", 1)[1]:
+        check(False, "1B.8 the wake script tested in node is not the served one")
     hr = run_harness(payload)
     probs = judge_card(hr.get("card") or {})
     check(not probs, f"1B.7 card paints at once and keeps its height, no empty field {probs if probs else ''}".rstrip())
@@ -598,8 +849,20 @@ def run_all(html: str, check: Callable[[bool, str], bool]) -> None:
     print("F1B2_WAKE_SCRIPT_EVIDENCE=" + json.dumps(hr.get("wake"), ensure_ascii=False)[:700], flush=True)
     ws = wake_server_observations()
     probs = judge_wake_server(ws) + guarded("static", lambda: rule_wake_static(html))
-    check(not probs, f"1B.8 server lock, non-blocking answer, no URL no network {probs if probs else ''}".rstrip())
-    print("F1B2_WAKE_SERVER_EVIDENCE=" + json.dumps({k: v for k, v in ws.items()}, ensure_ascii=False)[:700], flush=True)
+    check(not probs, f"1B.8 server lock (interval, engine awake, daily and per-client caps), same answer always, non-blocking, no ping outside production {probs if probs else ''}".rstrip())
+    print("F1B2_WAKE_SERVER_EVIDENCE=" + json.dumps({k: v for k, v in ws.items()}, ensure_ascii=False)[:900], flush=True)
+    sp = status_proxy_observations()
+    probs = judge_status_proxy(sp, html)
+    check(not probs, f"1B.3 engine state poll is short and within the browser timeout {probs if probs else ''}".rstrip())
+    print("F1B2_STATUS_PROXY_EVIDENCE=" + json.dumps(sp, ensure_ascii=False)[:400], flush=True)
+    import municipios_ibge_br as mun_find
+
+    probs = guarded("find", lambda: judge_find(mun_find.find))
+    check(not probs, f"1B.6 advanced search municipality box: ambiguous prefix is no answer {probs if probs else ''}".rstrip())
+    probs = judge_coord(hr.get("coord") or {})
+    check(not probs, f"1B.6 coordinate search: SICAR that did not answer is pending, never 'no CAR here' {probs if probs else ''}".rstrip())
+    probs = judge_mappanel(hr.get("mappanel") or {})
+    check(not probs, f"1B.3 shared /map-panel request never memorises a failure {probs if probs else ''}".rstrip())
 
     # ---------- positive controls: each defect back, each rule must fail for its reason
     def control(label, got, reason):
@@ -609,7 +872,15 @@ def run_all(html: str, check: Callable[[bool, str], bool]) -> None:
     control("1B.6 only the first IBGE UF", judge_resolve(resolve_observations(local_ufs=lambda *a: (orig_local(*a) or [])[:1])), "border property in the other UF not found")
     control("1B.6 back to the Nominatim resolver", judge_resolve(resolve_observations(local_ufs=lambda *a: None)), "Nominatim/external network asked")
     control("1B.6 absence claimed with a UF down", judge_resolve(resolve_observations(
-        resolve=mutate_function(v19.resolve_v19, "if errors:raise HTTPException(status_code=502", "if errors and len(errors)>=len(ufs):raise HTTPException(status_code=502"))), "absence claimed while a UF did not answer")
+        resolve=mutate_function(v19.resolve_v19, "if errors:\n", "if errors and len(errors)>=len(ufs):\n"))), "absence claimed while a UF did not answer")
+    control("1B.6 capped layer read as all", judge_resolve(resolve_observations(
+        resolve=mutate_function(v19.resolve_v19, "if len(feats)>=int((fetched or {}).get('cap') or 30):errors.append(f'{code}:capped')", "pass"))), "layer cut at its cap")
+    control("1B.6 repeated point not cached", judge_resolve(resolve_observations(
+        resolve=mutate_function(v19.resolve_v19, "hit=_resolve_cached(key)", "hit=None"))), "repeated point fans out")
+    control("1B.6 pending consultation cached", judge_resolve(resolve_observations(
+        resolve=mutate_function(v19.resolve_v19, "print('RX_RESOLVE_V19_PENDING='+','.join(errors),flush=True)", "_resolve_keep(key,404,'x')"))), "pending consultation kept")
+    control("1B.6 exception names in the 502", judge_resolve(resolve_observations(
+        resolve=mutate_function(v19.resolve_v19, "detail='O SICAR não respondeu para este ponto agora. Consulta pendente.'", "detail='SICAR indisponível para os estados candidatos: '+', '.join(errors)"))), "exposes internal exception names")
     control("1B.6 SICAR helper without its request", judge_resolve(resolve_observations(
         resolve=mutate_function(v19.resolve_v19, "sicar._fetch_sicar_bbox(request,lon-eps", "sicar._fetch_sicar_bbox(lon-eps"))), "border property in the other UF not found")
     control("1B.6 municipality route on Nominatim", judge_cities(city_observations(endpoint=legacy_city_search)), "asked the network (Nominatim)")
@@ -651,16 +922,61 @@ def run_all(html: str, check: Callable[[bool, str], bool]) -> None:
         return judge_wake_script(run_harness(pl).get("wake") or {})
 
     control("1B.8 no tab limit", wake_mutant("if(t&&now>=t&&now-t<GAP)return false;", ""), "tab limit broken")
-    control("1B.8 wake before the paint", wake_mutant("setTimeout(wake,0)", "wake()"), "wake sent before the card is painted")
-    control("1B.8 wake without URL", wake_mutant("if(!ENABLED)return false;", "", key="wake_disabled"), "wake sent without a service URL")
+    control("1B.8 wake before the paint", wake_mutant("setTimeout(()=>dwell(car),DWELL)", "dwell(car)"), "wake sent before the card is painted")
+    control("1B.8 wake on a glance (no dwell check)", wake_mutant("function dwell(car){if(stillOpen(car))wake()}", "function dwell(car){wake()}"), "wake without intention")
+    control("1B.8 wake on any pointer", wake_mutant("if(t&&t.closest&&t.closest(INTENT))wake()", "wake()"), "intention on 'Ver análise completa'")
+    # the served flag is the switch (three guards read it): the script served enabled without a URL must fail
+    control("1B.8 wake without URL", wake_mutant("const ENABLED=false,", "const ENABLED=true,", key="wake_disabled"), "wake sent without a service URL")
     control("1B.8 wrapper drops earlier flags", wake_mutant("for(const k of Object.keys(sel))wrapped[k]=sel[k];", ""), "lost the flags")
+
+    def pl_control(label, key, old, new, judge, reason):
+        pl = dict(payload)
+        assert pl[key].count(old) == 1, f"positive control anchor missing ({label}): {old[:60]}"
+        pl[key] = pl[key].replace(old, new)
+        control(label, judge(run_harness(pl).get(key) or {}), reason)
+
+    # the reviewer's surviving mutants M7 and M9, now killed
+    pl_control("1B.6 coordinate 502 says 'no CAR here'", "coord",
+               "toast(r.status===404?'Coordenada localizada; nenhum CAR exato foi encontrado neste ponto.':'Consulta ao SICAR pendente para esta coordenada. Tente de novo em instantes.')",
+               "toast('Coordenada localizada; nenhum CAR exato foi encontrado neste ponto.')", judge_coord, "did not answer shown as 'no CAR here'")
+    pl_control("1B.3 /map-panel memorises failures", "mappanel", "if(r.ok&&d&&d.ok===true)memo.set(car,{at:Date.now(),d})", "memo.set(car,{at:Date.now(),d})",
+               judge_mappanel, "failed /map-panel answer memorised")
+    import municipios_ibge_br as mun_m10
+
+    control("1B.6 ambiguous municipality prefix answered", judge_find(mutate_function(mun_m10.find, "return prefix[0] if len(prefix) == 1 else None", "return prefix[0] if prefix else None")),
+            "ambiguous municipality prefix answered")
+    import portal_pdf_v21 as pdf_m
+
+    control("1B.3 status poll waits for the engine again", judge_status_proxy(status_proxy_observations(mutate_function(
+        pdf_m.portal_progress_proxy, "    try:\n", "    await _wait_worker_ready(car_code,'',40)\n    try:\n")), html), "waits for the engine to be ready")
+    control("1B.3 status poll without a total limit", judge_status_proxy(status_proxy_observations(mutate_function(
+        pdf_m.portal_progress_proxy, ",STATUS_PROXY_TIMEOUT_S+1)", ",3600)")), html), "without a total time limit")
 
     saved_admit, saved_start, saved_url = W._admit, W._start, W.worker_url
     try:
-        W._admit = lambda now: None
+        W._admit = lambda now, client="?": None
         control("1B.8 no server lock", judge_wake_server(wake_server_observations()), "server lock broken")
     finally:
         W._admit = saved_admit
+    saved_recent, saved_per_client = W._engine_recently_used, W.WAKE_PER_CLIENT_DAILY
+    try:
+        W._engine_recently_used = lambda now: False
+        control("1B.8 pings an engine known awake", judge_wake_server(wake_server_observations()), "knows is awake")
+    finally:
+        W._engine_recently_used = saved_recent
+    try:
+        W.WAKE_PER_CLIENT_DAILY = 10 ** 6
+        control("1B.8 no per-client cap", judge_wake_server(wake_server_observations()), "per-client cap wrong")
+    finally:
+        W.WAKE_PER_CLIENT_DAILY = saved_per_client
+    saved_worker_url = W.worker_url
+    try:
+        W.worker_url = mutate_function(saved_worker_url, "    if not WAKE_ENV_ENABLED:\n        return \"\"\n", "")
+        control("1B.8 wake on outside production", judge_wake_server(wake_server_observations()), "a local server / CI pings the production worker")
+    finally:
+        W.worker_url = saved_worker_url
+    control("1B.8 answer tells the lock state", judge_wake_server(wake_server_observations(mutate_function(
+        W.report_engine_wake, "JSONResponse(dict(ANSWER)", "JSONResponse(dict(ANSWER, reason=STATE['last_refusal'])"))), "leaks the lock state")
     try:
         W._start = W._ping
         control("1B.8 answer waits for the worker", judge_wake_server(wake_server_observations()), "blocks on the worker")

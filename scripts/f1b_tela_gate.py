@@ -11,7 +11,14 @@ takes the FINAL portal HTML and checks, without any external network:
       INDISPONÍVEL", "RISCO NÃO CLASSIFICADO", "N de M fontes responderam") is absent from every
       script that paints the panel; in node (scripts/f1b_tela_harness.js) the served F1B script answers
       only Sim / Não / Consulta pendente, "Sim"/"Não" only from a source that answered, pt-BR numbers,
-      escaped source text, and never shows an answer about another CAR;
+      escaped source text, and never shows an answer about another CAR; on the first engine answer only a
+      cache hit counts (after the engine cache expires, the previous run's "ready" is never shown), the time
+      shown is the time the data was produced (completed_at, or a run seen running; fire: the INPE bulletin);
+      PRODES shows every year (or the count and range), the post-31/07/2019 part and "pelo menos … nas
+      camadas que responderam" when a layer failed; pending rows are asked again once by themselves and
+      only rows that came to answer change; the "ver fontes e datas" box lists what this consultation knows
+      and follows the full analysis (no "NÃO CONSULTADA", no "pendente de implementação");
+      the engine side (report_v9_patch + report_quick_v22) runs in scripts/f1b_motor_estado_check.py;
 1B.3  deduplication: the served F1B reading asks /v1/live/quick ONCE for five starts + clicks +
       re-renders, retries a worker that did not answer exactly once, stops polling when the panel
       closes; the served CAR-integrity script asks once per property (twice when the base did not
@@ -48,7 +55,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 HARNESS = ROOT / "scripts" / "f1b_tela_harness.js"
 RELEASE = "V8_OPERATIONAL_ZERO_COST"
-INTERNAL = ("PREPARADO — OFF", "BACKEND DE ALERTAS INDISPONÍVEL", "RISCO NÃO CLASSIFICADO", "fontes responderam")
+INTERNAL = ("PREPARADO — OFF", "BACKEND DE ALERTAS INDISPONÍVEL", "RISCO NÃO CLASSIFICADO", "fontes responderam",
+            "PENDENTE DE IMPLEMENTAÇÃO", "integra o contador")
 FAILURES: list[str] = []
 
 
@@ -197,11 +205,12 @@ def rule_actions_on_screen(html: str) -> list[str]:
 
 
 # ------------------------------------------------------------------ node harness
-def run_harness(f1b: str, f2: str, integrity: str) -> dict:
+def run_harness(f1b: str, f2: str, integrity: str, audit: str = "") -> dict:
     node = shutil.which("node")
     assert node, "node not found on PATH"
-    proc = subprocess.run([node, str(HARNESS)], input=json.dumps({"f1b": f1b, "f2": f2, "integrity": integrity}),
-                          capture_output=True, text=True, encoding="utf-8", timeout=120)
+    # Times are shown in the viewer's local time: the harness runs in Brazil's time zone on every machine.
+    proc = subprocess.run([node, str(HARNESS)], input=json.dumps({"f1b": f1b, "f2": f2, "integrity": integrity, "audit": audit}),
+                          capture_output=True, text=True, encoding="utf-8", timeout=120, env=dict(os.environ, TZ="America/Sao_Paulo"))
     try:
         return json.loads(proc.stdout)
     except Exception:
@@ -225,8 +234,24 @@ def judge_harness(r: dict) -> list[str]:
             p.append(f"row {k}: expected {v}, got {(rows.get(k) or {}).get('answer')}")
     if "1.234,57 ha" not in (rows.get("anm") or {}).get("detail", ""):
         p.append(f"pt-BR area missing: {(rows.get('anm') or {}).get('detail')}")
-    if "anos 2006, 2021" not in (rows.get("prodes") or {}).get("detail", ""):
-        p.append("PRODES years missing")
+    prodes = (rows.get("prodes") or {}).get("detail", "")
+    if "anos PRODES 2006 e 2021" not in prodes or "1 posterior a 31/07/2019 (ano PRODES 2021; 1,20 ha)" not in prodes or "pelo menos" in prodes:
+        p.append(f"PRODES years or post-cutoff missing: {prodes}")
+    p9 = r.get("rows_prodes_9y") or {}
+    if p9.get("answer") != "sim" or "9 anos PRODES entre 2008 e 2025" not in p9.get("detail", "") or "20 polígonos" not in p9.get("detail", "") \
+            or "9 posteriores a 31/07/2019" not in p9.get("detail", "") or "anos PRODES 2021, 2023" in p9.get("detail", ""):
+        p.append(f"PRODES years cut (only the last ones shown): {p9.get('detail')}")
+    pi = r.get("rows_prodes_incomplete") or {}
+    if pi.get("answer") != "sim" or not pi.get("detail", "").startswith("pelo menos 20 polígonos") or "nas camadas que responderam" not in pi.get("detail", "") \
+            or "nenhum posterior" in pi.get("detail", ""):
+        p.append(f"incomplete PRODES shown as the total: {pi.get('detail')}")
+    if (r.get("rows_prodes_not_found_incomplete") or {}).get("answer") != "pendente":
+        p.append("incomplete PRODES without findings answered Não")
+    fire = (rows.get("fire") or {}).get("detail", "")
+    if "o mais recente de 14/09/2026, 20:20" not in fire:
+        p.append(f"fire answer without the INPE bulletin time: {fire}")
+    if (r.get("rows_fire_undated") or {}).get("answer") != "pendente":
+        p.append("fire answered without the time of the bulletin it read")
     order = [x["answer"] for x in r["rows"]]
     if "pendente" in order and any(a != "pendente" for a in order[order.index("pendente"):]):
         p.append("pending questions are not listed last")
@@ -247,9 +272,14 @@ def judge_harness(r: dict) -> list[str]:
     if r.get("rows_empty") != 0:
         p.append("empty analysis produced rows")
     html_ready = r.get("html_ready") or ""
-    for token in ("Resposta recebida em", ">Sim<", ">Não<", ">Consulta pendente<", "Fonte: "):
+    for token in ("Consulta feita em", ">Sim<", ">Não<", ">Consulta pendente<", "Fonte: "):
         if token not in html_ready:
             p.append(f"ready html missing {token!r}")
+    everything = "".join(str(r.get(k) or "") for k in ("html_ready", "html_ready_unstamped", "html_loading", "html_failed", "html_fill_idle"))
+    if "Resposta recebida em" in everything:
+        p.append("arrival time shown as the time of the data ('Resposta recebida em')")
+    if "Consulta feita em" in (r.get("html_ready_unstamped") or ""):
+        p.append("time of the data shown without a known production time")
     if "<img" in html_ready or "&lt;img src=x onerror=alert(1)&gt;" not in html_ready:
         p.append("source text not escaped")
     if re.search(r"\d\.\d{3,}\s*ha", html_ready):
@@ -257,27 +287,56 @@ def judge_harness(r: dict) -> list[str]:
     for token in INTERNAL:
         if token in html_ready or token in (r.get("html_failed") or "") or token in (r.get("html_loading") or ""):
             p.append(f"internal text in reading html: {token}")
-    if "rx-f1b-spin" not in (r.get("html_loading") or ""):
-        p.append("loading state missing")
+    loading = r.get("html_loading") or ""
+    if "rx-f1b-spin" not in loading or "Pode levar alguns minutos" not in loading or "1 minuto" in loading:
+        p.append("loading state missing or promising a time the code does not keep")
     if "data-rx-f1b-retry" not in (r.get("html_failed") or "") or "Consulta pendente" not in (r.get("html_failed") or ""):
         p.append("failed state without quiet pending + retry")
+    if "Nova tentativa das consultas pendentes às" not in (r.get("html_fill_scheduled") or "") or "Consultando de novo as fontes pendentes" not in (r.get("html_fill_running") or "") \
+            or "data-rx-f1b-fill" not in (r.get("html_fill_idle") or ""):
+        p.append("pending rows without their retry states (scheduled, running, Consultar de novo)")
+    if "rx-f1b-fill" in (r.get("html_complete") or ""):
+        p.append("retry offered for a reading without pending rows")
+    mg = r.get("merge") or {}
+    if mg.get("answers", {}).get("embargo_ibama") != "nao":
+        p.append(f"merge replaced an answer by a later failure: {mg}")
+    if not mg.get("changed") or mg.get("answers", {}).get("embargo_icmbio") != "nao" or mg.get("answers", {}).get("floresta_publica") != "pendente" or not mg.get("pending_last"):
+        p.append(f"merge did not fill only the pending rows: {mg}")
     s = r.get("single") or {}
     if s.get("quick") != 1:
         p.append(f"single-flight broken: quick asked {s.get('quick')}x")
-    if s.get("phase") != "ready" or not s.get("slot_in_card") or "Resposta recebida em" not in (s.get("slot_html") or ""):
-        p.append(f"reading not painted in the panel card: {s.get('phase')} in_card={s.get('slot_in_card')}")
+    if s.get("phase") != "ready" or not s.get("slot_in_card") or "Consulta feita em 14/09/2026, 20:00" not in (s.get("slot_html") or ""):
+        p.append(f"reading not painted in the panel card with the time of the data: {s.get('phase')} in_card={s.get('slot_in_card')}")
+    if s.get("at") != s.get("stamp_ms"):
+        p.append(f"cache answer shown with the answer time, not the time of the data: at={s.get('at')} stamp={s.get('stamp_ms')}")
     if s.get("pbody"):
         p.append("reading wrote into #pbody")
     if s.get("button") != "VER ANÁLISE COMPLETA" or not s.get("scrolled"):
         p.append(f"button/scroll after ready wrong: {s.get('button')} scrolled={s.get('scrolled')}")
     pol = r.get("polling") or {}
-    if pol.get("quick") != 1 or pol.get("status") != 3 or pol.get("phase") != "ready":
+    if pol.get("quick") != 1 or pol.get("status") != 3 or pol.get("phase") != "ready" or not pol.get("at_recent"):
         p.append(f"deep polling wrong: {pol}")
+    st = r.get("stale") or {}
+    if "2 processos" not in (st.get("first_anm") or "") or "7 processos" not in (st.get("anm") or "") or (st.get("status") or 0) < 2:
+        p.append(f"previous run shown as current after the engine cache expired: {st.get('first_anm')} -> {st.get('anm')} status={st.get('status')}")
+    elif st.get("at") != st.get("new_stamp_ms"):
+        p.append(f"time of the data wrong after the cache expired: at={st.get('at')} expected={st.get('new_stamp_ms')}")
+    pa = r.get("partial") or {}
+    if pa.get("quick_after_auto") != 2 or pa.get("answers", {}).get("embargo_icmbio") != "nao":
+        p.append(f"pending rows not retried once by themselves: quick={pa.get('quick_after_auto')} answers={pa.get('answers')}")
+    if pa.get("embargo_ibama") != "nao" or pa.get("answers", {}).get("floresta_publica") != "pendente":
+        p.append(f"merge after the automatic retry changed an answer: {pa.get('answers')}")
+    if "data-rx-f1b-fill" not in (pa.get("slot") or "") or "pendências consultadas de novo em" not in (pa.get("slot") or "") or not pa.get("refilled"):
+        p.append("after the automatic retry: no 'Consultar de novo' or no time of the retry")
+    if pa.get("quick_after_manual") != 3:
+        p.append(f"'Consultar de novo' did not ask again: {pa.get('quick_after_manual')}")
+    if pa.get("closed_quick") != 1:
+        p.append(f"automatic retry for a closed panel: quick={pa.get('closed_quick')}")
     f = r.get("failure") or {}
     if f.get("quick") != 2 or f.get("phase") != "failed":
         p.append(f"worker failure not exactly one automatic retry: {f}")
-    if "data-rx-f1b-retry" not in (f.get("slot") or "") or f.get("button") != "CONSULTAR DE NOVO":
-        p.append("failure not shown as quiet pending with retry")
+    if "data-rx-f1b-retry" not in (f.get("slot") or "") or f.get("button") != "VER ANÁLISE COMPLETA":
+        p.append(f"failure not shown as quiet pending with its own retry (main button stays VER ANÁLISE COMPLETA): {f.get('button')}")
     if f.get("after_rerender") != 2:
         p.append(f"failed reading re-asked on re-render: {f.get('after_rerender')}")
     if (f.get("after_force") or 0) <= 2:
@@ -295,12 +354,27 @@ def judge_harness(r: dict) -> list[str]:
         p.append(f"integrity asked {(r.get('integrity_ok') or {}).get('fetches')}x for an answered property")
     if (r.get("integrity_fail") or {}).get("fetches") != 2 or (r.get("integrity_fail") or {}).get("phase") != "failed":
         p.append(f"integrity failure not exactly one automatic retry: {r.get('integrity_fail')}")
+    a = r.get("audit") or {}
+    if a.get("fatal") or not a.get("api"):
+        p.append(f"audit box script not runnable: {a.get('fatal')}")
+    else:
+        for when_, text in (("before", a.get("before") or ""), ("after", a.get("after") or ""), ("rebuilt", a.get("rebuilt") or "")):
+            leaked = [t for t in ("NÃO CONSULTADA", "PENDENTE DE IMPLEMENTAÇÃO", "implementação", "contador", "Reserva Legal", "Matrícula") if t in text]
+            if leaked:
+                p.append(f"audit lists sources nobody asked or internal text ({when_}): {leaked}")
+            if "CAR / SICAR" not in text or "MTE — Trabalho Escravo" not in text or "NÃO VERIFICADA" not in text:
+                p.append(f"audit lost the sources that answered ({when_}): {text[:160]}")
+        for text in (a.get("after") or "", a.get("rebuilt") or ""):
+            if "IBAMA — áreas embargadas RESPONDEU · COM OCORRÊNCIA" not in text or "INPE — PRODES RESPONDEU · COM OCORRÊNCIA" not in text \
+                    or "consulta: 14/09/2026" not in text or " Embargos " in f" {text} ":
+                p.append(f"audit contradicts the full analysis (embargo/PRODES answered): {text[:240]}")
+                break
     return p
 
 
-def scripts_for_harness(html: str) -> tuple[str, str, str]:
+def scripts_for_harness(html: str) -> tuple[str, str, str, str]:
     return (enclosing_script(html, "window.rxFullReadingF1b={"), enclosing_script(html, "if(window.rxPanelSourcesF2)return;"),
-            enclosing_script(html, "window.rxV47IntegrityInstalled=true"))
+            enclosing_script(html, "window.rxV47IntegrityInstalled=true"), enclosing_script(html, "const MTE_ID='mte_slave_labor'"))
 
 
 def mutate(text: str, old: str, new: str, label: str) -> str:
@@ -326,15 +400,16 @@ def main() -> int:
         check(not problems, f"{label} {problems if problems else ''}".rstrip())
 
     try:
-        f1b, f2, integ = scripts_for_harness(html)
+        f1b, f2, integ, audit = scripts_for_harness(html)
     except Exception as exc:
         check(False, f"served F1B/panel scripts not found: {type(exc).__name__}: {exc}")
         print("F1B_TELA_GATE=FAIL " + json.dumps(FAILURES, ensure_ascii=False), flush=True)
         return 1
-    result = run_harness(f1b, f2, integ)
+    result = run_harness(f1b, f2, integ, audit)
     problems = judge_harness(result)
     check(not problems, f"1B.2/1B.3 served scripts in node {problems if problems else ''}".rstrip())
-    print("F1B_HARNESS_EVIDENCE=" + json.dumps({k: result.get(k) for k in ("single", "polling", "failure", "status_errors", "closed", "integrity_ok", "integrity_fail")}, ensure_ascii=False)[:1500], flush=True)
+    print("F1B_HARNESS_EVIDENCE=" + json.dumps({k: result.get(k) for k in ("single", "polling", "stale", "partial", "failure", "status_errors", "closed", "integrity_ok", "integrity_fail")}, ensure_ascii=False)[:2500], flush=True)
+    print("F1B_AUDIT_EVIDENCE=" + json.dumps(result.get("audit"), ensure_ascii=False)[:900], flush=True)
 
     # ------------------------------------------------------------ positive controls
     loader_anchor = "l.on('mouseover',()=>{"
@@ -363,6 +438,18 @@ def main() -> int:
         "ok===true not required": "source without ok===true answered", "capped zero answered": "capped zero",
         "reading into #pbody": "reading wrote into #pbody", "polling after the panel closed": "closed panel kept polling",
         "integrity re-asks on every render": "integrity asked",
+        "previous run accepted on the first answer": "previous run shown as current",
+        "PRODES years cut to the last four": "PRODES years cut",
+        "incomplete PRODES as the total": "incomplete PRODES shown as the total",
+        "arrival time as the time of the data (poll)": "time of the data wrong after the cache expired",
+        "arrival time as the time of the data (cache)": "cache answer shown with the answer time",
+        "fire without the bulletin time": "fire answered without the time of the bulletin",
+        "no automatic retry of pending rows": "pending rows not retried once by themselves",
+        "merge overwrites answers": "merge replaced an answer by a later failure",
+        "automatic retry for a closed panel": "automatic retry for a closed panel",
+        "failure turns the main button into a retry": "main button stays VER ANÁLISE COMPLETA",
+        "audit lists unasked sources": "audit lists sources nobody asked",
+        "audit ignores the full analysis": "audit contradicts the full analysis",
     }
     for label, rule, mutant in html_mutants:
         got = rule(mutant)
@@ -370,8 +457,20 @@ def main() -> int:
 
     js_mutants = [
         ("single-flight broken", "f1b", "if(opts.force||!usable(e)){", "if(true){"),
-        ("unbounded automatic retry", "f1b", "for(let i=0;i<2&&!a;i++){", "for(let i=0;i<5&&!a;i++){"),
-        ("answer for another CAR shown", "f1b", "if(done)return sameCar(done,car)?done:null;", "if(done)return done;"),
+        ("unbounded automatic retry", "f1b", "for(let i=0;i<2&&!res;i++){", "for(let i=0;i<5&&!res;i++){"),
+        ("answer for another CAR shown", "f1b", "if(done)return sameCar(done,car)?{analysis:done,at:producedAt(ds,done,d.analysis)}:null}", "if(done)return {analysis:done,at:producedAt(ds,done,d.analysis)}}"),
+        ("previous run accepted on the first answer", "f1b", "if(d.mode==='quick-cache'){const done=", "if(d.mode==='quick-cache'||ds.state==='ready'){const done="),
+        ("PRODES years cut to the last four", "f1b", "return ys.length<=5?`anos PRODES ${yearList(ys)}`:`${ys.length} anos PRODES entre ${ys[0]} e ${ys[ys.length-1]}`", "return `anos PRODES ${yearList(ys.slice(-4))}`"),
+        ("incomplete PRODES as the total", "f1b", "post=pr.post_cutoff_inside||{},full=pr.complete===true;", "post=pr.post_cutoff_inside||{},full=pr.state==='found'||pr.complete===true;"),
+        ("arrival time as the time of the data (poll)", "f1b", "return {analysis:st.d.analysis,at:t!==null?t:(running?Date.now():null)}", "return {analysis:st.d.analysis,at:Date.now()}"),
+        ("arrival time as the time of the data (cache)", "f1b", "{analysis:done,at:producedAt(ds,done,d.analysis)}:null}", "{analysis:done,at:Date.now()}:null}"),
+        ("fire without the bulletin time", "f1b", "if(f.ok===true&&isNum(n)&&n>=0&&b!==null){", "if(f.ok===true&&isNum(n)&&n>=0){"),
+        ("no automatic retry of pending rows", "f1b", "if(mine.phase==='ready')fill(car,mine,false)", "if(false)fill(car,mine,false)"),
+        ("merge overwrites answers", "f1b", "if(r.answer===PEND&&n&&n.answer!==PEND){changed=true;return n}", "if(n){changed=true;return n}"),
+        ("automatic retry for a closed panel", "f1b", "if(!card(car)){mine.fill={state:'idle'};return}", ""),
+        ("failure turns the main button into a retry", "f1b", "b.textContent='VER ANÁLISE COMPLETA'}}", "b.textContent=e.phase==='failed'?'CONSULTAR DE NOVO':'VER ANÁLISE COMPLETA'}}"),
+        ("audit lists unasked sources", "audit", "if(!row||!row.dataset.state)return;", "if(!row||!row.dataset.state){items.push(auditItem(source.label,'NÃO CONSULTADA','Estado desta fonte nesta consulta.'));return}"),
+        ("audit ignores the full analysis", "audit", "else if(R&&R.phase==='ready'&&Array.isArray(R.rows))", "else if(false)"),
         ("unbounded polling on status errors", "f1b", "if(misses>=3)return null;", ""),
         ("ok===true not required", "f1b", "if(obj.ok===true&&ex.available===true&&", "if(obj.ok!==false&&ex.available!==false&&"),
         ("capped zero answered", "f1b", "&&!(capped&&n===0)", ""),
@@ -380,11 +479,24 @@ def main() -> int:
         ("integrity re-asks on every render", "f2", "if(!usable(e)){", "if(true){"),
     ]
     for label, which, old, new in js_mutants:
-        parts = {"f1b": f1b, "f2": f2, "integrity": integ}
+        parts = {"f1b": f1b, "f2": f2, "integrity": integ, "audit": audit}
         parts[which] = mutate(parts[which], old, new, label)
-        mres = run_harness(parts["f1b"], parts["f2"], parts["integrity"])
+        mres = run_harness(parts["f1b"], parts["f2"], parts["integrity"], parts["audit"])
         got = judge_harness(mres)
         check(any(reason[label] in x for x in got), f"positive control catches: {label} (for its reason: {reason[label]!r}; got {got[:2]})")
+
+    # ------------------------------------------------------------ the report engine never hands out the previous run as current
+    # (own process: the engine modules with the analysis replaced by a counter and a 1 s cache; its positive controls inside)
+    env = dict(os.environ, RX_RELEASE="OFF", PYTHONUTF8="1")
+    env.pop("F1B_GATE_CHILD", None)
+    motor = subprocess.run([sys.executable, str(ROOT / "scripts" / "f1b_motor_estado_check.py")], capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", timeout=300, env=env, cwd=str(ROOT))
+    lines = [x for x in (motor.stdout or "").splitlines() if x.startswith(("PASS ", "FAIL ", "F1B_MOTOR"))]
+    for line in lines:
+        print("  engine: " + line[:400], flush=True)
+    check(motor.returncode == 0 and any(x == "F1B_MOTOR_ESTADO=PASS" for x in lines),
+          "1B.2 engine state after the cache expiry is never the previous run; completed_at is the time of the data"
+          + ("" if motor.returncode == 0 else f" (exit {motor.returncode}: {(motor.stderr or '')[-300:]})"))
 
     # ------------------------------------------------------------ part 2: 1B.6, 1B.7, 1B.8
     try:
