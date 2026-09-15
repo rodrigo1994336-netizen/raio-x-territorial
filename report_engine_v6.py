@@ -89,7 +89,7 @@ def build_premium_property_report_v6(path:str|Path,payload:dict[str,Any])->str:
     # 3 — cobertura
     stats=_source_stats(sources)
     story += _section('Cobertura das fontes','Uma fonte só conta como consultada quando efetivamente respondeu nesta emissão.')
-    story.append(_kpis([('Consultadas',stats['ok'],'responderam','CONSULTADA'),('Parciais',stats['partial'],'retorno incompleto','PARCIAL'),('Indisponíveis',stats['unavailable'],'falha temporária','INDISPONÍVEL'),('Outras',stats['other'],'restritas/preparadas','ATENÇÃO')]))
+    story.append(_kpis([('Consultadas',stats['ok'],'responderam','CONSULTADA'),('Parciais',stats['partial'],'retorno incompleto','PARCIAL'),('Pendentes',stats['unavailable'],'refeitas na próxima emissão','ATENÇÃO'),('Outras',stats['other'],'não consultadas nesta emissão','ATENÇÃO')]))
     story += [Spacer(1,5*mm),_sources_table(sources),PageBreak()]
 
     # 4 — CAR e fundiário
@@ -102,7 +102,7 @@ def build_premium_property_report_v6(path:str|Path,payload:dict[str,Any])->str:
     # 5 — ambiental
     pd=env.get('prodes') or {}
     story += _section('Ambiental e fiscalização','Desmatamento, embargos, autos e restrições são apresentados com área, período e fonte sempre que o dado permitir.')
-    story.append(_kpis([('PRODES',_s(pd.get('count'),0),f"{_s(pd.get('area_ha'),0)} ha",_s(pd.get('status'),'CONSULTADA')),('Embargos',_s(enf.get('embargo_count'),0),'IBAMA + ICMBio',_s(enf.get('embargo_status'),'CONSULTADA')),('Autos IBAMA',_s(enf.get('auto_count'),'N/D'),_s(enf.get('fine_total_text'),''),'ATENÇÃO' if _s(enf.get('auto_count')) not in ('0','N/D','NÃO CONSULTADO') else 'CONSULTADA'),('Restrições',f"{_s(env.get('unique_problem_area_ha'),0)} ha",f"{_s(env.get('unique_problem_area_pct'),0)}% do CAR",'ATENÇÃO' if env.get('unique_problem_area_ha') else 'CONSULTADA')]))
+    story.append(_kpis([('PRODES',_s(pd.get('count'),0),('consulta pendente' if pd.get('pending') else f"{_s(pd.get('area_ha'),0)} ha"),_s(pd.get('status'),'CONSULTADA')),('Embargos',_s(enf.get('embargo_count'),0),_s(enf.get('embargo_sources_label'),'IBAMA + ICMBio'),_s(enf.get('embargo_status'),'CONSULTADA')),('Autos IBAMA',_s(enf.get('auto_count'),'N/D'),_s(enf.get('fine_total_text'),''),'ATENÇÃO' if _s(enf.get('auto_count')) not in ('0','N/D','NÃO CONSULTADO') else 'CONSULTADA'),('Restrições',f"{_s(env.get('unique_problem_area_ha'),0)} ha",f"{_s(env.get('unique_problem_area_pct'),0)}% do CAR",'ATENÇÃO' if env.get('unique_problem_area_ha') else 'CONSULTADA')]))
     if payload.get('technical_map_image_path'):
         story += [Spacer(1,5*mm)]+_image(payload.get('technical_map_image_path'),'Mapa técnico do mesmo imóvel: limite CAR e interseções cartográficas usadas na análise. Não é ilustração genérica.')
     story += [Spacer(1,5*mm),Paragraph('Camadas ambientais e territoriais',S['h2']),_info(env.get('layer_rows') or [],[48*mm,70*mm,47*mm],['Camada','Resultado','Fonte'])]
@@ -111,7 +111,8 @@ def build_premium_property_report_v6(path:str|Path,payload:dict[str,Any])->str:
 
     # 6 — mineral
     story += _section('Mineração, minerais críticos e terras raras','O Raio-X diferencia processo minerário, sinal geológico e jazida comprovada — são coisas diferentes.')
-    story.append(_kpis([('Processos ANM',_s(mining.get('process_count'),0),f"{_s(mining.get('overlap_area_ha'),0)} ha",'ATENÇÃO' if mining.get('process_count') else 'CONSULTADA'),('Minerais críticos',_s(mining.get('critical_process_count'),0),', '.join(mining.get('critical_minerals') or []) or 'nenhum classificado','ATENÇÃO' if mining.get('critical_process_count') else 'CONSULTADA'),('Terras raras',_s(mining.get('rare_earth_signal'),'NÃO IDENTIFICADO'),f"processos: {_s(mining.get('rare_earth_count'),0)}",'ATENÇÃO' if _s(mining.get('rare_earth_signal')).upper()=='SIM' else 'CONSULTADA'),('SGB',_s(mining.get('rare_earth_source'),'ANM + SGB'),'camadas públicas','CONSULTADA')]))
+    mpend=bool(mining.get('pending'))
+    story.append(_kpis([('Processos ANM',_s(mining.get('process_count'),0),('consulta pendente' if mpend else f"{_s(mining.get('overlap_area_ha'),0)} ha"),'CONSULTA PENDENTE' if mpend else ('ATENÇÃO' if mining.get('process_count') else 'CONSULTADA')),('Minerais críticos',_s(mining.get('critical_process_count'),0),('consulta pendente' if mpend else (', '.join(mining.get('critical_minerals') or []) or 'nenhum classificado')),'CONSULTA PENDENTE' if mpend else ('ATENÇÃO' if mining.get('critical_process_count') else 'CONSULTADA')),('Terras raras',_s(mining.get('rare_earth_signal'),'NÃO IDENTIFICADO'),('consulta pendente' if mpend else f"processos: {_s(mining.get('rare_earth_count'),0)}"),'ATENÇÃO' if _s(mining.get('rare_earth_signal')).upper()=='SIM' else ('CONSULTA PENDENTE' if mpend else 'CONSULTADA')),('SGB',_s(mining.get('rare_earth_source'),'ANM + SGB'),'camadas públicas','CONSULTADA')]))
     story += [Spacer(1,5*mm),P(mining.get('summary') or '')]
     if mining.get('critical_rows'): story += [Spacer(1,4*mm),_info(mining.get('critical_rows'),[80*mm,85*mm],['Indicador','Resultado'])]
     if mining.get('processes'): story += [Spacer(1,4*mm),Paragraph('Processos identificados',S['h2']),_info(mining.get('processes'),[27*mm,42*mm,35*mm,38*mm,23*mm],['Processo','Titular','Substância','Fase','% imóvel'])]

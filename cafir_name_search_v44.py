@@ -110,7 +110,7 @@ def locate_incra_sync(incra_code:str)->dict[str,Any]:
             except Exception:center=None
             items.append({'source':f'SIGEF/INCRA {source.lower()} — espelho público IBAMA/PAMGIA','incra_code':p.get('codigo_imo'),'parcel_code':p.get('parcela_co'),'sigef_name':p.get('nome_area'),'registry':p.get('registro_m'),'status':p.get('status') or p.get('situacao_i'),'center':center,'geometry':f.get('geometry'),'display_kind':'INCRA_CERTIFIED_PARCEL','car_code':None,'panel_name_eligible':False})
     if not items and errors:return {'ok':False,'detail':'SIGEF unavailable: '+' | '.join(errors)[:500],'items':[]}
-    return {'ok':True,'items':items,'count':len(items),'incra_code':incra,'source':'SIGEF/INCRA','car_link_status':'NOT_VALIDATED','note':'A parcela certificada pode ser exibida no mapa, mas não é convertida em CAR nem herda automaticamente o nome CAFIR.'}
+    return {'ok':True,'items':items,'count':len(items),'incra_code':incra,'source':'SIGEF/INCRA — espelho público IBAMA/PAMGIA','car_link_status':'NOT_VALIDATED','note':'A parcela certificada pode ser exibida no mapa, mas não é convertida em CAR nem herda automaticamente o nome CAFIR.'}
 
 
 print('RX_CAFIR_NAME_SEARCH_V44=direct_inverse_name_search_no_car_name_inheritance',flush=True)

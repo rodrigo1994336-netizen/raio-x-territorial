@@ -19,7 +19,7 @@ jobs:
       - name: Install gate dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install fastapi httpx shapely pyproj pillow reportlab uvicorn "psycopg[binary]" "redis>=5,<7" "numpy>=2,<3" "rasterio>=1.4,<2" "PyJWT[crypto]>=2.10,<3"
+          pip install fastapi httpx shapely pyproj pillow reportlab uvicorn "psycopg[binary]" "redis>=5,<7" "numpy>=2,<3" "rasterio>=1.4,<2" "PyJWT[crypto]>=2.10,<3" "pypdf>=4,<7"
       - name: Compile Python modules
         run: |
           python -m compileall -q .
@@ -33,6 +33,42 @@ jobs:
         env:
           RX_RELEASE: OFF
         run: PYTHONPATH=. python scripts/w1_whatsapp_ready_gate.py
+      - name: F2 CONAB warehouses and DETER alerts gate (rules and positive controls)
+        env:
+          RX_RELEASE: OFF
+        run: PYTHONPATH=. python scripts/f2_conab_deter_gate.py
+      - name: R1 report pt-BR presentation gate
+        env:
+          RX_RELEASE: OFF
+        run: PYTHONPATH=. python scripts/r1_report_ptbr_gate.py
+      - name: H1 empty or broken public layer never becomes "nenhum" gate
+        env:
+          RX_RELEASE: OFF
+        run: PYTHONPATH=. python scripts/h1_camadas_vazias_gate.py
+      - name: F2 INCRA SIGEF/SNCI official source gate
+        env:
+          RX_RELEASE: OFF
+        run: PYTHONPATH=. python scripts/f2_incra_sigef_snci_gate.py
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: F2 PRODES reading gate
+        env:
+          RX_RELEASE: OFF
+        run: PYTHONPATH=. python scripts/f2_prodes_leitura_gate.py
+      - name: W1a fast CAR parcels gate (UF local, cell cache, canvas loader, single-flight, aborted request is not a connection failure; rules and positive controls; needs Node)
+        env:
+          RX_RELEASE: V8_OPERATIONAL_ZERO_COST
+          RX_PORTAL_RSS_BUDGET_MB: '220'
+        run: PYTHONPATH=. python scripts/w1a_imoveis_rapidos_gate.py
+      - name: W1a property link, share menu and offline shell gate (rules and positive controls)
+        env:
+          RX_RELEASE: V8_OPERATIONAL_ZERO_COST
+        run: PYTHONPATH=. python scripts/w1a_link_imovel_gate.py
+      - name: F1B screen gate (no tooltip over the map, full analysis visible in the panel, one request per source, sticky 44 px actions, old engine answer never shown as current, PRODES years and floors, pending rows retried once, sources box follows the analysis; engine state across the cache expiry; part 2 - UF by IBGE borders, municipality search without Nominatim, card with SICAR dates and no jump, report engine wake only with intention and server locks, short state poll; rules and positive controls; needs Node)
+        env:
+          RX_RELEASE: V8_OPERATIONAL_ZERO_COST
+        run: PYTHONPATH=. python scripts/f1b_tela_gate.py
       - name: Import standalone engines
         env:
           RX_RELEASE: OFF
@@ -43,6 +79,9 @@ jobs:
           import highres_reference, street_level_access, visual_hybrid, terrain_srtm, property_visual_plate_v25
           import prodes_fast_v24, anm_fast_v29, core_retry_fast_v29, territorial_production, landuse_profile_v39
           import report_truth_guard_v16, report_book_style, report_engine_v6, report_engine_v7, report_engine_v8
+          import conab_armazens, deter_alertas
+          import incra_acervo_f2, prodes_reading_f2, climate_normal_f2, prodes_image_platform_f2, iphan_sicg, outorga_vazao, mapbiomas_alerta
+          import report_engine_v10, live_report_adapter_v20
           import live_report_adapter_v18, report_visual_identity_v28, report_extras_perf_v30, heavy_live_api_v20, report_pdf_cache_v21, report_quick_v22, github_oidc_auth, monitoring_store, monitoring_routes, alerts_routes
           sample={'ok':True,'source':'MapBiomas','year':2025,'native_vegetation_share_pct':20,'classes':[{'code':15,'share_pct':55},{'code':39,'share_pct':25}]}
           p=landuse_profile_v39.classify_landuse_profile(sample)
@@ -249,6 +288,8 @@ jobs:
           assert rss < 220, f'portal RSS too high in gate: {rss:.1f} MB'
           print('RX_CI_PORTAL_V46_READY',len(paths),'rss_mb=',round(rss,1),'mutation_observers=',observer_count,'intervals=',interval_count,'version=',portal_v8.APP_PORTAL_VERSION,'name_truth=on','cafir_inverse=on','osm_reference_only=on','two_level_map=on')
           PY
+      - name: W1a boot without reload, hashed assets with retry, honest failed page and offline shell gate (rules and positive controls; needs Node)
+        run: PYTHONPATH=. python scripts/w1a_arranque_gate.py
       - name: V41 report bounded-latency, CAR-composition and PRODES truth gate
         env:
           RX_RELEASE: OFF
@@ -277,8 +318,9 @@ jobs:
           assert 'ThreadPoolExecutor' in car and 'CAP_TTL=21600' in car and "'share_pct'" in car
           assert 'asyncio.wait_for' in extras and "_timed('visual_hybrid'" in extras and ',34)' in extras
           assert "car['environmental_composition']" in adapter and 'passivo/excedente legal' in adapter
-          for required in ('Histórico PRODES completo','Recorte pós-31/07/2019','ha únicos','% do CAR','Interseção geométrica exata'):
-              assert required in prodes_report, required
+          # F2: the PRODES report rows come from the single reading; the rule itself is proven by
+          # scripts/f2_prodes_leitura_gate.py (step above), never by legacy strings kept alive in code.
+          assert 'apply_reading_to_report_payload' in prodes_report and 'LEGACY_ROW_MARKERS' not in prodes_report
 
           # Deterministic regression: overlapping recent polygons must be unioned, never summed.
           from prodes_lens import derive_prodes_lens
@@ -303,3 +345,23 @@ jobs:
           assert post['area_unique_ha'] < area(r1)+area(r2), (post,area(r1),area(r2))
           print('RX_CI_REPORT_V41_READY PRODES_TWO_LENSES_EXACT_UNION_OK')
           PY
+      - name: F2 clima e satélite PRODES gate (regras e controles positivos)
+        env:
+          RX_RELEASE: OFF
+        run: PYTHONPATH=. python scripts/f2_clima_landsat_gate.py
+      - name: F2 IPHAN oficial e vazão da outorga
+        env:
+          RX_RELEASE: OFF
+        run: PYTHONPATH=. python scripts/f2_iphan_outorga_gate.py
+      - name: F2 alertas de desmatamento validados gate
+        env:
+          RX_RELEASE: OFF
+        run: PYTHONPATH=. python scripts/f2_mapbiomas_alerta_gate.py
+      - name: F2 painel MTE e SINAFLOR gate (estático e funções puras; navegador nos smokes V48)
+        env:
+          RX_RELEASE: OFF
+        run: PYTHONPATH=. python scripts/f2_painel_mte_sinaflor_gate.py --skip-browser
+      - name: F2 relatório V20 ligação gate (PDF real, crédito na página final, pendência e controles positivos)
+        env:
+          RX_RELEASE: OFF
+        run: PYTHONPATH=. python scripts/f2_relatorio_v20_gate.py

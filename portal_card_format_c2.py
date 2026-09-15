@@ -7,7 +7,8 @@ window.rxCopyCarC2 one-tap copy of the CAR code. It reports success only after t
                   clipboard write really succeeded; on failure it shows the full code as a
                   selectable fallback and never the word "copiado"; results are
                   announced through one persistent role=status region.
-window.rxSigefRefC2 C2b: the SIGEF/INCRA cadastral reference block shared by the anchored card
+window.rxSigefRefC2 C2b: the INCRA cadastral reference block (F2: official Acervo Fundiário,
+                  SIGEF or SNCI, by reference kind) shared by the anchored card
                   and the V45 panel. Shown only for sigef_reference_state 'found' with a share
                   of the CAR >= 50% (floored to 2 decimals, never rounded up to 100,00%); when
                   the parcel is much larger than the property it also says how little of the
@@ -159,13 +160,14 @@ HEAD = r'''<style id="rxCardFormatC2">
    const car=btn?btn.dataset.rxCopyCar:retry.dataset.rxCopyRetry,scope=(btn||retry).closest('[data-rx-copy-scope]');
    copy(car).then(ok=>{if(!ok)selectFallback(scope,car)});
  },true);
- window.rxCopyCarC2={copy,button,code:codeHtml};
+ // write(text) -> true only when the clipboard really took the text (W1a "Copiar link" uses it).
+ window.rxCopyCarC2={copy,button,code:codeHtml,write};
 })();
 </script>
 <script id="rxSigefRefScriptC2">
 (function(){
  const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
- const MIN=0.5,RETRY_MS=8000,WINDOW_MS=180000,ORIGIN='SIGEF/INCRA · espelho público IBAMA/PAMGIA';
+ const MIN=0.5,RETRY_MS=8000,WINDOW_MS=180000,ORIGIN='Acervo Fundiário do INCRA';
  const carOf=p=>String(p?.car_code||'').trim().toUpperCase();
  function share(v){if(v===null||v===undefined||v===''||typeof v==='boolean')return null;const n=Number(v);return Number.isFinite(n)&&n>=0&&n<=1?n:null}
  // Floor to 2 decimals of a percent: 0,99996 -> 99,99% (never 100,00%).
@@ -202,11 +204,14 @@ HEAD = r'''<style id="rxCardFormatC2">
      const r=p.sigef_reference,n=Number(p.sigef_reference_others),others=Number.isInteger(n)&&n>0?n:0;
      // 200 is not all: a count taken from an answer cut short is a floor ("pelo menos").
      const floor=p.sigef_reference_others_complete===false?'pelo menos ':'';
-     const more=panel&&others?`<span class="rx-sigef-ref-more">+${floor}${others} ${others===1?'outra parcela SIGEF cobre':'outras parcelas SIGEF cobrem'} metade ou mais do imóvel</span>`:'';
+     const more=panel&&others?`<span class="rx-sigef-ref-more">+${floor}${others} ${others===1?'outra certificação INCRA cobre':'outras certificações INCRA cobrem'} metade ou mais do imóvel</span>`:'';
+     // F2: SNCI certification number/date or SIGEF approval date, panel only (the card stays small).
+     const det=panel&&String(r.detail||'').trim()?`<span class="rx-sigef-ref-note" data-rx-sigef-detail>${esc(String(r.detail).trim())}</span>`:'';
+     const kind=r.kind==='SNCI_CADASTRAL'?'Referência INCRA (SNCI)':'Referência INCRA (SIGEF)';
      const note=panel?'<span class="rx-sigef-ref-note">Referência de outro cadastro, não é o nome do CAR.</span>':'';
      // A parcel much larger than the property: say how little of it the property occupies, never imply identity.
      const po=share(r.parcel_overlap_ratio),within=po!==null&&po<MIN?`<span class="rx-sigef-ref-note" data-rx-sigef-within>o imóvel ocupa ${po<0.0001?'menos de 0,01%':pct(po)} desta parcela</span>`:'';
-     return `<div class="rx-sigef-ref${panel?' rx-sigef-ref-panel':''}" data-rx-sigef-ref="found"><small class="rx-sigef-ref-k">Referência INCRA (SIGEF)</small><b class="rx-sigef-ref-name">${esc(String(r.label).trim())}</b><span class="rx-sigef-ref-pct">cobre ${pct(r.car_overlap_ratio)} do imóvel</span>${within}${note}${more}<span class="rx-sigef-ref-origin">${esc(String(r.origin||'').trim()||ORIGIN)}</span></div>`;
+     return `<div class="rx-sigef-ref${panel?' rx-sigef-ref-panel':''}" data-rx-sigef-ref="found"><small class="rx-sigef-ref-k">${kind}</small><b class="rx-sigef-ref-name">${esc(String(r.label).trim())}</b><span class="rx-sigef-ref-pct">cobre ${pct(r.car_overlap_ratio)} do imóvel</span>${det}${within}${note}${more}<span class="rx-sigef-ref-origin">${esc(String(r.origin||'').trim()||ORIGIN)}</span></div>`;
    }
    if(st==='unanswered'&&retried(carOf(p)))return '<div class="rx-sigef-ref-pending" data-rx-sigef-ref="pending">Referência INCRA: consulta pendente</div>';
    return '';

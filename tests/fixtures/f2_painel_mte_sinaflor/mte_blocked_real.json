@@ -1,0 +1,13 @@
+{
+  "source": "Ministério do Trabalho e Emprego — Cadastro de Empregadores",
+  "source_page": "https://www.gov.br/trabalho-e-emprego/pt-br/assuntos/inspecao-do-trabalho/areas-de-atuacao/cadastro_de_empregadores.csv/view",
+  "data_date": "2026-09-04",
+  "queried_at": "2026-09-14T11:28:00+00:00",
+  "registry_row_count": 579,
+  "ok": true,
+  "answered": false,
+  "state": "blocked_missing_owner_identity",
+  "match_count": null,
+  "reason": "Esta fonte é nominal (CPF/CNPJ). O CAR público analisado não informa com segurança o proprietário; nenhum vínculo entre empregador e imóvel foi inferido.",
+  "owner_name_supplied": false
+}

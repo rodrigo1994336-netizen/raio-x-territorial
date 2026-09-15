@@ -44,6 +44,20 @@ async def _sidra(url:str,source:str) -> tuple[list[dict[str,Any]]|None,dict[str,
         return None,{'ok':False,'source':source,'detail':f'{type(e).__name__}:{str(e)[:260]}'}
 
 
+def _sidra_period(row:dict,header:dict) -> str|None:
+    """Year of a SIDRA row, read from the dimension whose header is "Ano".
+
+    The value column "V" is never a period: a herd of 2077 animals is not the year 2077.
+    """
+    for k,v in row.items():
+        if k in ('V','NC','MC') or not str((header or {}).get(k) or '').strip().lower().startswith('ano'):continue
+        if re.fullmatch(r'(?:19|20)\d{2}',str(v or '').strip()):return str(v).strip()
+    for k,v in row.items():
+        if k in ('V','NC','MC'):continue
+        if str(k).endswith('C') and re.fullmatch(r'(?:19|20)\d{2}',str(v or '').strip()):return str(v).strip()
+    return None
+
+
 async def query_ppm(car_code:str) -> dict[str,Any]:
     mun=municipality_code_from_car(car_code)
     if not mun:return {'ok':False,'source':'IBGE / SIDRA / PPM','detail':'municipality_code_not_available'}
@@ -55,9 +69,8 @@ async def query_ppm(car_code:str) -> dict[str,Any]:
         for k,v in row.items():
             lk=str(k).lower();nv=_norm(v)
             if herd_name is None and any(x in nv for x in ('bovino','bubalino','equino','suino','caprino','ovino','galinaceo','galinha','codorna')):herd_name=str(v)
-            if period is None and re.fullmatch(r'20\d{2}|19\d{2}',str(v or '').strip()):period=str(v)
             if unit is None and ('unidade' in lk or nv in ('cabecas','cabeças')):unit=str(v)
-        value=_num(row.get('V'))
+        value=_num(row.get('V'));period=_sidra_period(row,rows[0])
         if herd_name and value is not None:data.append({'herd':herd_name,'period':period,'value':value,'unit':unit or 'cabeças'})
     groups={}
     for x in data:groups.setdefault(_norm(x['herd']),[]).append(x)
@@ -76,7 +89,7 @@ async def query_dairy_cows(car_code:str) -> dict[str,Any]:
     if err:return {**err,'municipality_code':mun}
     obs=[]
     for row in rows[1:]:
-        value=_num(row.get('V'));period=next((str(v) for v in row.values() if re.fullmatch(r'20\d{2}|19\d{2}',str(v or '').strip())),None)
+        value=_num(row.get('V'));period=_sidra_period(row,rows[0])
         if value is not None:obs.append({'period':period,'value':value})
     obs=sorted(obs,key=lambda x:x.get('period') or '')[-2:]
     if not obs:return {'ok':False,'source':'IBGE / SIDRA — PPM Tabela 94','detail':'no_numeric_rows','municipality_code':mun}
@@ -97,7 +110,7 @@ async def query_animal_products(car_code:str) -> dict[str,Any]:
         text=' | '.join(str(v or '') for v in row.values());nt=_norm(text)
         product=next((x for x in ('Leite','Ovos de galinha','Ovos de codorna','Mel de abelha','Lã','Casulos do bicho-da-seda') if _norm(x) in nt),None)
         if not product:continue
-        period=next((str(v) for v in row.values() if re.fullmatch(r'20\d{2}|19\d{2}',str(v or '').strip())),None)
+        period=_sidra_period(row,rows[0])
         unit=next((str(v) for v in row.values() if any(k in _norm(v) for k in ('litro','duzia','dúzia','quilo','tonelada','reais'))),None)
         variable=next((str(v) for v in row.values() if any(k in _norm(v) for k in ('producao de origem animal','valor da producao'))),None)
         products.append({'product':product,'period':period,'value':value,'unit':unit,'variable':variable})

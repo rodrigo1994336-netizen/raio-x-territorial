@@ -169,9 +169,49 @@ def list_monitors(enabled_only:bool=True,limit:int=100)->list[dict[str,Any]]:
     finally:conn.close()
 
 
+# H1: which base produced the IBAMA embargo count. Snapshots taken before 14/09/2026
+# have no marker: they came from embargos_siscom_brasil, a layer with 0 records, so
+# their embargo count is not comparable with the official base (never "novo embargo").
+IBAMA_EMBARGO_BASE='adm_embargos_ibama_a'
+_BASE_OF={'ibama_embargo_count':'ibama_embargo_base','ibama_embargo_area_ha':'ibama_embargo_base'}
+_META_KEYS={'ibama_embargo_base'}
+
+
+def _answered(src:Any,value:Any)->Any:
+    """A number from a source that did not answer is unknown (None), never 0."""
+    return value if isinstance(src,dict) and src.get('ok') is True else None
+
+
 def compact_snapshot(result:dict[str,Any])->dict[str,Any]:
     car=result.get('car') or {};props=car.get('properties') or {};sigef=result.get('sigef') or {};emb=result.get('embargos_ibama') or {};pro=result.get('prodes') or {};anm=result.get('anm') or {};fire=result.get('fire_live') or {};con=result.get('territorial_constraints') or {};water=result.get('water_mg') or {};piv=result.get('pivots_ana') or {};minerals=result.get('critical_minerals') or {};eex=emb.get('exact') or {};pex=pro.get('exact') or {};aex=anm.get('exact') or {};services=con.get('services') or {}
-    return {'car_code':props.get('cod_imovel'),'car_status':props.get('status_imovel'),'car_condition':props.get('condicao'),'area_ha':props.get('area'),'sigef_candidates':sigef.get('feature_count_bbox') if sigef.get('feature_count_bbox') is not None else sigef.get('feature_count'),'ibama_embargo_count':eex.get('occurrence_count'),'ibama_embargo_area_ha':eex.get('area_unique_ha'),'prodes_count':pex.get('occurrence_count'),'prodes_area_ha':pex.get('area_unique_ha'),'anm_count':aex.get('occurrence_count'),'anm_area_ha':aex.get('area_unique_ha'),'fire_inside_count':fire.get('inside_count'),'fire_near_count':fire.get('near_count'),'fire_latest_file':fire.get('latest_file'),'indigenous_count':(services.get('terra_indigena') or {}).get('occurrence_count'),'conservation_count':(services.get('unidade_conservacao') or {}).get('occurrence_count'),'quilombola_count':(services.get('quilombola') or {}).get('occurrence_count'),'settlement_count':(services.get('assentamento') or {}).get('occurrence_count'),'icmbio_embargo_count':(services.get('embargo_icmbio') or {}).get('occurrence_count'),'water_inside_count':water.get('inside_count'),'water_near_count':water.get('near_count'),'pivot_intersection_count':piv.get('intersection_count'),'pivot_intersection_area_ha':piv.get('intersection_area_unique_ha'),'rare_earth_signal':bool(minerals.get('rare_earth_signal')),'critical_minerals':sorted(minerals.get('mineral_codes') or [])}
+    svc=lambda k:services.get(k) or {}
+    return {'car_code':props.get('cod_imovel'),'car_status':props.get('status_imovel'),'car_condition':props.get('condicao'),'area_ha':props.get('area'),
+            'sigef_candidates':_answered(sigef,sigef.get('feature_count_bbox') if sigef.get('feature_count_bbox') is not None else sigef.get('feature_count')),
+            'ibama_embargo_base':IBAMA_EMBARGO_BASE,'ibama_embargo_count':_answered(emb,eex.get('occurrence_count')),'ibama_embargo_area_ha':_answered(emb,eex.get('area_unique_ha')),
+            'prodes_count':_answered(pro,pex.get('occurrence_count')),'prodes_area_ha':_answered(pro,pex.get('area_unique_ha')),
+            'anm_count':_answered(anm,aex.get('occurrence_count')),'anm_area_ha':_answered(anm,aex.get('area_unique_ha')),
+            'fire_inside_count':_answered(fire,fire.get('inside_count')),'fire_near_count':_answered(fire,fire.get('near_count')),'fire_latest_file':_answered(fire,fire.get('latest_file')),
+            'indigenous_count':_answered(svc('terra_indigena'),svc('terra_indigena').get('occurrence_count')),'conservation_count':_answered(svc('unidade_conservacao'),svc('unidade_conservacao').get('occurrence_count')),
+            'quilombola_count':_answered(svc('quilombola'),svc('quilombola').get('occurrence_count')),'settlement_count':_answered(svc('assentamento'),svc('assentamento').get('occurrence_count')),
+            'icmbio_embargo_count':_answered(svc('embargo_icmbio'),svc('embargo_icmbio').get('occurrence_count')),
+            'water_inside_count':_answered(water,water.get('inside_count')),'water_near_count':_answered(water,water.get('near_count')),
+            'pivot_intersection_count':_answered(piv,piv.get('intersection_count')),'pivot_intersection_area_ha':_answered(piv,piv.get('intersection_area_unique_ha')),
+            'rare_earth_signal':_answered(minerals,bool(minerals.get('rare_earth_signal'))),'critical_minerals':_answered(minerals,sorted(minerals.get('mineral_codes') or []))}
+
+
+def _comparable(old:dict[str,Any],new:dict[str,Any],key:str)->bool:
+    base=_BASE_OF.get(key)
+    return base is None or old.get(base)==new.get(base)
+
+
+def _carry_forward(old:dict[str,Any]|None,new:dict[str,Any])->dict[str,Any]:
+    """A pending source keeps the last answered value as the baseline, so an answer that
+    arrives after a pending run is compared with the last real answer, not with nothing."""
+    if not old:return new
+    out=dict(new)
+    for k,v in new.items():
+        if v is None and k not in _META_KEYS and old.get(k) is not None and _comparable(old,new,k):out[k]=old[k]
+    return out
 
 
 # Values that change without anything changing on the property (the INPE file name rolls every 10 minutes).
@@ -183,18 +223,17 @@ def snapshot_signature(payload:dict[str,Any])->str:
     raw=json.dumps(stable,sort_keys=True,ensure_ascii=False,separators=(',',':')).encode('utf-8');return hashlib.sha256(raw).hexdigest()
 
 
-def merge_answered(old:dict[str,Any]|None,new:dict[str,Any])->dict[str,Any]:
-    """A source that did not answer keeps its last answered value: trying is not answering."""
-    merged=dict(new or {})
-    for k,v in merged.items():
-        if v is None and old and old.get(k) is not None:merged[k]=old[k]
-    return merged
+# W1 public name for the H1 rule (a source that did not answer keeps its last answered value:
+# trying is not answering). One implementation only.
+merge_answered=_carry_forward
 
 
 def _diff(old:dict[str,Any]|None,new:dict[str,Any])->dict[str,Any]:
     if old is None:return {'initial_snapshot':True}
+    # Unknown on either side (pending source, or a key the old snapshot did not track),
+    # counts from a different base and values that roll by themselves are not a change.
     return {k:{'before':old.get(k),'after':new.get(k)} for k in sorted(set(old)|set(new))
-            if k not in VOLATILE_KEYS and old.get(k) is not None and new.get(k) is not None and old.get(k)!=new.get(k)}
+            if k not in _META_KEYS and k not in VOLATILE_KEYS and old.get(k) is not None and new.get(k) is not None and _comparable(old,new,k) and old.get(k)!=new.get(k)}
 
 
 def _number(v:Any)->float:
@@ -223,7 +262,7 @@ _classify_alert=classify_alert
 def save_snapshot(monitor_id:int,payload:dict[str,Any])->dict[str,Any]:
     ensure_schema();state=readiness()
     if state.get('backend')=='redis':
-        r=_redis();code=str(payload.get('car_code') or '').upper();key=f'rx:snapshot:{code}';prev=_rget_json(r,key);old=(prev or {}).get('payload') if prev else None;payload=merge_answered(old,payload);sig=snapshot_signature(payload);diff=_diff(old,payload);changed=bool(prev and diff);now=_now();snap={'captured_at':now,'signature':sig,'payload':payload};r.set(key,json.dumps(snap,ensure_ascii=False,separators=(',',':')))
+        r=_redis();code=str(payload.get('car_code') or '').upper();key=f'rx:snapshot:{code}';prev=_rget_json(r,key);old=(prev or {}).get('payload') if prev else None;old_sig=(prev or {}).get('signature');payload=_carry_forward(old,payload);sig=snapshot_signature(payload);diff=_diff(old,payload);changed=bool(prev and old_sig!=sig and diff);now=_now();snap={'captured_at':now,'signature':sig,'payload':payload};r.set(key,json.dumps(snap,ensure_ascii=False,separators=(',',':')))
         mon=_rget_json(r,f'rx:monitor:{code}',{}) or {};mon['last_checked_at']=now;mon['updated_at']=now
         if changed:mon['last_changed_at']=now
         if mon:
@@ -233,7 +272,7 @@ def save_snapshot(monitor_id:int,payload:dict[str,Any])->dict[str,Any]:
         return {'changed':changed,'initial':prev is None,'signature':sig,'diff':diff}
     conn=_connect()
     try:
-        cur=conn.cursor();cur.execute('SELECT payload,signature FROM rx_monitor_snapshots WHERE monitor_id=%s ORDER BY captured_at DESC LIMIT 1',(monitor_id,));prev=cur.fetchone();old=prev[0] if prev else None;payload=merge_answered(old,payload);sig=snapshot_signature(payload);diff=_diff(old,payload);changed=bool(prev and diff);cur.execute('INSERT INTO rx_monitor_snapshots(monitor_id,signature,payload) VALUES (%s,%s,%s)',(monitor_id,sig,json.dumps(payload,ensure_ascii=False)));cur.execute('UPDATE rx_monitors SET last_checked_at=NOW(),last_changed_at=CASE WHEN %s THEN NOW() ELSE last_changed_at END,updated_at=NOW() WHERE id=%s',(changed,monitor_id));
+        cur=conn.cursor();cur.execute('SELECT payload,signature FROM rx_monitor_snapshots WHERE monitor_id=%s ORDER BY captured_at DESC LIMIT 1',(monitor_id,));prev=cur.fetchone();old=prev[0] if prev else None;old_sig=prev[1] if prev else None;payload=_carry_forward(old,payload);sig=snapshot_signature(payload);diff=_diff(old,payload);changed=bool(prev and old_sig!=sig and diff);cur.execute('INSERT INTO rx_monitor_snapshots(monitor_id,signature,payload) VALUES (%s,%s,%s)',(monitor_id,sig,json.dumps(payload,ensure_ascii=False)));cur.execute('UPDATE rx_monitors SET last_checked_at=NOW(),last_changed_at=CASE WHEN %s THEN NOW() ELSE last_changed_at END,updated_at=NOW() WHERE id=%s',(changed,monitor_id));
         if changed:
             sev,msg=_classify_alert(diff);cur.execute('INSERT INTO rx_monitor_alerts(monitor_id,kind,severity,message,diff) VALUES (%s,%s,%s,%s,%s)',(monitor_id,'property_change',sev,msg,json.dumps(diff,ensure_ascii=False)))
         conn.commit();return {'changed':changed,'initial':prev is None,'signature':sig,'diff':diff}

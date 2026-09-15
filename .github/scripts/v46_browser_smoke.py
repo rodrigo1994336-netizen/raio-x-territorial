@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 from pathlib import Path
 
 from playwright.async_api import async_playwright
 
-BASE = "http://127.0.0.1:8000/"
+BASE = os.getenv("RX_SMOKE_BASE", "http://127.0.0.1:8000/")
 OUT = Path("artifacts")
 DENSE = {"lat": -18.4448863, "lon": -44.2181254, "zoom": 13}
 results = {"viewports": {}, "movements": [], "console": []}
@@ -20,21 +21,23 @@ async def js(page, expr, arg=None):
 
 
 async def wait_runtime(page):
-    # The boot guard reloads once. Do not type a search into the document that
-    # is about to be replaced, or the input vanishes before the button click.
-    await page.wait_for_function("sessionStorage.getItem('rx-v26-ready-reload')==='1' && !document.querySelector('#rxBootGuard')", timeout=15000)
+    # Wait for the complete page (W1a: no reload once ready; a cold server shows the
+    # boot page first and reloads once). Do not type into a document about to be replaced.
+    await page.wait_for_function("(window.rxPortalBootReady===true || sessionStorage.getItem('rx-v26-ready-reload')==='1') && !document.querySelector('#rxBootGuard')", timeout=15000)
     await page.wait_for_function("window.rxV46Installed===true", timeout=15000)
     await page.wait_for_function(
         "typeof map!=='undefined' && !!map && !!map.getBounds", timeout=10000
     )
 
 
+# W1a: parcels may be drawn by a canvas renderer (no <path> per parcel). Every probe below
+# reads Leaflet layers carrying a CAR code, so it works for SVG and canvas alike.
+PARCELS_IN_VIEW_JS = """()=>{if(typeof map==='undefined'||!map)return 0;const b=map.getBounds();let n=0;map.eachLayer(l=>{const p=l.feature&&l.feature.properties;if(p&&p.cod_imovel&&l.getBounds){try{if(b.intersects(l.getBounds()))n++}catch(e){}}});return n}"""
+
+
 async def set_dense(page):
     await js(page, "p=>map.setView([p.lat,p.lon],p.zoom,{animate:false})", DENSE)
-    await page.wait_for_function(
-        "document.querySelectorAll('.leaflet-overlay-pane path.leaflet-interactive').length>0",
-        timeout=25000,
-    )
+    await page.wait_for_function(f"({PARCELS_IN_VIEW_JS})()>0", timeout=25000)
 
 
 async def map_center(page):
@@ -42,10 +45,7 @@ async def map_center(page):
 
 
 async def visible_parcels(page):
-    return await js(
-        page,
-        """()=>{const mr=document.querySelector('#map')?.getBoundingClientRect();if(!mr)return 0;return [...document.querySelectorAll('.leaflet-overlay-pane path.leaflet-interactive')].filter(p=>{const r=p.getBoundingClientRect();return r.width>1&&r.height>1&&r.right>mr.left&&r.left<mr.right&&r.bottom>mr.top&&r.top<mr.bottom}).length}""",
-    )
+    return await js(page, PARCELS_IN_VIEW_JS)
 
 
 async def proven_empty_map_point(page):
@@ -54,12 +54,16 @@ async def proven_empty_map_point(page):
         """()=>{
           const mapEl=document.querySelector('#map'),r=mapEl?.getBoundingClientRect();
           if(!r)return null;
-          const fx=[.08,.16,.24,.32,.40,.48,.56,.64,.72,.80,.88,.94];
-          const fy=[.12,.22,.32,.42,.52,.62,.72,.82,.90];
+          // W1a: with every CAR drawn, bare pixels are rarer; scan a finer grid (coarse points first).
+          const fx=[.08,.16,.24,.32,.40,.48,.56,.64,.72,.80,.88,.94,.04,.12,.20,.28,.36,.44,.52,.60,.68,.76,.84,.92];
+          const fy=[.12,.22,.32,.42,.52,.62,.72,.82,.90,.17,.27,.37,.47,.57,.67,.77,.86];
           for(const yy of fy)for(const xx of fx){
             const x=r.left+r.width*xx,y=r.top+r.height*yy,el=document.elementFromPoint(x,y);
             if(!el||!el.closest('#map'))continue;
-            if(el.closest('.leaflet-popup,.leaflet-control,.leaflet-interactive'))continue;
+            if(el.closest('.leaflet-popup,.leaflet-control')||(el.tagName!=='CANVAS'&&el.closest('.leaflet-interactive')))continue; // a canvas keeps .leaflet-interactive while hovered; parcels are excluded below
+            const lp=map.containerPointToLayerPoint([x-r.left,y-r.top]);let onParcel=false;
+            const ll=map.containerPointToLatLng([x-r.left,y-r.top]);map.eachLayer(l=>{if(!onParcel&&l.feature?.properties?.cod_imovel&&l._containsPoint&&l.getBounds){try{onParcel=l.getBounds().contains(ll)&&l._containsPoint(lp)}catch(e){}}});
+            if(onParcel)continue;
             return {x,y,tag:el.tagName,id:el.id||null,cls:String(el.className||'')};
           }
           return null;
@@ -67,10 +71,24 @@ async def proven_empty_map_point(page):
     )
 
 
+PARCEL_POINTS_JS = """()=>{const r=document.querySelector('#map').getBoundingClientRect(),top=Math.max(r.top,document.querySelector('header.top')?.getBoundingClientRect().bottom||0),out=[];
+  map.eachLayer(l=>{const p=l.feature&&l.feature.properties;if(out.length>=12||!p||!p.cod_imovel||!l._containsPoint||l._path)return;const b=l.getBounds(),c=map.latLngToContainerPoint(b.getCenter());
+    for(const [dx,dy] of [[0,0],[3,3],[-3,-3],[5,-5],[-5,5]]){const x=r.left+c.x+dx,y=r.top+c.y+dy;if(x<r.left+30||x>r.right-60||y<top+60||y>r.bottom-70)continue;
+      if(!l._containsPoint(map.containerPointToLayerPoint([c.x+dx,c.y+dy])))continue;const el=document.elementFromPoint(x,y);if(!el||el.tagName!=='CANVAS'||!el.closest('#map'))continue;out.push({x,y});break}});return out}"""
+
+
 async def click_first_parcel(page):
+    points = await js(page, PARCEL_POINTS_JS)
+    for pt in points:
+        try:
+            await page.mouse.click(pt["x"], pt["y"])
+            await page.wait_for_selector(".rx46-card", state="visible", timeout=5000)
+            return pt
+        except Exception:
+            pass
     paths = page.locator(".leaflet-overlay-pane path.leaflet-interactive")
     n = await paths.count()
-    assert n > 0, "no interactive CAR polygon to click"
+    assert n > 0 or points, "no interactive CAR polygon to click"
     for i in range(min(n, 12)):
         try:
             b = await paths.nth(i).bounding_box()
@@ -339,9 +357,10 @@ async def open_full(page, width):
     assert await page.locator(".rx46-card").count() == 0
     panel = page.locator(".rx45-panel-card")
     text = await panel.inner_text()
-    assert "RISCO NÃO CLASSIFICADO" in text, text
-    assert "Fonte não consultada não significa ausência de ocorrência" in text, text
-    assert "fontes responderam" in text.lower(), text
+    # F1B: no internal wording in the client panel (no risk placeholder, no "N de M fontes responderam").
+    for internal in ("RISCO NÃO CLASSIFICADO", "Fonte não consultada não significa ausência de ocorrência", "fontes responderam"):
+        assert internal.casefold() not in text.casefold(), (internal, text)
+    assert "ver fontes e datas" in text.casefold(), text
     assert "VER ANÁLISE COMPLETA" in text
     assert not re.search(r"20\d{2}-\d{2}-\d{2}T\d{2}:", text), text
     # C2a: clean panel head and KPIs. Compliance rows carry their own labels (C3),
@@ -592,7 +611,7 @@ async def movement_gate(browser):
         ("zoom_in_3", "map.setZoom(Math.min(14,map.getZoom()+1),{animate:false})"),
     ]
     for idx, (name, code) in enumerate(ops, 1):
-        await js(page, code)
+        await js(page, f"()=>void ({code})")
         samples = []
         for _ in range(16):
             samples.append(await visible_parcels(page))
@@ -621,19 +640,16 @@ async def movement_gate(browser):
 
 
 async def assert_parcel_fill(page):
-    fills = await js(page, """()=>{const rows=[];map.eachLayer(l=>{if(l._path&&l.feature?.properties?.cod_imovel){const s=getComputedStyle(l._path);rows.push({fill:s.fill,opacity:Number(s.fillOpacity)})}});return rows}""")
+    fills = await js(page, """()=>{const rows=[];map.eachLayer(l=>{if(!l.feature?.properties?.cod_imovel||!l.options)return;if(l._path){const s=getComputedStyle(l._path);rows.push({fill:s.fill,opacity:Number(s.fillOpacity)})}else if(l._parts){rows.push({fill:l.options.fill===false?'none':String(l.options.fillColor||l.options.color),opacity:Number(l.options.fillOpacity)})}});return rows}""")
     assert fills and all(x['fill'] != 'none' and .15 <= x['opacity'] <= .25 for x in fills), fills
 
 
 async def assert_parcel_tooltips(page):
-    # C2a: the hover tooltip is a plain location/area line: no municipality heading,
-    # no '—' placeholder, pt-BR area.
-    tips = await js(page, """()=>{const rows=[];map.eachLayer(l=>{if(l._path&&l.feature?.properties?.cod_imovel){const t=l.getTooltip?.();const c=t?t.getContent():null;if(typeof c==='string')rows.push(c)}});return rows}""")
-    assert tips, "no parcel tooltip content"
-    for tip in tips:
-        assert "—" not in tip and "<b>" not in tip and "Imóvel rural" not in tip, tip
-        if tip.endswith(" ha"):
-            assert AREA_RE.search(tip) and not re.search(r"\d\.\d{3,4} ha$", tip), tip
+    # F1B: nothing is written over the map on hover (the municipality/area balloon is gone);
+    # the click still opens the card.
+    tips = await js(page, """()=>{let n=0,withTip=0;map.eachLayer(l=>{if(l.feature?.properties?.cod_imovel){n++;if(l.getTooltip&&l.getTooltip())withTip++}});return {n,withTip,open:document.querySelectorAll('.leaflet-tooltip').length}}""")
+    assert tips["n"] > 0, ("no parcels to check", tips)
+    assert tips["withTip"] == 0 and tips["open"] == 0, ("tooltip over the map", tips)
 
 
 async def assert_search_dropdown_escaped(page, car, geometry):
@@ -664,6 +680,10 @@ CARD_FIELDS_JS = """()=>{const c=document.querySelector('.rx46-card');const f={}
 
 async def assert_card_rules_runtime(page, car, geometry):
     """Runs the shipped JS rules (not a Python twin) on deterministic payloads."""
+    # F1B: the card and the panel share ONE /map-panel request per CAR (window.rxMapPanelOnce). The real
+    # search just opened `car`, and its real /map-panel request may still be in flight (SICAR slow from
+    # GitHub): a fixture for the same code would never be asked. The deterministic payloads use their own code.
+    car = car[:-1] + ("0" if car[-1] != "0" else "1")
     fmt = await js(page, """()=>({ha0:rxNum.ha(0),haNull:rxNum.ha(null),haEmpty:rxNum.ha(''),haNaN:rxNum.ha(NaN),haStr0:rxNum.ha('0'),
       tiny:rxNum.num(0.003,2),edge:rxNum.num(0.005,2),big:rxNum.ha(1981.2),date:rxDateBR('2016-04-11T02:05:53.354Z'),dateNull:rxDateBR(null),
       renderWrapped:window.rxV46RenderV45Immediate?.__rxIdentitySanitizedV49===true})""")
@@ -754,7 +774,7 @@ async def search_regression(page, label):
 # /map-panel fixtures in a flow of its own (the real-click flows above stay untouched).
 SIGEF_CAR = "MG-3152006-BB48D05173F540CD9703B23088C3ABF4"
 SIGEF_LABEL = "PROJETO DE ASSENTAMENTO PAULISTA"
-SIGEF_ORIGIN = "SIGEF/INCRA · espelho público IBAMA/PAMGIA"
+SIGEF_ORIGIN = "Acervo Fundiário do INCRA (SIGEF)"
 SIGEF_GEOMETRY = {"type": "Polygon", "coordinates": [[[-45.02, -19.22], [-44.98, -19.22], [-44.98, -19.18], [-45.02, -19.18], [-45.02, -19.22]]]}
 
 REF_JS = """(root)=>{
@@ -818,7 +838,10 @@ async def sigef_reference_flow(browser, width, height, scenarios):
     await page.goto(BASE, wait_until="domcontentloaded", timeout=30000)
     await wait_runtime(page)
     await page.route("**/v1/live/map-panel/**", map_panel)
-    for pattern in ("**/v1/live/snapshot/**", "**/v1/live/property-identity/**", "**/v1/live/conformity/**", "**/v1/live/car-integrity/**"):
+    # F1B: opening the card's "VER ANÁLISE COMPLETA" starts the full reading (report engine): quiet too, the
+    # fixture CAR codes do not exist and the engine is not what this flow checks.
+    for pattern in ("**/v1/live/snapshot/**", "**/v1/live/property-identity/**", "**/v1/live/conformity/**", "**/v1/live/car-integrity/**",
+                    "**/v1/live/quick/**", "**/v1/live/progressive/**"):
         await page.route(pattern, quiet)
     # Below z11 the viewport loader stays idle, so no external source is involved.
     await js(page, "()=>map.setView([-19.2,-45.0],10,{animate:false})")
@@ -866,7 +889,7 @@ async def sigef_reference_flow(browser, width, height, scenarios):
         await page.wait_for_timeout(700)
         pinfo = await page.evaluate(REF_JS, ".rx45-panel-card")
         assert_ref_readable(pinfo, "panel-found")
-        for required in ("Referência INCRA", SIGEF_LABEL, "99,95%", SIGEF_ORIGIN, "não é o nome do CAR", "+1 outra parcela SIGEF cobre metade ou mais"):
+        for required in ("Referência INCRA", SIGEF_LABEL, "99,95%", SIGEF_ORIGIN, "não é o nome do CAR", "+1 outra certificação INCRA cobre metade ou mais"):
             assert required in pinfo["text"], (required, pinfo)
         assert SIGEF_LABEL.replace(" ", "") not in pinfo["title"], pinfo
         assert "OpenStreetMap" in pinfo["all"] and "Fazenda Teste OSM" in pinfo["all"], pinfo

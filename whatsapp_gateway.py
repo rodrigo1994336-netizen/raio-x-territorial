@@ -286,13 +286,17 @@ def register_routes(app: FastAPI, analyze_fn: Callable[..., Awaitable[dict[str,A
             _session_set(to,car=car)
             lines=_result_header(result,car)
             if intent in {'summary','property'}:
-                emb=((result.get('embargos_ibama') or {}).get('exact') or {}).get('occurrence_count')
-                anm=((result.get('anm') or {}).get('exact') or {}).get('occurrence_count')
-                pro=((result.get('prodes') or {}).get('exact') or {}).get('occurrence_count')
+                # H1: a count is shown only for a source that answered (ok=True); otherwise pending.
+                def _answered_count(key):
+                    src=result.get(key) or {}
+                    return ((src.get('exact') or {}).get('occurrence_count')) if src.get('ok') is True else None
+                emb=_answered_count('embargos_ibama')
+                anm=_answered_count('anm')
+                pro=_answered_count('prodes')
                 fire=result.get('fire_live') or {}
                 lines += [
                     f"Embargos IBAMA: {emb if emb is not None else 'consulta pendente'}",
-                    f"PRODES histórico: {pro if pro is not None else 'consulta pendente'} ocorrência(s)",
+                    f"PRODES histórico: {str(pro)+' ocorrência(s)' if pro is not None else 'consulta pendente'}",
                     f"Processos ANM: {anm if anm is not None else 'consulta pendente'}",
                     f"Fogo recente dentro: {fire.get('inside_count') if fire.get('ok') else 'consulta pendente'}",
                     '', 'Digite *relatório* para o PDF completo ou *menu* para ver todas as funções.'
@@ -322,7 +326,7 @@ def register_routes(app: FastAPI, analyze_fn: Callable[..., Awaitable[dict[str,A
                 if fire.get('ok'):lines += [f"Focos dentro: {fire.get('inside_count',0)}",f"Focos próximos: {fire.get('near_count',0)}",f"Janela: {fire.get('window_note') or '-'}"]
                 else:lines += ['Focos de calor: consulta pendente; tente de novo em alguns minutos.']
             elif intent=='mining':
-                m=result.get('critical_minerals') or {};a=m.get('anm') or {};s=m.get('sgb') or {};lines += ['⛏️ *Mineração, minerais críticos e terras raras*',f"Processos ANM: {a.get('process_count',0)}",f"Processos classificados como minerais críticos: {a.get('critical_process_count',0)}",f"Sinal de terras raras: {'SIM — TRIAGEM' if m.get('rare_earth_signal') else 'não identificado'}",f"Camadas SGB com sinal: {len(s.get('hit_layers') or [])}",'Triagem geológica/mineral não comprova jazida, recurso ou reserva.']
+                m=result.get('critical_minerals') or {};a=m.get('anm') or {};s=m.get('sgb') or {};anm_ok=(result.get('anm') or {}).get('ok') is True;lines += ['⛏️ *Mineração, minerais críticos e terras raras*',f"Processos ANM: {a.get('process_count',0) if anm_ok else 'consulta pendente'}",f"Processos classificados como minerais críticos: {a.get('critical_process_count',0) if anm_ok else 'consulta pendente'}",f"Sinal de terras raras: {'SIM — TRIAGEM' if m.get('rare_earth_signal') else ('não identificado' if anm_ok and m.get('ok') is True else 'consulta pendente')}",f"Camadas SGB com sinal: {len(s.get('hit_layers') or [])}",'Triagem geológica/mineral não comprova jazida, recurso ou reserva.']
             await _send_text(to,'\n'.join(lines))
         except Exception:
             await _send_text(to,'As fontes oficiais não responderam agora. Tente de novo em alguns minutos; o sistema não trata consulta sem resposta como resultado negativo.')

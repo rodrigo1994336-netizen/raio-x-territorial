@@ -8,7 +8,10 @@ on:
 jobs:
   browser-smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 18
+    # Measured locally on the W1A integration (loaded machine): V46 smoke 283 s, W1a boot smoke 27 s + cold server 14 s,
+    # parcels smoke 88 s (103-160 s on the front), mutation controls 86 s (134-262 s), link smoke 96 s. ~10 min of smokes
+    # plus install; 25 min keeps about 2x margin.
+    timeout-minutes: 25
     env:
       RX_RELEASE: V8_OPERATIONAL_ZERO_COST
       RX_PORTAL_RSS_BUDGET_MB: '220'
@@ -23,6 +26,7 @@ jobs:
           pip install fastapi httpx shapely pyproj pillow reportlab uvicorn "psycopg[binary]" "redis>=5,<7" "numpy>=2,<3" "rasterio>=1.4,<2" "PyJWT[crypto]>=2.10,<3" playwright
           python -m playwright install --with-deps chromium
       - name: Start V46 branch runtime and wait for deferred marker
+        id: runtime
         run: |
           set -euo pipefail
           mkdir -p artifacts
@@ -55,6 +59,20 @@ jobs:
           fi
       - name: Selection card panel and 10-movement visual gate
         run: python .github/scripts/v46_browser_smoke.py
+      # The W1a steps below do not depend on live SICAR (fixtures or a spawned server), so they run even when the
+      # live-SICAR smoke above failed (SICAR often does not answer GitHub runners); they only need the runtime.
+      - name: W1a boot smoke (one navigation, CSS/JS failure recovery, failed boot page at 375/768/1440, cold server)
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
+        run: python .github/scripts/w1a_boot_browser_smoke.py --spawn 8311
+      - name: W1a fast CAR parcels (cells, canvas, hysteresis, honest notice)
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
+        run: python .github/scripts/w1a_imoveis_rapidos_smoke.py
+      - name: W1a mutation controls (each broken rule must turn the smoke red at its own check)
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
+        run: python .github/scripts/w1a_imoveis_rapidos_smoke.py --mutation-controls
+      - name: W1a property link, share menu, polygon click and link notices (375 and 1440, SICAR mocked)
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
+        run: python .github/scripts/w1a_link_imovel_smoke.py
       - name: Enforce browser smoke execution
         if: always()
         run: |

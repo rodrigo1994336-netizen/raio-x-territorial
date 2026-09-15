@@ -1,0 +1,3 @@
+# Python bytecode: produced by compileall and every local gate/smoke run; never versioned.
+__pycache__/
+*.py[cod]

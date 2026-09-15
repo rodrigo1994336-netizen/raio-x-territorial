@@ -31,26 +31,13 @@ def _area(v):
 
 
 async def _city_bbox(municipality:str,uf:str):
-    state=UF_TO_STATE.get(uf,uf)
-    params={'q':f'{municipality}, {state}, Brasil','format':'jsonv2','countrycodes':'br','addressdetails':'1','limit':'8','accept-language':'pt-BR'}
-    headers={'User-Agent':'Raio-X-Territorial/0.39-advanced-search'}
-    try:
-        async with httpx.AsyncClient(timeout=16,follow_redirects=True,headers=headers) as c:
-            r=await c.get('https://nominatim.openstreetmap.org/search',params=params);r.raise_for_status();rows=r.json()
-    except Exception as e:
-        raise HTTPException(status_code=502,detail=f'Não foi possível localizar o município: {type(e).__name__}')
-    wanted=_norm(municipality)
-    for x in rows:
-        a=x.get('address') or {}
-        iso=a.get('ISO3166-2-lvl4') or a.get('ISO3166-2-lvl6') or ''
-        found_uf=iso[-2:].upper() if isinstance(iso,str) and iso.upper().startswith('BR-') else base.STATE_TO_UF.get(_norm(a.get('state')))
-        name=a.get('city') or a.get('town') or a.get('municipality') or a.get('village') or x.get('name')
-        if found_uf==uf and name and (wanted in _norm(name) or _norm(name) in wanted):
-            bb=x.get('boundingbox') or []
-            if len(bb)==4:
-                south,north,west,east=map(float,bb)
-                return {'south':south,'north':north,'west':west,'east':east,'name':name,'state':a.get('state'),'lat':float(x['lat']),'lon':float(x['lon'])}
-    raise HTTPException(status_code=404,detail='Município não localizado na UF selecionada.')
+    # F1B 1B.6: the municipality box comes from the IBGE list kept in the server (municipios_ibge_br),
+    # never from Nominatim. The box is the official municipal mesh extent, not a geocoder guess.
+    import municipios_ibge_br
+    it=municipios_ibge_br.find(municipality,uf)
+    if not it:
+        raise HTTPException(status_code=404,detail='Município não localizado na UF selecionada.')
+    return {'south':it['south'],'north':it['north'],'west':it['west'],'east':it['east'],'name':it['name'],'state':municipios_ibge_br.STATE_NAMES[it['uf']],'lat':it['lat'],'lon':it['lon']}
 
 
 @app.get('/v1/live/search/advanced')

@@ -73,9 +73,10 @@ UI=r'''
  window.addEventListener('error',e=>{status('Erro na interface: '+String(e.message||'falha inesperada'),'bad',6000);report('window-error',null,e.message||'error')});
  window.addEventListener('unhandledrejection',e=>{const m=e.reason?.message||e.reason||'falha assíncrona';status('A ação falhou: '+String(m),'bad',6000);report('promise-rejection',null,m)});
  const nativeFetch=window.fetch.bind(window);
+ // W1a: an aborted request (the map left that area, the user closed a lookup) is not a connection failure.
  window.fetch=async function(input,init){
    try{const r=await nativeFetch(input,init);if(!r.ok&&String(input).includes('/v1/')){report('http-'+r.status,null,String(input))}return r}
-   catch(e){report('network-error',null,e?.message||e);status('Falha de conexão ao executar a ação.','bad',5000);throw e}
+   catch(e){if(e?.name==='AbortError'||init?.signal?.aborted)throw e;report('network-error',null,e?.message||e);status('Falha de conexão ao executar a ação.','bad',5000);throw e}
  };
  async function readiness(){try{const r=await nativeFetch('/v1/ui/readiness',{cache:'no-store'}),d=await r.json();if(!d.ok){status('Portal carregou parcialmente. Atualize a página em alguns segundos.','bad',6500);report('readiness',null,(d.missing_routes||[]).join(','))}}catch(e){}}
  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',readiness);else readiness();
