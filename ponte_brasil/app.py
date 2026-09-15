@@ -19,7 +19,9 @@ Travas (cada uma tem teste e controle positivo em scripts/ponte_brasil_gate.py):
     negocia assim; o INCRA usa o contexto padrão do Python;
   * prazo total de 10 s para linha de pedido, cabeçalhos e corpo, e teto de conexões abertas
     (cliente que pinga um byte por vez não segura a ponte);
-  * limite de taxa por instância; log sem token, sem corpo e sem endereço completo.
+  * limite de taxa por instância; log sem token, sem corpo e sem endereço completo;
+  * teto de saída: no máximo EGRESS_BYTES_PER_HOUR (1 GiB) de corpo devolvido por hora, num balde;
+    acima, 429 egress_budget (a saída de rede é cobrada e pode ficar fora do teto de gasto do Cloud Run).
 
 Porta de fora (15/09/2026): o guia publica a ponte com --no-allow-unauthenticated. O Cloud Run recusa,
 antes do contêiner, quem não traz token de identidade do Google (X-Serverless-Authorization) da conta de
@@ -70,6 +72,7 @@ RATE_BURST = 40
 UNAUTH_RATE_PER_S = 5.0      # tentativas sem token válido
 UNAUTH_BURST = 10
 MAX_INFLIGHT = 16            # buscas simultâneas na fonte
+EGRESS_BYTES_PER_HOUR = 1024 ** 3   # corpo devolvido por hora (uso normal: ~0,4 GB por mês)
 BUFFER_BUDGET_BYTES = 96 * 1024 * 1024   # soma dos corpos em memória (instância de 256 MiB)
 READ_CHUNK = 64 * 1024
 DEFAULT_USER_AGENT = "RaioX-PonteBrasil/1"
@@ -299,6 +302,30 @@ class TokenBucket:
             return False
 
 
+class EgressBudget:
+    """Bytes de corpo devolvidos ao cliente: balde de per_hour bytes que enche per_hour bytes por hora.
+
+    Limita a saída de rede cobrada mesmo com a chave roubada: em T horas, no máximo per_hour * (T + 1)."""
+
+    def __init__(self, per_hour: int, clock: Callable[[], float] = time.monotonic):
+        self.capacity = float(per_hour)
+        self.rate = float(per_hour) / 3600.0
+        self.available = float(per_hour)
+        self.clock = clock
+        self.last = clock()
+        self.lock = threading.Lock()
+
+    def take(self, n: int) -> bool:
+        with self.lock:
+            now = self.clock()
+            self.available = min(self.capacity, self.available + max(0.0, now - self.last) * self.rate)
+            self.last = now
+            if n > self.available:
+                return False
+            self.available -= n
+            return True
+
+
 class ByteBudget:
     def __init__(self, limit: int):
         self.limit = int(limit)
@@ -421,6 +448,7 @@ class Service:
     unauth_bucket: TokenBucket = field(default_factory=lambda: TokenBucket(UNAUTH_RATE_PER_S, UNAUTH_BURST))
     inflight: threading.BoundedSemaphore = field(default_factory=lambda: threading.BoundedSemaphore(MAX_INFLIGHT))
     budget: ByteBudget = field(default_factory=lambda: ByteBudget(BUFFER_BUDGET_BYTES))
+    egress: EgressBudget = field(default_factory=lambda: EgressBudget(EGRESS_BYTES_PER_HOUR))
 
     @property
     def token_configured(self) -> bool:
@@ -706,6 +734,8 @@ class PonteHandler(BaseHTTPRequestHandler):
                                  timeout_s=self._timeout())
             finally:
                 svc.inflight.release()
+            if not svc.egress.take(len(upstream.body)):
+                raise Refused(429, "egress_budget")   # o corpo já está aqui: recusar não gasta saída de rede
             status, code, size = upstream.status, "", len(upstream.body)
             self._send(upstream.status, upstream.body, headers=upstream.headers, origin="upstream")
         except Refused as exc:

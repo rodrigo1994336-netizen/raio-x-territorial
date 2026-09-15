@@ -20,7 +20,10 @@ injetados que levam os hosts oficiais a uma fonte falsa local, e confere:
      espera limitada ao prazo da consulta, falha da credencial vira consulta pendente (nunca chamada sem
      credencial), log e resultado sem chave/token; conferência do Cloud Shell (scripts/ponte_brasil_conferir.py);
   G  guia (docs/PONTE_BRASIL_ATIVACAO.md): blocos bash com sintaxe válida, ponte fechada, PAROU em falha,
-     segredo nunca impresso fora da caixa do Render;
+     segredo nunca impresso fora da caixa do Render; CODIGO_REVISADO igual aos hashes do git do código; cada
+     bloco rodado como o dono cola, com gcloud/git/python3/openssl/cloudshell falsos: trava de projeto (AFP,
+     outro, Firebase, nenhum), --project em toda chamada, papel/recurso/membro de cada permissão, publicação
+     fechada com conta sem papel, umask 077 na chave, conferência antes de apagar chaves, aviso de token novo;
   M  controles positivos: cada trava desligada por mutação faz a verificação dela falhar.
 
 Uso: PYTHONPATH=. python scripts/ponte_brasil_gate.py
@@ -30,6 +33,7 @@ from __future__ import annotations
 import ast
 import base64
 import contextlib
+import hashlib
 import http.client
 import importlib.util
 import io
@@ -40,6 +44,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import types
@@ -643,6 +648,25 @@ def s_rate_limit():
         refused(e.call(token=WRONG), 401, "unauthorized")
         refused(e.call(token=WRONG), 429, "rate_limited")
     assert (ponte.RATE_PER_S, ponte.RATE_BURST, ponte.UNAUTH_RATE_PER_S, ponte.UNAUTH_BURST) == (20.0, 40, 5.0, 10)
+
+
+def s_egress_budget():
+    """Teto de saída: no máximo EGRESS_BYTES_PER_HOUR de corpo devolvido por hora (balde); acima, 429 egress_budget."""
+    clock = FakeClock()
+    body_len = len(b'{"features": [], "marca": "RESPOSTA-OK"}')
+    with PonteEnv(egress=ponte.EgressBudget(2 * body_len, clock=clock)) as e:
+        assert e.call()[0] == 200 and e.call()[0] == 200
+        refused(e.call(), 429, "egress_budget")
+        assert '"error": "egress_budget"' in e.log.getvalue(), e.log.getvalue()[-300:]
+        clock.t += 1900.0          # pouco mais de meia hora devolve um corpo
+        assert e.call()[0] == 200
+        refused(e.call(), 429, "egress_budget")
+        clock.t += 36000.0         # dez horas não passam do tamanho do balde (dois corpos)
+        assert e.call()[0] == 200 and e.call()[0] == 200
+        refused(e.call(), 429, "egress_budget")
+        assert e.svc.budget.used == 0, ("memória não liberada na recusa", e.svc.budget.used)
+    assert ponte.EGRESS_BYTES_PER_HOUR == 1024 ** 3, ("teto de saída de produção mudou", ponte.EGRESS_BYTES_PER_HOUR)
+    assert ponte.Service().egress.capacity == float(ponte.EGRESS_BYTES_PER_HOUR), "Service sem o teto de produção"
 
 
 def s_log_hygiene():
@@ -1573,6 +1597,59 @@ def i_credential_failures():
         _wait_refresh_idle()
 
 
+def i_sicar_budget_after_credential():
+    """SICAR: se a espera pela credencial consumir o prazo, a falha direta volta; nunca ponte com menos de 3 s."""
+    for advance, bridged in ((3.0, False), (0.0, True)):
+        clock = FakeClock()
+        endpoint = FakeTokenEndpoint()
+
+        def slow_endpoint(assertion, timeout, advance=advance):
+            clock.t += advance      # a troca "levou" advance segundos no relógio da consulta
+            return endpoint(assertion, timeout)
+
+        with ponte_env(env_identity()), mock.patch.object(br_bridge, "_now", clock), \
+                mock.patch.object(br_bridge, "_post_token", slow_endpoint):
+            rec = Recorder((7, 40.0, b"", b"curl: (7) Failed to connect"), (0, 1.0, b'{"features": []}', b""), clock=clock)
+            proc = br_bridge.run_curl(["curl", "-sS", "--max-time", "43", SICAR_URL], timeout_seconds=45.0, runner=rec)
+            _wait_refresh_idle()
+        if bridged:   # controle: sem demora na credencial, a mesma queda vai à ponte (o teste não é vazio)
+            assert proc.returncode == 0 and len(rec.calls) == 2 and _id_header(rec.calls[1]), rec.calls
+        else:
+            assert proc.returncode == 7 and len(rec.calls) == 1, ("ponte com menos que o prazo mínimo", rec.calls)
+
+
+def i_prewarm():
+    """Arranque real (módulo carregado do zero): com a chave, o br_bridge já pede o primeiro token sozinho."""
+    path = ROOT / "br_bridge.py"
+    source = _BRIDGE_FILE_OVERRIDE.get("src") or path.read_text(encoding="utf-8")
+    endpoint = FakeTokenEndpoint()
+    seen = []
+
+    def fake_urlopen(request, timeout=None):
+        seen.append((request.full_url, timeout))
+        return io.BytesIO(json.dumps({"id_token": endpoint.token}).encode())
+
+    for env, wants_token in ((env_identity(), True), (ENV_ON, False)):
+        seen.clear()
+        name = "br_bridge_arranque"
+        module = types.ModuleType(name)
+        module.__file__ = str(path)
+        sys.modules[name] = module
+        out = io.StringIO()
+        try:
+            with ponte_env(env), mock.patch("urllib.request.urlopen", fake_urlopen), contextlib.redirect_stdout(out):
+                exec(compile(source, str(path), "exec"), module.__dict__)
+                if wants_token:
+                    assert _wait(lambda: bool(module._id_tokens), 5.0), ("arranque sem pedir o token de identidade", seen)
+                    assert seen == [(module.GOOGLE_TOKEN_URI, module.ID_TOKEN_HTTP_TIMEOUT_S)], seen
+                else:
+                    time.sleep(0.3)
+                    assert not seen and not module._id_tokens, seen
+        finally:
+            sys.modules.pop(name, None)
+        assert ("acesso=google" in out.getvalue()) == wants_token, out.getvalue()
+
+
 def i_real_curl_identity():
     """curl de verdade com o token de identidade pela entrada padrão: a ponte aceita e a fonte nunca o vê."""
     assert shutil.which("curl"), "curl ausente"
@@ -1653,6 +1730,7 @@ def i_conferir():
         (lambda w: 403, {}, "PAROU: a chave ainda nao tem permissao"),
         (lambda w: 200 if w else 403, {"incra_rc": 22}, "PAROU: o INCRA nao respondeu pela ponte"),
         (lambda w: None, {}, "PAROU: a ponte nao respondeu como esperado"),
+        (lambda w: 200 if w else 401, {}, "PAROU: a ponte nao respondeu como esperado"),
     )
     for statuses, kwargs, want in scenarios:
         code, text, calls, _ = _conferir_run(env, statuses, **kwargs)
@@ -1747,6 +1825,453 @@ def g_guide():
         ("sem o serviço do relatório", text.replace("raio-x-territorial-report", "relatorio")),
     ):
         assert guide_problems(mutated), ("conferência do guia cega", label)
+
+
+# ---------------------------------------------------------------------------------------------
+# G2 · código revisado (CODIGO_REVISADO) e blocos do guia rodados com gcloud/git/python3 falsos
+# ---------------------------------------------------------------------------------------------
+
+PIN_PATHS = ("ponte_brasil", "br_bridge.py", "scripts/ponte_brasil_conferir.py")
+_GUIDE_OVERRIDE: dict[str, str] = {}
+
+
+def _guide_text() -> str:
+    return _GUIDE_OVERRIDE.get("text") or GUIDE.read_text(encoding="utf-8")
+
+
+def _pin_read(rel: str) -> bytes:
+    return (ROOT / rel).read_bytes()
+
+
+_ORIG_PIN_READ = _pin_read
+
+
+def _git_object(kind: str, data: bytes) -> str:
+    return hashlib.sha1(kind.encode("ascii") + b" %d\0" % len(data) + data).hexdigest()
+
+
+def reviewed_code_hashes() -> str:
+    """Hashes do git (árvore de ponte_brasil/, blobs do cliente e da conferência) calculados do conteúdo atual."""
+    listing = subprocess.run(["git", "ls-files", "-s", "--", *PIN_PATHS], cwd=ROOT, capture_output=True, timeout=30)
+    assert listing.returncode == 0, listing.stderr[:300]
+    entries: dict[str, tuple[str, str]] = {}
+    for line in listing.stdout.decode("utf-8").splitlines():
+        meta, path = line.split("\t", 1)
+        entries[path] = (meta.split()[0], _git_object("blob", _pin_read(path)))
+    assert {"ponte_brasil/app.py", "br_bridge.py", "scripts/ponte_brasil_conferir.py"} <= set(entries), sorted(entries)
+
+    def tree(prefix: str) -> str:
+        children: dict[str, tuple[str, str]] = {}
+        for path, (mode, blob) in entries.items():
+            if path.startswith(prefix + "/"):
+                rest = path[len(prefix) + 1:]
+                name = rest.split("/", 1)[0]
+                children[name] = ("40000", tree(prefix + "/" + name)) if "/" in rest else (mode, blob)
+        order = sorted(children, key=lambda n: n + "/" if children[n][0] == "40000" else n)
+        data = b"".join(children[n][0].encode("ascii") + b" " + n.encode("utf-8") + b"\0" + bytes.fromhex(children[n][1])
+                        for n in order)
+        return _git_object("tree", data)
+
+    return " ".join((tree("ponte_brasil"), entries["br_bridge.py"][1], entries["scripts/ponte_brasil_conferir.py"][1]))
+
+
+def g_code_pin():
+    want = reviewed_code_hashes()
+    blocks = guide_blocks(_guide_text())
+    for name in ("PONTE", "CONFERE"):
+        got = re.findall(r'^CODIGO_REVISADO="([^"\n]*)"$', blocks.get(name, ""), re.M)
+        assert got == [want], (f"{name}: CODIGO_REVISADO do guia difere do código atual (mudou a ponte, o br_bridge ou a "
+                               "conferência? atualize os blocos PONTE e CONFERE)", got, want)
+    clean = subprocess.run(["git", "diff", "--quiet", "HEAD", "--", *PIN_PATHS], cwd=ROOT, timeout=30).returncode == 0
+    if os.environ.get("CI"):
+        assert clean, "no CI o código da ponte tem de ser o do HEAD"
+    if clean:   # conferência independente do cálculo: o próprio git
+        proc = subprocess.run(["git", "rev-parse", *[f"HEAD:{p}" for p in PIN_PATHS]], cwd=ROOT, capture_output=True, timeout=30)
+        assert proc.returncode == 0 and proc.stdout.decode("ascii").split() == want.split(), ("hash calculado difere do git",
+                                                                                            proc.stdout[:200], want)
+    else:
+        print("PONTE_AVISO g_code_pin: código da ponte difere do HEAD; a conferência com git rev-parse roda no CI", flush=True)
+
+
+SIM_PROJECT = "raio-x-4711"
+SIM_OLD_TOKEN = "0a" * 32
+SIM_NEW_TOKEN = "5e" * 32
+SIM_NEW_KEY = "c0ffee" * 6 + "abcd"
+SIM_SECRET = "SIMSEGREDO-CHAVE-PRIVADA"
+SIM_URL = "https://ponte-brasil-sim-rj.a.run.app"
+SIM_BUILD_MEMBER = "serviceAccount:123456789012-compute@developer.gserviceaccount.com"
+SIM_RENDER_MEMBER = f"serviceAccount:ponte-render@{SIM_PROJECT}.iam.gserviceaccount.com"
+SIM_RUNTIME = f"ponte-runtime@{SIM_PROJECT}.iam.gserviceaccount.com"
+SIM_OPEN_POLICY = '{"bindings": [{"members": ["allUsers"], "role": "roles/run.invoker"}]}'
+
+_SIM_LOG_LINE = """{ printf '%s' "$(umask)"; printf '\\037%s' "$@"; printf '\\n'; } >> "$SIM_LOG\""""
+
+FAKE_BIN = {
+    "gcloud": r"""#!/usr/bin/env bash
+# gcloud falso do gate: registra a chamada (umask, argumentos) e responde pelo estado em $SIM_STATE
+set -- gcloud "$@"
+""" + _SIM_LOG_LINE + r"""
+shift
+st="$SIM_STATE"
+case "$*" in
+  "config get-value project"*) printf '%s\n' "$SIM_CONFIG_PROJECT" ;;
+  "projects describe "*"value(name)"*) printf '%s\n' "$SIM_PROJECT_NAME" ;;
+  "projects describe "*"projectNumber"*) printf '123456789012\n' ;;
+  "projects list"*) if [ -n "$SIM_CANDIDATE" ]; then printf '%s\n' "$SIM_CANDIDATE"; fi ;;
+  "services list"*) if [ "$SIM_FIREBASE" = 1 ]; then printf 'firebase.googleapis.com\n'; fi ;;
+  "run services list"*) if [ -e "$st/service" ]; then printf 'ponte-brasil\n'; fi ;;
+  "run services describe"*"--format=json"*)
+    [ -e "$st/service" ] || { echo "ERROR: (gcloud.run.services.describe) Cannot find service [ponte-brasil]" >&2; exit 1; }
+    printf '{"spec": {"template": {"spec": {"containers": [{"env": [{"name": "PONTE_TOKEN", "value": "%s"}]}]}}}}\n' "$(cat "$st/token")" ;;
+  "run services describe"*)
+    [ -e "$st/service" ] || { echo "ERROR: (gcloud.run.services.describe) Cannot find service [ponte-brasil]" >&2; exit 1; }
+    printf 'https://ponte-brasil-sim-rj.a.run.app\n' ;;
+  "run deploy"*|"run services update"*)
+    for a in "$@"; do case "$a" in PONTE_TOKEN=*) printf '%s' "${a#PONTE_TOKEN=}" > "$st/token" ;; esac; done
+    : > "$st/service" ;;
+  "run services delete"*) [ -e "$st/service" ] || exit 1; rm -f "$st/service" ;;
+  "run services get-iam-policy"*) printf '%s\n' "$SIM_POLICY" ;;
+  "iam service-accounts describe "*) [ -e "$st/sa-${4%%@*}" ] || { echo "ERROR: NOT_FOUND" >&2; exit 1; } ;;
+  "iam service-accounts create "*) : > "$st/sa-$4" ;;
+  "iam service-accounts keys list"*) cat "$st/keys" ;;
+  "iam service-accounts keys create "*)
+    id="$(cat "$st/next-key")"
+    printf '{"type": "service_account", "private_key_id": "%s", "private_key": "-----BEGIN PRIVATE KEY-----\\nSIMSEGREDO-CHAVE-PRIVADA\\n-----END PRIVATE KEY-----\\n", "client_email": "ponte-render@sim"}\n' "$id" > "$5"
+    printf '%s\n' "$id" >> "$st/keys" ;;
+  "iam service-accounts keys delete "*) { grep -vx -- "$5" "$st/keys" || true; } > "$st/keys.novo"; mv -f "$st/keys.novo" "$st/keys" ;;
+esac
+exit 0
+""",
+    "git": r"""#!/usr/bin/env bash
+set -- git "$@"
+""" + _SIM_LOG_LINE + r"""
+shift
+if [ "$1" = clone ]; then
+  for alvo in "$@"; do :; done
+  mkdir -p "$alvo/scripts" "$alvo/ponte_brasil"
+  : > "$alvo/scripts/ponte_brasil_conferir.py"
+elif [ "$1" = -C ] && [ "$3" = rev-parse ]; then
+  printf '%s\n' $SIM_REV_PARSE
+fi
+exit 0
+""",
+    "python3": r"""#!/usr/bin/env bash
+case "${1:-}" in
+  *ponte_brasil_conferir.py)
+    set -- conferir "$@" "url=${RX_PONTE_BRASIL_URL:-}" "token=${RX_PONTE_BRASIL_TOKEN:-}" "chave=${RX_PONTE_BRASIL_CHAVE:+presente}"
+""" + _SIM_LOG_LINE + r"""
+    exit "$SIM_CONFERIR_RC" ;;
+esac
+"$SIM_PYTHON" "$@" | tr -d '\r'
+exit "${PIPESTATUS[0]}"
+""",
+    "openssl": r"""#!/usr/bin/env bash
+set -- openssl "$@"
+""" + _SIM_LOG_LINE + r"""
+printf '%s\n' "$SIM_NEW_TOKEN"
+""",
+    "cloudshell": r"""#!/usr/bin/env bash
+set -- cloudshell "$@"
+""" + _SIM_LOG_LINE + r"""
+exit 0
+""",
+    "sleep": "#!/usr/bin/env bash\nexit 0\n",
+}
+
+
+class SimResult:
+    def __init__(self, rc: int, out: str, calls: list[list[str]], render: str | None, keys: list[str], service: bool):
+        self.rc, self.out, self.calls, self.render, self.keys, self.service = rc, out, calls, render, keys, service
+
+    def gcloud(self) -> list[list[str]]:
+        return [c[2:] for c in self.calls if c[1] == "gcloud"]
+
+    def index(self, predicate) -> list[int]:
+        return [i for i, c in enumerate(self.calls) if predicate(c)]
+
+    def tail(self) -> str:
+        return self.out[-700:]
+
+
+def sim_block(name: str, *, project: str = SIM_PROJECT, project_name: str = "Raio-X", firebase: bool = False,
+              candidate: str = "", service: bool = False, token: str = SIM_OLD_TOKEN, accounts=(), keys=(),
+              key_json_id: str | None = None, conferir_rc: int = 0, policy: str = '{"bindings": []}',
+              rev_parse: str | None = None) -> SimResult:
+    """Roda um bloco do guia como o dono cola (bash lendo o bloco), com executáveis falsos na frente do PATH."""
+    bash = shutil.which("bash")
+    assert bash, "bash ausente"
+    body = guide_blocks(_guide_text()).get(name)
+    assert body, f"bloco {name} ausente"
+    tmp = Path(tempfile.mkdtemp(prefix="ponte-sim-"))
+    try:
+        home, state, bin_dir = tmp / "home", tmp / "state", tmp / "bin"
+        for folder in (home, state, bin_dir):
+            folder.mkdir()
+        for tool, script in FAKE_BIN.items():
+            path = bin_dir / tool
+            path.write_bytes(script.encode("utf-8"))
+            path.chmod(0o755)
+        if service:
+            (state / "service").write_bytes(b"")
+            (state / "token").write_bytes(token.encode("ascii"))
+        for account in accounts:
+            (state / f"sa-{account}").write_bytes(b"")
+        (state / "keys").write_bytes("".join(k + "\n" for k in keys).encode("ascii"))
+        (state / "next-key").write_bytes(SIM_NEW_KEY.encode("ascii"))
+        if key_json_id:
+            (home / ".raio-x-ponte").mkdir()
+            (home / ".raio-x-ponte" / "chave.json").write_bytes(json.dumps(
+                {"private_key_id": key_json_id, "private_key": f"-----BEGIN PRIVATE KEY-----\n{SIM_SECRET}\n"}).encode("ascii"))
+        log = tmp / "calls.log"
+        log.write_bytes(b"")
+        env = {k: v for k, v in os.environ.items()
+               if k not in ("GOOGLE_CLOUD_PROJECT", "CLOUDSDK_CORE_PROJECT", br_bridge.ENV_URL, br_bridge.ENV_TOKEN, br_bridge.ENV_KEY)}
+        env.update(HOME=home.as_posix(), PATH=str(bin_dir) + os.pathsep + os.environ.get("PATH", ""), SIM_LOG=log.as_posix(),
+                   SIM_STATE=state.as_posix(), SIM_PYTHON=Path(sys.executable).as_posix(), SIM_CONFIG_PROJECT=project,
+                   SIM_PROJECT_NAME=project_name, SIM_FIREBASE="1" if firebase else "0", SIM_CANDIDATE=candidate,
+                   SIM_POLICY=policy, SIM_CONFERIR_RC=str(conferir_rc), SIM_NEW_TOKEN=SIM_NEW_TOKEN,
+                   SIM_REV_PARSE=reviewed_code_hashes() if rev_parse is None else rev_parse)
+        # umask 022 antes de colar: a trava "umask 077" do bloco tem de ser dele, não herdada do ambiente do gate
+        proc = subprocess.run([bash], input=("umask 022\n" + body).encode("utf-8"), capture_output=True, env=env, timeout=240)
+        calls = [line.split("\x1f") for line in log.read_bytes().decode("utf-8").splitlines() if line]
+        render_path = home / "raio-x-chave-render.txt"
+        render = render_path.read_bytes().decode("ascii") if render_path.exists() else None
+        left = [k for k in (state / "keys").read_bytes().decode("ascii").split() if k]
+        return SimResult(proc.returncode, (proc.stdout + proc.stderr).decode("utf-8", "replace"), calls, render, left,
+                         (state / "service").exists())
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+_LOCK_ONLY = {("config", "get-value"), ("projects", "describe"), ("projects", "list"), ("services", "list")}
+_READ_ONLY = (("config", "get-value"), ("projects", "describe"), ("projects", "list"), ("services", "list"),
+              ("run", "services", "describe"), ("run", "services", "list"), ("run", "services", "get-iam-policy"),
+              ("iam", "service-accounts", "describe"), ("iam", "service-accounts", "keys", "list"))
+
+
+def _flag(args, name):
+    for i, arg in enumerate(args):
+        if arg == name and i + 1 < len(args):
+            return args[i + 1]
+        if arg.startswith(name + "="):
+            return arg.split("=", 1)[1]
+    return None
+
+
+def _read_only(args) -> bool:
+    return any(tuple(args[:len(prefix)]) == prefix for prefix in _READ_ONLY)
+
+
+def _gcloud_project(args):
+    if tuple(args[:2]) in (("config", "get-value"), ("projects", "list")):
+        return None
+    if tuple(args[:2]) in (("projects", "describe"), ("projects", "add-iam-policy-binding")):
+        return args[2]
+    return _flag(args, "--project") or ""
+
+
+def _assert_on_project(r: SimResult, label: str):
+    for args in r.gcloud():
+        got = _gcloud_project(args)
+        assert got is None or got == SIM_PROJECT, (label, "chamada do gcloud fora do projeto conferido", args)
+
+
+def _bindings(r: SimResult):
+    found = set()
+    for args in r.gcloud():
+        if "add-iam-policy-binding" in args:
+            i = args.index("add-iam-policy-binding")
+            found.add((" ".join(args[:i]), args[i + 1], _flag(args, "--member"), _flag(args, "--role")))
+    return found
+
+
+def _assert_secrets_hidden(r: SimResult, label: str, tokens=(SIM_OLD_TOKEN, SIM_NEW_TOKEN)):
+    assert SIM_SECRET not in r.out, (label, "chave impressa na tela")
+    if r.render is not None:   # a chave está mesmo no caminho (controle do próprio detector)
+        assert SIM_SECRET in base64.b64decode(r.render.strip()).decode("utf-8"), (label, "arquivo do Render sem a chave")
+        assert r.render.strip()[:48] not in r.out, (label, "chave em base64 impressa na tela")
+    for token in tokens:
+        shown = [ln for ln in r.out.splitlines() if token in ln]
+        assert all(ln.startswith("RX_PONTE_BRASIL_TOKEN = ") for ln in shown), (label, "token fora da caixa do Render", shown)
+
+
+def _assert_stopped(r: SimResult, label: str, *, lock_only=True):
+    assert r.rc != 0 and "PAROU:" in r.out, (label, r.rc, r.tail())
+    assert r.gcloud() and r.gcloud()[0][:2] == ["config", "get-value"], (label, "gcloud falso não foi chamado", r.calls)
+    for args in r.gcloud():
+        if lock_only:
+            assert tuple(args[:2]) in _LOCK_ONLY, (label, "agiu antes de conferir o projeto", args)
+        else:
+            assert _read_only(args), (label, "mudou algo no Google antes de parar", args)
+    assert not any(c[1] in ("conferir", "cloudshell") for c in r.calls), (label, r.calls)
+    assert "COPIE PARA O RENDER" not in r.out, label
+
+
+def g_sim_ponte():
+    """Bloco PONTE: projeto, permissões (papel, recurso, membro), publicação, umask, conferência, avisos, segredo."""
+    conferir_path = "/raio-x-ponte/scripts/ponte_brasil_conferir.py"
+
+    def deploy_of(r):
+        deploys = [a for a in r.gcloud() if a[:2] == ["run", "deploy"]]
+        assert len(deploys) == 1, deploys
+        return deploys[0]
+
+    def conferir_calls(r):
+        return [c for c in r.calls if c[1] == "conferir"]
+
+    # 1. primeira vez: tudo novo
+    r = sim_block("PONTE")
+    assert r.rc == 0 and "COPIE PARA O RENDER" in r.out, ("primeira vez", r.rc, r.tail())
+    assert len(r.gcloud()) >= 15, ("simulação não rodou o bloco", len(r.gcloud()))
+    _assert_on_project(r, "primeira vez")
+    assert _bindings(r) == {("projects", SIM_PROJECT, SIM_BUILD_MEMBER, "roles/run.builder"),
+                            ("run services", "ponte-brasil", SIM_RENDER_MEMBER, "roles/run.invoker")}, _bindings(r)
+    d = deploy_of(r)
+    assert d[2] == "ponte-brasil" and "--no-allow-unauthenticated" in d, d
+    assert (_flag(d, "--service-account"), _flag(d, "--max-instances"), _flag(d, "--region")) == (SIM_RUNTIME, "1", "southamerica-east1"), d
+    assert not [a for a in d if ("allow-unauthenticated" in a and a != "--no-allow-unauthenticated") or "invoker-iam" in a], d
+    assert _flag(d, "--set-env-vars") == f"PONTE_TOKEN={SIM_NEW_TOKEN}", d
+    created = [a[3] for a in r.gcloud() if a[:3] == ["iam", "service-accounts", "create"]]
+    assert created == ["ponte-runtime", "ponte-render"], created
+    umasks = [c[0] for c in r.calls if c[1] == "gcloud" and c[2:6] == ["iam", "service-accounts", "keys", "create"]]
+    assert umasks == ["0077"], ("chave criada sem umask 077", umasks)
+    conf = conferir_calls(r)
+    assert len(conf) == 1 and conf[0][2].endswith(conferir_path) and conf[0][3:] == [
+        "--esperar", "480", f"url={SIM_URL}", f"token={SIM_NEW_TOKEN}", "chave=presente"], conf
+    assert "O TOKEN E NOVO" in r.out and "A CHAVE E NOVA" in r.out and "IGUAIS AOS DE ANTES" not in r.out, r.tail()
+    assert any(c[1] == "cloudshell" and c[-1].endswith("raio-x-chave-render.txt") for c in r.calls), r.calls
+    _assert_secrets_hidden(r, "primeira vez")
+    # 2. colado de novo: reaproveita token e chave e diz que não precisa mexer no Render
+    r = sim_block("PONTE", service=True, accounts=("ponte-runtime", "ponte-render"), keys=("k1",), key_json_id="k1")
+    assert r.rc == 0 and "TOKEN E CHAVE IGUAIS AOS DE ANTES" in r.out, ("reaproveita", r.tail())
+    assert "O TOKEN E NOVO" not in r.out and "A CHAVE E NOVA" not in r.out, r.tail()
+    assert _flag(deploy_of(r), "--set-env-vars") == f"PONTE_TOKEN={SIM_OLD_TOKEN}"
+    assert not [a for a in r.gcloud() if a[:3] == ["iam", "service-accounts", "create"] or a[:4] == ["iam", "service-accounts", "keys", "create"]]
+    _assert_on_project(r, "reaproveita")
+    _assert_secrets_hidden(r, "reaproveita")
+    # 3. ponte apagada, chave mantida: token novo tem de ser avisado
+    r = sim_block("PONTE", accounts=("ponte-runtime", "ponte-render"), keys=("k1",), key_json_id="k1")
+    assert r.rc == 0 and "O TOKEN E NOVO" in r.out and "A CHAVE E NOVA" not in r.out, ("token novo sem aviso", r.tail())
+    assert "IGUAIS AOS DE ANTES" not in r.out and _flag(deploy_of(r), "--set-env-vars") == f"PONTE_TOKEN={SIM_NEW_TOKEN}"
+    # 4. chaves de tentativa anterior: apagadas só depois da conferência, nunca a nova
+    r = sim_block("PONTE", accounts=("ponte-runtime", "ponte-render"), keys=("k0", "k9"))
+    assert r.rc == 0 and r.keys == [SIM_NEW_KEY], ("chaves antigas", r.keys, r.tail())
+    deletes = r.index(lambda c: c[1] == "gcloud" and c[2:6] == ["iam", "service-accounts", "keys", "delete"])
+    conf = r.index(lambda c: c[1] == "conferir")
+    assert len(deletes) == 2 and len(conf) == 1 and conf[0] < min(deletes), ("apagou chave antes de conferir", deletes, conf)
+    # 5. conferência falhou: para, não apaga chave, não mostra a caixa, não baixa
+    r = sim_block("PONTE", accounts=("ponte-runtime", "ponte-render"), keys=("k0",), conferir_rc=1)
+    assert r.rc != 0 and "COPIE PARA O RENDER" not in r.out, ("seguiu depois da conferência falhar", r.rc, r.tail())
+    assert "k0" in r.keys and not any(c[1] == "cloudshell" for c in r.calls), (r.keys, r.calls)
+    # 6. ponte continua aberta ao público: para antes de conta, chave e conferência
+    r = sim_block("PONTE", policy=SIM_OPEN_POLICY)
+    assert r.rc != 0 and "PAROU: a ponte continua aberta" in r.out, ("ponte aberta", r.tail())
+    assert not [a for a in r.gcloud() if a[:4] == ["iam", "service-accounts", "keys", "create"] or "ponte-render" in a]
+    assert not conferir_calls(r) and "COPIE PARA O RENDER" not in r.out
+
+
+def g_sim_travas():
+    """Os quatro blocos param no projeto errado (AFP, outro, Raio-X com Firebase, nenhum) sem agir; PONTE e CONFERE
+    param com código diferente do revisado."""
+    cases = (   # "outro projeto sem Firebase" primeiro: sem a trava do nome, é ele que prova que o bloco agiria
+        ("outro projeto sem Firebase", dict(project="meu-outro-projeto", project_name="Outro")),
+        ("projeto do AFP", dict(project="metodo-afp-prod", project_name="Metodo AFP", firebase=True, candidate=SIM_PROJECT)),
+        ("nome Raio-X com Firebase", dict(firebase=True)),
+        ("nenhum projeto", dict(project="")),
+    )
+    for block in ("PONTE", "CONFERE", "TROCA", "PARAR"):
+        for label, kwargs in cases:
+            r = sim_block(block, service=True, accounts=("ponte-runtime", "ponte-render"), keys=("k1",), key_json_id="k1", **kwargs)
+            _assert_stopped(r, f"{block}: {label}")
+            if kwargs.get("project"):
+                assert ["projects", "describe", kwargs["project"], "--format=value(name)"] in r.gcloud(), (block, label, r.gcloud())
+            if kwargs.get("candidate"):
+                assert f"gcloud config set project {SIM_PROJECT}" in r.out, (block, label, r.tail())
+    wrong = " ".join(["0" * 40] * 3)
+    r = sim_block("PONTE", rev_parse=wrong)
+    _assert_stopped(r, "PONTE: código diferente do revisado")
+    assert any(c[1] == "git" and c[2] == "clone" for c in r.calls), r.calls
+    r = sim_block("CONFERE", service=True, key_json_id="k1", rev_parse=wrong)
+    _assert_stopped(r, "CONFERE: código diferente do revisado", lock_only=False)
+
+
+def g_sim_outros():
+    """CONFERE só lê; TROCA troca token e chave e apaga as antigas; PARAR apaga só a ponte do projeto conferido."""
+    r = sim_block("CONFERE", service=True, key_json_id="k1")
+    assert r.rc == 0, ("CONFERE", r.tail())
+    assert all(_read_only(a) for a in r.gcloud()), [a for a in r.gcloud() if not _read_only(a)]
+    conf = [c for c in r.calls if c[1] == "conferir"]
+    assert len(conf) == 1 and conf[0][3:] == ["--esperar", "0", f"url={SIM_URL}", f"token={SIM_OLD_TOKEN}", "chave=presente"], conf
+    _assert_on_project(r, "CONFERE")
+    _assert_secrets_hidden(r, "CONFERE")
+    r = sim_block("TROCA", service=True, accounts=("ponte-render",), keys=("k0", "k1"))
+    assert r.rc == 0 and r.keys == [SIM_NEW_KEY], ("TROCA", r.keys, r.tail())
+    updates = [a for a in r.gcloud() if a[:3] == ["run", "services", "update"]]
+    assert len(updates) == 1 and _flag(updates[0], "--update-env-vars") == f"PONTE_TOKEN={SIM_NEW_TOKEN}", updates
+    created = r.index(lambda c: c[1] == "gcloud" and c[2:6] == ["iam", "service-accounts", "keys", "create"])
+    deletes = r.index(lambda c: c[1] == "gcloud" and c[2:6] == ["iam", "service-accounts", "keys", "delete"])
+    assert len(created) == 1 and len(deletes) == 2 and created[0] < min(deletes), (created, deletes)
+    assert r.calls[created[0]][0] == "0077", ("TROCA sem umask 077", r.calls[created[0]][0])
+    assert "O TOKEN E NOVO" in r.out and "A CHAVE E NOVA" in r.out and f"RX_PONTE_BRASIL_TOKEN = {SIM_NEW_TOKEN}" in r.out, r.tail()
+    _assert_on_project(r, "TROCA")
+    _assert_secrets_hidden(r, "TROCA")
+    r = sim_block("TROCA", accounts=("ponte-render",), keys=("k0",))
+    assert r.rc == 0 and r.keys == [SIM_NEW_KEY] and "RX_PONTE_BRASIL_TOKEN =" not in r.out and "O TOKEN E NOVO" not in r.out, r.tail()
+    assert not [a for a in r.gcloud() if a[:3] == ["run", "services", "update"]]
+    r = sim_block("PARAR", service=True)
+    deletes = [a for a in r.gcloud() if a[:3] == ["run", "services", "delete"]]
+    assert r.rc == 0 and "PONTE APAGADA" in r.out and not r.service, ("PARAR", r.tail())
+    assert deletes == [["run", "services", "delete", "ponte-brasil", "--region", "southamerica-east1", "--project", SIM_PROJECT,
+                        "--quiet"]], deletes
+    _assert_on_project(r, "PARAR")
+    r = sim_block("PARAR")
+    assert r.rc == 0 and "ja nao existe" in r.out and not [a for a in r.gcloud() if a[:3] == ["run", "services", "delete"]], r.tail()
+
+
+@contextlib.contextmanager
+def guide_block_mutant(block: str, transform):
+    """Muda um trecho de um bloco do guia (como numa revisão) e roda a simulação contra o guia mudado."""
+    text = GUIDE.read_text(encoding="utf-8")
+    body = guide_blocks(text).get(block, "")
+    new_body = transform(body)
+    if not body or new_body == body:
+        raise MutationTargetMissing(f"{block}: mutação não mudou nada")
+    _GUIDE_OVERRIDE["text"] = text.replace(body, new_body)
+    try:
+        yield
+    finally:
+        _GUIDE_OVERRIDE.pop("text", None)
+
+
+def _guide_mut(block: str, old: str, new: str):
+    def transform(body: str) -> str:
+        if body.count(old) != 1:
+            raise MutationTargetMissing(f"{block}: trecho aparece {body.count(old)}x: {old.strip()[:70]!r}")
+        return body.replace(old, new)
+    return lambda: guide_block_mutant(block, transform)
+
+
+def _delete_keys_before_check(body: str) -> str:
+    match = re.search(r'if \[ "\$NOVA" = 1 \]; then\n  NOVO_ID=.*?\nfi\n', body, re.S)
+    line = 'python3 "$CODIGO/scripts/ponte_brasil_conferir.py" --esperar 480 || exit 1\n'
+    if not match or body.count(line) != 1:
+        raise MutationTargetMissing("PONTE: trecho de apagar chaves ou conferência não encontrado")
+    moved = body.replace(match.group(0), "")
+    return moved.replace(line, match.group(0) + line)
+
+
+_LOCK_PATTERN = "  raio-x*|*'|raio-x'*) ;;\n"
+_BRIDGE_FILE_OVERRIDE: dict[str, str] = {}
+
+
+@contextlib.contextmanager
+def bridge_file_mutant(old: str, new: str):
+    """Muda o br_bridge.py como lido por uma verificação que o carrega do zero (arranque)."""
+    _BRIDGE_FILE_OVERRIDE["src"] = _mutated_source(ROOT / "br_bridge.py", old, new)
+    try:
+        yield
+    finally:
+        _BRIDGE_FILE_OVERRIDE.pop("src", None)
 
 
 def _open_repinned(svc, host, ips, deadline):
@@ -1959,6 +2484,63 @@ MUTATIONS = [
                                                       "    if False:\n        print(\"PAROU: a ponte continua aberta"), i_conferir),
     ("conferência imprime segredo", _conferir_mut('print(f"  chave: lida (assinatura {cfg.identity.signer})", flush=True)',
                                                   'print(f"  chave: lida {cfg.token} {cfg.audience}", flush=True)'), i_conferir),
+    # revisão de 15/09/2026: teto de saída, prazo depois da credencial, arranque, 401, guia rodado com gcloud falso
+    ("saída sem teto por hora", lambda: mock.patch.object(ponte.EgressBudget, "take", lambda self, n: True), s_egress_budget),
+    ("teto de saída não conferido na resposta", _ponte_mut("            if not svc.egress.take(len(upstream.body)):\n",
+                                                           "            if False:\n"), s_egress_budget),
+    ("balde de saída sem tamanho máximo", _ponte_mut("self.available = min(self.capacity, self.available + max(0.0, now - self.last) * self.rate)",
+                                                     "self.available = self.available + max(0.0, now - self.last) * self.rate"),
+     s_egress_budget),
+    ("teto de saída de 1 TiB", _ponte_mut("EGRESS_BYTES_PER_HOUR = 1024 ** 3", "EGRESS_BYTES_PER_HOUR = 1024 ** 4"), s_egress_budget),
+    ("SICAR pela ponte com menos que o prazo mínimo depois da credencial",
+     _bridge_mut("        if budget is not None and budget < MIN_BRIDGE_BUDGET_S:\n"
+                 "            return proc if proc is not None else credential_failure(args)\n", ""),
+     i_sicar_budget_after_credential),
+    ("arranque sem prewarm", lambda: bridge_file_mutant("\nprewarm()\n", "\n"), i_prewarm),
+    ("conferência aceita 401 sem credencial como fechada",
+     _conferir_mut("    if closed != 403 or healthy != 200:\n", "    if closed not in (401, 403) or healthy != 200:\n"), i_conferir),
+    ("guia: CODIGO_REVISADO desatualizado", lambda: mock.patch.object(
+        sys.modules[__name__], "_pin_read", lambda rel: _ORIG_PIN_READ(rel) + (b"#" if rel == "ponte_brasil/app.py" else b"")),
+     g_code_pin),
+    ("guia: run.invoker dado no PROJETO",
+     _guide_mut("PONTE", 'gcloud run services add-iam-policy-binding "$SERVICO" --region "$REGIAO" --project "$PROJETO" \\\n'
+                         '       --member="serviceAccount:$EMAIL"',
+                'gcloud projects add-iam-policy-binding "$PROJETO" \\\n       --member="serviceAccount:$EMAIL"'), g_sim_ponte),
+    ("guia: roles/editor extra para ponte-render",
+     _guide_mut("PONTE", '[ "$OK" = 1 ] || parou "o Google nao deu a permissao de chamar a ponte.',
+                'gcloud projects add-iam-policy-binding "$PROJETO" --member="serviceAccount:$EMAIL" --role=roles/editor '
+                '--condition=None --quiet >/dev/null\n[ "$OK" = 1 ] || parou "o Google nao deu a permissao de chamar a ponte.'),
+     g_sim_ponte),
+    ("guia: chave criada sem umask 077", _guide_mut("PONTE", "umask 077\n", ""), g_sim_ponte),
+    ("guia: TROCA sem umask 077", _guide_mut("TROCA", "umask 077\n", ""), g_sim_outros),
+    ("guia: sem conferir allUsers depois de publicar",
+     _guide_mut("PONTE", 'case "$POLITICA" in\n  *\'"allUsers"\'*|*\'"allAuthenticatedUsers"\'*) parou "a ponte continua aberta ao publico. '
+                         'NAO coloque nada no Render." ;;\nesac\n', ""), g_sim_ponte),
+    ("guia: publicação com --no-invoker-iam-check",
+     _guide_mut("PONTE", "--memory 256Mi --no-allow-unauthenticated", "--memory 256Mi --no-allow-unauthenticated --no-invoker-iam-check"),
+     g_sim_ponte),
+    ("guia: ponte roda com a conta padrão", _guide_mut("PONTE", '  --service-account "$RUNTIME" ', "  "), g_sim_ponte),
+    ("guia: publicação sem --project",
+     _guide_mut("PONTE", '--source "$CODIGO/ponte_brasil" --region "$REGIAO" --project "$PROJETO"',
+                '--source "$CODIGO/ponte_brasil" --region "$REGIAO"'), g_sim_ponte),
+    ("guia: chave impressa com printf",
+     _guide_mut("PONTE", 'export RX_PONTE_BRASIL_CHAVE\npython3 "$CODIGO',
+                'export RX_PONTE_BRASIL_CHAVE\nprintf \'%s\\n\' "$RX_PONTE_BRASIL_CHAVE"\npython3 "$CODIGO'), g_sim_ponte),
+    ("guia: conferência com || true", _guide_mut("PONTE", "--esperar 480 || exit 1", "--esperar 480 || true"), g_sim_ponte),
+    ("guia: chaves apagadas antes da conferência", lambda: guide_block_mutant("PONTE", _delete_keys_before_check), g_sim_ponte),
+    ("guia: token novo sem aviso", _guide_mut("PONTE", 'if [ "$TOKEN_NOVO" = 1 ]; then echo "O TOKEN E NOVO', 'if false; then echo "O TOKEN E NOVO'),
+     g_sim_ponte),
+    ("guia: TROCA sem apagar as chaves antigas", _guide_mut("TROCA", "for K in $ANTIGAS; do", "for K in; do"), g_sim_outros),
+    ("guia: PARAR sem --project no apagar",
+     _guide_mut("PARAR", 'gcloud run services delete "$SERVICO" --region "$REGIAO" --project "$PROJETO" --quiet',
+                'gcloud run services delete "$SERVICO" --region "$REGIAO" --quiet'), g_sim_outros),
+    ("guia: PONTE sem trava do nome do projeto", _guide_mut("PONTE", _LOCK_PATTERN, "  *) ;;\n"), g_sim_travas),
+    ("guia: CONFERE sem trava do nome do projeto", _guide_mut("CONFERE", _LOCK_PATTERN, "  *) ;;\n"), g_sim_travas),
+    ("guia: TROCA sem trava do nome do projeto", _guide_mut("TROCA", _LOCK_PATTERN, "  *) ;;\n"), g_sim_travas),
+    ("guia: PARAR sem trava do nome do projeto", _guide_mut("PARAR", _LOCK_PATTERN, "  *) ;;\n"), g_sim_travas),
+    ("guia: PONTE sem trava do Firebase", _guide_mut("PONTE", '[ -z "$FIREBASE" ] || parou', 'true || parou'), g_sim_travas),
+    ("guia: PONTE sem trava do código revisado", _guide_mut("PONTE", '[ "$ACHADO" = "$CODIGO_REVISADO " ]', "true"), g_sim_travas),
+    ("guia: CONFERE sem trava do código revisado", _guide_mut("CONFERE", '[ "$ACHADO" = "$CODIGO_REVISADO " ]', "true"), g_sim_travas),
 ]
 
 _ORIG_SERVICE_INIT = ponte.Service.__init__
@@ -2014,13 +2596,14 @@ def main() -> int:
     checks = [
         s_token, s_not_configured, s_health_and_paths, s_scheme, s_host_list, s_ip_literal, s_userinfo, s_port,
         s_canonical, s_private_dns, s_redirects, s_response_size, s_incomplete, s_methods, s_request_body, s_timeout, s_headers,
-        s_rate_limit, s_log_hygiene, s_upstream_status, s_tls_and_source,
+        s_rate_limit, s_egress_budget, s_log_hygiene, s_upstream_status, s_tls_and_source,
         s_inflight_release, s_malformed, s_content_type, s_redirect_post, s_slow_client, s_connection_cap,
         c_off_identical, c_incra_bridge, c_sicar_direct_then_bridge, c_sicar_budget_and_codes, c_sicar_window_rule,
         c_cancel_and_timeout, c_no_bridge_url_leak, c_probe_sources,
         c_config, c_real_curl, c_hosts_and_transports,
         i_key_parse_and_signature, i_assertion, i_incra_identity, i_sicar_identity, i_credential_failures,
-        i_real_curl_identity, i_conferir, g_guide,
+        i_sicar_budget_after_credential, i_prewarm, i_real_curl_identity, i_conferir, g_guide, g_code_pin,
+        g_sim_travas, g_sim_ponte, g_sim_outros,
     ]
     for fn in checks:
         br_bridge.reset_state()
