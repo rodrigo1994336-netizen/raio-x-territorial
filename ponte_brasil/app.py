@@ -21,8 +21,12 @@ Travas (cada uma tem teste e controle positivo em scripts/ponte_brasil_gate.py):
     (cliente que pinga um byte por vez não segura a ponte);
   * limite de taxa por instância; log sem token, sem corpo e sem endereço completo.
 
-Limite que a ponte NÃO tem: pedido sem token ainda chega ao contêiner e é cobrado pelo Cloud Run.
---max-instances 1 limita máquinas, não pedidos (ver docs/PONTE_BRASIL_ATIVACAO.md, custo).
+Porta de fora (15/09/2026): o guia publica a ponte com --no-allow-unauthenticated. O Cloud Run recusa,
+antes do contêiner, quem não traz token de identidade do Google (X-Serverless-Authorization) da conta de
+serviço com roles/run.invoker; pela página de preços do Cloud Run, pedido recusado pelo IAM não é
+cobrado. O X-Ponte-Token continua obrigatório aqui dentro (segunda trava). Nenhum dos dois cabeçalhos
+vai para a fonte (só Accept, Content-Type e User-Agent). --max-instances 1 limita máquinas, não pedidos:
+o teto de gasto é o orçamento com teto do Cloud Run (ver docs/PONTE_BRASIL_ATIVACAO.md, custo).
 
 Só biblioteca padrão. Sobe com: PORT=8080 PONTE_TOKEN=... python app.py
 """
