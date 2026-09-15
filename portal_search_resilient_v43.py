@@ -46,8 +46,10 @@ async def advanced_property_search_v43(
     cap = max(1, min(int(limit), 60))
     bbox = await adv._city_bbox(municipality, uf)
     # Same resilient SICAR transport already proven by the main map.
+    # F1B: _fetch_sicar_bbox takes the request first; this internal search has none to watch (None is
+    # the lifecycle helper's "no client to follow"). Without it every call raised TypeError (HTTP 500).
     fetched = await sicar._fetch_sicar_bbox(
-        bbox['west'], bbox['south'], bbox['east'], bbox['north'], uf, min(50, max(cap, 40))
+        None, bbox['west'], bbox['south'], bbox['east'], bbox['north'], uf, min(50, max(cap, 40))
     )
     features = fetched['data'].get('features') or []
     wanted_city = adv._norm(municipality)

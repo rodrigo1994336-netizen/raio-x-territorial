@@ -65,10 +65,12 @@ async def assert_no_requery(page, counts, t_full, label):
     return dict(counts)
 
 
+# F1B: the client line no longer shows "N de M fontes responderam"; the audit registry still counts
+# (card.__rxSourceAudit), so the consistency contract is read from the registry, not from the text.
 COUNTER_JS = r"""(panelSel)=>{const p=document.querySelector(panelSel);if(!p)return null;
-  const t=(p.querySelector('.rx45-audit-count')?.innerText||'');
-  const m=t.match(/(\d+)\s+de\s+(\d+)\s+fontes responderam nesta consulta/i);
-  return {text:t,responded:m?Number(m[1]):null,total:m?Number(m[2]):null,
+  const t=(p.querySelector('.rx45-audit-count')?.innerText||''),a=p.__rxSourceAudit;
+  const answered=new Set(['ANSWERED_CLEAR','ANSWERED_HIT']);
+  return {text:t,responded:a&&Array.isArray(a.registry)?a.registry.filter(x=>answered.has(x.state)).length:null,total:a&&Array.isArray(a.registry)?a.registry.length:null,
     answered_rows:p.querySelectorAll('.rx45-check[data-answered="1"]').length,
     answered_ids:[...p.querySelectorAll('.rx45-check[data-answered="1"]')].map(x=>x.dataset.source)}}"""
 
@@ -80,6 +82,7 @@ async def assert_audit_counter(page, panel_selector, label):
     probe = await page.evaluate(COUNTER_JS, panel_selector)
     assert probe and probe["total"] == 11, (label, "audit_counter_contract_missing", probe)
     assert probe["responded"] == 1 + probe["answered_rows"], (label, "audit_counter_inconsistent", probe)
+    assert "fontes responderam" not in probe["text"].casefold(), (label, "internal_counter_text_shown", probe)
     return probe
 
 
@@ -149,8 +152,11 @@ async def assert_contract(page, label):
     detail_folded = audit_detail.casefold()
     assert detail_folded.count("mte — trabalho escravo") == 1, (label, audit_detail)
     assert "não verificada" in detail_folded, (label, audit_detail)
-    for expected in ORIGINAL_EIGHT.values():
-        assert expected.casefold() in detail_folded, (label, expected, audit_detail)
+    assert "car / sicar" in detail_folded, (label, audit_detail)
+    # F1B: the box lists only what this consultation knows; a source nobody asked is not listed and no
+    # development wording reaches the client.
+    for absent in ("não consultada", "pendente de implementação", "contador", "reserva legal", "matrícula"):
+        assert absent not in detail_folded, (label, absent, audit_detail)
     await audit.locator('#rx45Audit').click()
 
     geometry = await page.evaluate(

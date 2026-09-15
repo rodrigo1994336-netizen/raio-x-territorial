@@ -79,21 +79,13 @@ UI = r'''
 (function(){
  const q=s=>document.querySelector(s);
  const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
- const hidden=[
-  ['IBAMA — embargos por área','IBAMA'],
-  ['IBAMA — autos por área','IBAMA'],
-  ['ICMBio — embargos por área','ICMBio'],
-  ['ICMBio — autos por área','ICMBio'],
-  ['INCRA — assentamento rural','INCRA'],
-  ['INCRA — território quilombola','INCRA']
- ];
  const fmtDate=v=>{if(!v)return '';const s=String(v);const m=s.match(/^(\d{4})-(\d{2})-(\d{2})/);return m?`${m[3]}/${m[2]}/${m[1]}`:s};
  const fmtQuery=v=>{if(!v)return 'não realizada';try{return new Date(v).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'})}catch(e){return String(v)}};
  function body(el,label,status,reason,meta){el.innerHTML=`<i class="rx45-dot ${esc(el.dataset.state||'not_consulted')}"></i><span class="rx48-check-body"><span class="rx48-check-label">${esc(label)}</span><span class="rx48-check-status">${esc(status)}</span><span class="rx48-check-reason">${esc(reason)}</span>${meta?`<span class="rx48-check-meta">${esc(meta)}</span>`:''}</span>`}
  const ANSWERED_STATES=new Set(['ANSWERED_CLEAR','ANSWERED_HIT']);
  function canonicalAuditState(state,answered){if(state==='checking')return 'QUERYING';if(state==='source_failed')return 'FAILED';if(state==='blocked_missing_owner_identity')return 'BLOCKED';if(state==='checked_clear')return 'ANSWERED_CLEAR';if(answered)return 'ANSWERED_HIT';return 'NOT_QUERIED'}
  function auditModel(card){const a=card?.__rxSourceAudit;if(!a||a.available!==true||!Array.isArray(a.registry)||!a.registry.length)return null;const ids=a.registry.map(x=>String(x?.id||''));if(new Set(ids).size!==ids.length||ids.some(x=>!x))return null;return a}
- function updateCounter(card){if(!card)return;const node=card.querySelector('.rx45-audit-count');if(!node)return;const a=auditModel(card),button=node.querySelector('#rx45Audit');let text=card.dataset.auditFailed==='1'?'Consulta às fontes oficiais pendente · ':'Consultando fontes oficiais… · ';if(a){const responded=a.registry.filter(x=>ANSWERED_STATES.has(x.state)).length;a.responded=responded;a.total=a.registry.length;text=`${responded} de ${a.total} fontes responderam nesta consulta · `}node.childNodes.forEach(n=>{if(n.nodeType===3)n.remove()});node.insertBefore(document.createTextNode(text),button||null)}
+ function updateCounter(card){if(!card)return;const node=card.querySelector('.rx45-audit-count');if(!node)return;const a=auditModel(card),button=node.querySelector('#rx45Audit');let text=card.dataset.auditFailed==='1'?'Consulta às fontes oficiais pendente · ':'Consultando fontes oficiais… · ';if(a){const responded=a.registry.filter(x=>ANSWERED_STATES.has(x.state)).length;a.responded=responded;a.total=a.registry.length;text=''}node.childNodes.forEach(n=>{if(n.nodeType===3)n.remove()});node.insertBefore(document.createTextNode(text),button||null)}
  function setState(el,state,label,status,reason,meta,answered){el.dataset.state=state;el.dataset.answered=answered?'1':'0';const card=el.closest('.rx45-panel-card'),a=auditModel(card),auditState=canonicalAuditState(state,answered);el.dataset.auditState=auditState;if(a){const source=a.registry.find(x=>x.id===el.dataset.source);if(source)source.state=auditState;else card.__rxSourceAudit=null}body(el,label,status,reason,meta);if(state==='source_failed'){const rb=document.createElement('button');rb.type='button';rb.className='rx48-retry';rb.dataset.rx48Retry=el.dataset.source||'';rb.textContent='Consultar de novo';el.querySelector('.rx48-check-body')?.appendChild(rb)}const dot=el.querySelector('.rx45-dot');if(dot)dot.className='rx45-dot '+state;updateCounter(card)}
  const MTE_ID='mte_slave_labor',MTE_LABEL='MTE — Trabalho Escravo',MTE_SOURCE='Fonte: Ministério do Trabalho e Emprego';
  const mteMeta=d=>`Fonte: MTE${d.data_date?` · dado/publicação: ${fmtDate(d.data_date)}`:''} · consulta: ${fmtQuery(d.queried_at)}`;
@@ -106,8 +98,29 @@ UI = r'''
  function enhance(card){const S=window.rxPanelSourcesF2;if(!card||!S)return;const el=card.querySelector('.rx45-check[data-source="mte_slave_labor"]');if(!el)return;card.dataset.rx48Enhanced='1';S.settle(MTE_ID,card.dataset.car,mteQuery,mtePaint)}
  function enhanceCar(car){if(!car)return;const card=q(`.rx45-panel-card[data-car="${CSS.escape(car)}"]`);if(card)enhance(card)}
  function auditItem(label,status,detail){return `<div class="rx48-audit-item"><b>${esc(label)}</b><span><em>${esc(status)}</em>${esc(detail)}</span></div>`}
- function auditStateLabel(state){return ({NOT_QUERIED:'NÃO CONSULTADA',QUERYING:'CONSULTANDO',ANSWERED_CLEAR:'RESPONDEU · SEM OCORRÊNCIA',ANSWERED_HIT:'RESPONDEU',BLOCKED:'BLOQUEADA',FAILED:'CONSULTA PENDENTE'})[state]||'ESTADO INVÁLIDO'}
- function buildAudit(card){let box=card.querySelector('.rx48-audit-box');if(!box){box=document.createElement('div');box.className='rx48-audit-box';card.querySelector('.rx45-audit-count')?.after(box)}const a=auditModel(card),items=[];if(!a){items.push(auditItem('Auditoria','INDISPONÍVEL NESTA CONSULTA','O registro canônico de fontes não pôde ser reconstruído com segurança. Nenhum número foi inferido.'))}else{a.registry.forEach(source=>{const row=source.id==='car'?null:card.querySelector(`.rx45-check[data-source="${CSS.escape(source.id)}"]`),status=row?.querySelector('.rx48-check-status')?.textContent?.trim()||auditStateLabel(source.state),detail=source.id==='car'?'Perímetro e atributos cadastrais do CAR.':(row?.querySelector('.rx48-check-reason')?.textContent?.trim()||'Estado desta fonte nesta consulta.');items.push(auditItem(source.label,status,detail))})}hidden.forEach(([label,source])=>items.push(auditItem(label,'PENDENTE DE IMPLEMENTAÇÃO',`Fonte catalogada: ${source}. Não integra o contador até a implementação existir.`)));box.innerHTML=items.join('');return box}
+ // F1B: the box lists only what THIS consultation knows — the CAR, each source that answered, is pending or is
+ // being asked, and, once "Análise completa" ran, its own answers (the same Sim/Não/pendente of the panel,
+ // with the time the data was produced). A source nobody asked is not listed (campo vazio não aparece), and
+ // registry sources that the full analysis answers are listed once, from the analysis.
+ const READING_SOURCES=new Set(['embargo','prodes','indigenous_land','conservation_unit','public_forest']);
+ const READING_STATUS={sim:'RESPONDEU · COM OCORRÊNCIA',nao:'RESPONDEU · SEM OCORRÊNCIA',pendente:'CONSULTA PENDENTE'};
+ function readingOf(card){try{const F=window.rxFullReadingF1b;return F&&card?.dataset?.car?F.peek(card.dataset.car):null}catch(e){return null}}
+ function buildAudit(card){let box=card.querySelector('.rx48-audit-box');if(!box){box=document.createElement('div');box.className='rx48-audit-box';card.querySelector('.rx45-audit-count')?.after(box)}const a=auditModel(card),R=readingOf(card),items=[];
+  if(!a){items.push(auditItem('Fontes','CONSULTA PENDENTE','A lista de fontes desta consulta não pôde ser montada agora. Nada foi presumido.'))}
+  else{a.registry.forEach(source=>{
+   if(source.id==='car'){items.push(auditItem(source.label,'RESPONDEU','Perímetro e atributos cadastrais do CAR.'));return}
+   if(R&&READING_SOURCES.has(source.id))return;
+   const row=card.querySelector(`.rx45-check[data-source="${CSS.escape(source.id)}"]`);
+   if(!row||!row.dataset.state)return;
+   const status=row.querySelector('.rx48-check-status')?.textContent?.trim();if(!status)return;
+   items.push(auditItem(source.label,status,row.querySelector('.rx48-check-reason')?.textContent?.trim()||''))})}
+  if(R&&R.phase==='loading')items.push(auditItem('Análise completa','CONSULTANDO','Embargos, desmatamento, áreas protegidas, mineração, queimadas e água.'));
+  else if(R&&R.phase==='ready'&&Array.isArray(R.rows))R.rows.forEach(r=>items.push(auditItem(r.source||r.q,READING_STATUS[r.answer]||READING_STATUS.pendente,r.q+(Number.isFinite(R.at)?` · consulta: ${fmtQuery(R.at)}`:''))));
+  else if(R)items.push(auditItem('Análise completa','CONSULTA PENDENTE','As fontes oficiais não responderam agora. Nada foi presumido.'));
+  box.innerHTML=items.join('');return box}
+ // Called by the full analysis when it repaints: an open box follows it.
+ window.rxV48RefreshAudit=function(card){const box=card?.querySelector?.('.rx48-audit-box.open');if(box)buildAudit(card)};
+ window.rxV48Audit={build:buildAudit};
  function toggleAudit(card,button){if(!card)return;const box=buildAudit(card),open=!box.classList.contains('open');box.classList.toggle('open',open);button?.setAttribute('aria-expanded',open?'true':'false')}
  function interceptAudit(e){const button=e.target.closest?.('#rx45Audit');if(!button)return;const card=button.closest('.rx45-panel-card');if(!card)return;e.preventDefault();e.stopImmediatePropagation();toggleAudit(card,button)}
  function install(){if(window.__rx48MteEventWired)return;window.__rx48MteEventWired=true;document.addEventListener('click',interceptAudit,true);window.rxPanelSourcesF2?.onRendered(enhanceCar)}

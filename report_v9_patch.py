@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections import OrderedDict
+from datetime import datetime, timezone
 
 import report_api as base
 from live_report_adapter_v9 import generate_live_report as generate_live_report_v9
@@ -35,15 +36,48 @@ def _quick_put(code,result):
     _QUICK[code]=(time.monotonic(),result); _QUICK.move_to_end(code); _prune_quick()
 
 
+# F1B: when each "ready" was produced (monotonic), kept out of the public state.
+_PRODUCED:dict[str,float]={}
+
+
+def _iso_utc(mono:float)->str:
+    return datetime.fromtimestamp(time.time()-max(0.0,time.monotonic()-mono),tz=timezone.utc).isoformat(timespec='milliseconds')
+
+
+def _cache_stamp(code:str,result:dict|None=None)->float|None:
+    """Monotonic time the cached analysis of this CAR was stored (= produced), when it is this result."""
+    item=base._CACHE.get(code)
+    if not item or (result is not None and item[1] is not result):return None
+    return float(item[0])
+
+
+def completed_at(code:str)->str|None:
+    """UTC time the analysis in the engine cache was produced (the data's time, not the answer's)."""
+    stamp=_cache_stamp(code)
+    return _iso_utc(stamp) if stamp is not None else None
+
+
+def _ready(code:str,result:dict,elapsed_ms:int)->dict:
+    # The analysis may come from the cache (produced earlier than this run): its cache stamp is its time.
+    mono=_cache_stamp(code,result)
+    mono=time.monotonic() if mono is None else mono
+    _PRODUCED[code]=mono
+    return {'state':'ready','stage':'complete','elapsed_ms':elapsed_ms,'completed_at':_iso_utc(mono),'analysis':base._report_summary(result)}
+
+
+def _stale_ready(code:str,state:dict|None)->bool:
+    """A "ready" older than the engine cache is the previous consultation, not the current one."""
+    if not state or state.get('state')!='ready':return False
+    mono=_PRODUCED.get(code)
+    return mono is None or time.monotonic()-mono>=base.CACHE_TTL_SECONDS
+
+
 async def _run_deep(code:str):
     started=time.monotonic()
     _PROGRESS[code]={'state':'running','stage':'deep_sources','started_at':started}
     try:
         result=await base._analyze_with_live_addons(code)
-        _PROGRESS[code]={
-            'state':'ready','stage':'complete','elapsed_ms':round((time.monotonic()-started)*1000),
-            'analysis':base._report_summary(result)
-        }
+        _PROGRESS[code]=_ready(code,result,round((time.monotonic()-started)*1000))
         print(f'RX_PROGRESSIVE_READY={code}:{_PROGRESS[code]["elapsed_ms"]}ms',flush=True)
     except Exception as e:
         _PROGRESS[code]={'state':'failed','stage':'deep_sources','elapsed_ms':round((time.monotonic()-started)*1000),'detail':f'{type(e).__name__}:{str(e)[:300]}'}
@@ -61,8 +95,12 @@ def _ensure_deep(code:str):
     except Exception:
         cached=None
     if cached is not None:
-        _PROGRESS[code]={'state':'ready','stage':'complete','elapsed_ms':0,'analysis':base._report_summary(cached)}
+        _PROGRESS[code]=_ready(code,cached,0)
         return
+    # F1B: mark the new run BEFORE scheduling it. The caller answers in this same call, and the task only
+    # writes "running" when it starts: until then the previous run's "ready" (old data) would go out as
+    # the state of the run just scheduled.
+    _PROGRESS[code]={'state':'running','stage':'queued','started_at':time.monotonic()}
     _PROGRESS_TASKS[code]=asyncio.create_task(_run_deep(code))
 
 
@@ -98,7 +136,7 @@ async def quick_analysis(car_code:str):
 async def progressive_status(car_code:str):
     code=car_code.upper()
     state=_PROGRESS.get(code)
-    if not state:
+    if not state or _stale_ready(code,state):
         _ensure_deep(code); state=_PROGRESS.get(code,{'state':'running','stage':'queued'})
     return state
 

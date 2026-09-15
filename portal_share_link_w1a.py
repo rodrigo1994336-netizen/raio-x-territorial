@@ -175,7 +175,7 @@ UI = r'''
     const {r,d}=await lookup(code,left);if(my!==linkSeq)return;
     const c=d&&d.car,p=c&&c.properties;
     // Only the property that was asked for: a different code in the answer is never shown.
-    if(r&&r.ok&&c&&c.ok!==false&&p&&norm(p.cod_imovel)===code){say('');if(typeof window.showProperty==='function')window.showProperty({car_code:code,municipality:p.municipio,uf:p.uf,area_ha:p.area,status:p.status_imovel,condition:p.condicao,type:p.tipo_imovel,fiscal_modules:p.m_fiscal},c.geometry||null);return}
+    if(r&&r.ok&&c&&c.ok!==false&&p&&norm(p.cod_imovel)===code){say('');if(typeof window.showProperty==='function')window.showProperty({car_code:code,municipality:p.municipio,uf:p.uf,area_ha:p.area,status:p.status_imovel,condition:p.condicao,type:p.tipo_imovel,fiscal_modules:p.m_fiscal,created_at:p.dat_criacao,updated_at:p.data_atualizacao},c.geometry||null);return}
     if(sicarSaidNotFound(r,d)){setCar('');say(MSG.notFound,'info');return}
     if(attempt===1){if(DEADLINE_MS-(Date.now()-t0)<=RETRY_GAP_MS)break;await new Promise(res=>setTimeout(res,RETRY_GAP_MS));if(my!==linkSeq)return}
    }

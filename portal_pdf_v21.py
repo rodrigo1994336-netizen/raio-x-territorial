@@ -17,6 +17,14 @@ from property_identity_runtime import resolve_property_identity_sync
 app=portal_v8.app
 WORKER=os.getenv('RX_REPORT_WORKER_URL','https://raio-x-territorial-report.onrender.com').rstrip('/')
 TRANSIENT_STATUS={502,503,504}
+# F1B: last time the portal got an answer from the worker (monotonic). The wake route skips its ping while
+# the worker is known to be awake.
+LAST_WORKER_OK_MONO:float|None=None
+
+
+def _mark_worker_ok()->None:
+    global LAST_WORKER_OK_MONO
+    LAST_WORKER_OK_MONO=time.monotonic()
 
 
 def _provided_name(value:str|None)->str:
@@ -46,6 +54,7 @@ async def _wait_worker_ready(car_code:str,property_name:str='',max_wait:float=70
             try:
                 r=await c.get(WORKER+path,params={'property_name':name})
                 if r.status_code==200:
+                    _mark_worker_ok()
                     try:data=r.json()
                     except Exception:data={}
                     if isinstance(data,dict) and data.get('state') is not None:
@@ -70,7 +79,9 @@ async def _proxy(method:str,path:str,params=None,timeout=25,retries=0):
                 r=await c.request(method,WORKER+path,params=params)
                 try:data=r.json()
                 except Exception:data={'detail':r.text[:300]}
-            if r.status_code<400:return data
+            if r.status_code<400:
+                _mark_worker_ok()
+                return data
             if r.status_code in TRANSIENT_STATUS and attempt<retries:
                 print(f'RX_PORTAL_WORKER_RETRY={path}:http_{r.status_code}:attempt_{attempt+1}',flush=True)
                 await asyncio.sleep(2.0*(attempt+1));continue
@@ -149,11 +160,23 @@ async def portal_quick_proxy(car_code:str,deep:bool=False):
     return await _proxy('GET',f'/v1/live/quick/{quote(car_code.upper())}',params={'deep':'1' if deep else '0'},timeout=22,retries=1)
 
 
+# F1B: the state poll is short. The engine was already woken by /v1/live/quick (which waits for it); a poll
+# that waited here too (up to 40 s + 2x10 s) outlived the browser's own timeout, kept asking the engine after
+# the browser gave up and piled load on an engine that was restarting. One try, 8 s, then 503 at once.
+STATUS_PROXY_TIMEOUT_S=8.0
+
+
 @app.get('/v1/live/progressive/status/{car_code}')
 async def portal_progress_proxy(car_code:str):
-    if not await _wait_worker_ready(car_code,'',40):
-        raise HTTPException(status_code=503,detail='Motor da análise ainda está iniciando.')
-    return await _proxy('GET',f'/v1/live/progressive/status/{quote(car_code.upper())}',timeout=10,retries=1)
+    try:
+        # httpx timeouts are per phase (a slow trickle can outlive them): the total is capped too.
+        return await asyncio.wait_for(_proxy('GET',f'/v1/live/progressive/status/{quote(car_code.upper())}',timeout=STATUS_PROXY_TIMEOUT_S,retries=0),STATUS_PROXY_TIMEOUT_S+1)
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=503,detail='Motor da análise não respondeu agora.')
+    except HTTPException as exc:
+        if exc.status_code in TRANSIENT_STATUS:
+            raise HTTPException(status_code=503,detail='Motor da análise não respondeu agora.')
+        raise
 
 
 UI=r'''

@@ -357,9 +357,10 @@ async def open_full(page, width):
     assert await page.locator(".rx46-card").count() == 0
     panel = page.locator(".rx45-panel-card")
     text = await panel.inner_text()
-    assert "RISCO NÃO CLASSIFICADO" in text, text
-    assert "Fonte não consultada não significa ausência de ocorrência" in text, text
-    assert "fontes responderam" in text.lower(), text
+    # F1B: no internal wording in the client panel (no risk placeholder, no "N de M fontes responderam").
+    for internal in ("RISCO NÃO CLASSIFICADO", "Fonte não consultada não significa ausência de ocorrência", "fontes responderam"):
+        assert internal.casefold() not in text.casefold(), (internal, text)
+    assert "ver fontes e datas" in text.casefold(), text
     assert "VER ANÁLISE COMPLETA" in text
     assert not re.search(r"20\d{2}-\d{2}-\d{2}T\d{2}:", text), text
     # C2a: clean panel head and KPIs. Compliance rows carry their own labels (C3),
@@ -644,14 +645,11 @@ async def assert_parcel_fill(page):
 
 
 async def assert_parcel_tooltips(page):
-    # C2a: the hover tooltip is a plain location/area line: no municipality heading,
-    # no '—' placeholder, pt-BR area.
-    tips = await js(page, """()=>{const rows=[];map.eachLayer(l=>{if(l.feature?.properties?.cod_imovel&&l.getTooltip){const t=l.getTooltip();const c=t?t.getContent():null;if(typeof c==='string')rows.push(c)}});return rows}""")
-    assert tips, "no parcel tooltip content"
-    for tip in tips:
-        assert "—" not in tip and "<b>" not in tip and "Imóvel rural" not in tip, tip
-        if tip.endswith(" ha"):
-            assert AREA_RE.search(tip) and not re.search(r"\d\.\d{3,4} ha$", tip), tip
+    # F1B: nothing is written over the map on hover (the municipality/area balloon is gone);
+    # the click still opens the card.
+    tips = await js(page, """()=>{let n=0,withTip=0;map.eachLayer(l=>{if(l.feature?.properties?.cod_imovel){n++;if(l.getTooltip&&l.getTooltip())withTip++}});return {n,withTip,open:document.querySelectorAll('.leaflet-tooltip').length}}""")
+    assert tips["n"] > 0, ("no parcels to check", tips)
+    assert tips["withTip"] == 0 and tips["open"] == 0, ("tooltip over the map", tips)
 
 
 async def assert_search_dropdown_escaped(page, car, geometry):
@@ -682,6 +680,10 @@ CARD_FIELDS_JS = """()=>{const c=document.querySelector('.rx46-card');const f={}
 
 async def assert_card_rules_runtime(page, car, geometry):
     """Runs the shipped JS rules (not a Python twin) on deterministic payloads."""
+    # F1B: the card and the panel share ONE /map-panel request per CAR (window.rxMapPanelOnce). The real
+    # search just opened `car`, and its real /map-panel request may still be in flight (SICAR slow from
+    # GitHub): a fixture for the same code would never be asked. The deterministic payloads use their own code.
+    car = car[:-1] + ("0" if car[-1] != "0" else "1")
     fmt = await js(page, """()=>({ha0:rxNum.ha(0),haNull:rxNum.ha(null),haEmpty:rxNum.ha(''),haNaN:rxNum.ha(NaN),haStr0:rxNum.ha('0'),
       tiny:rxNum.num(0.003,2),edge:rxNum.num(0.005,2),big:rxNum.ha(1981.2),date:rxDateBR('2016-04-11T02:05:53.354Z'),dateNull:rxDateBR(null),
       renderWrapped:window.rxV46RenderV45Immediate?.__rxIdentitySanitizedV49===true})""")
@@ -836,7 +838,10 @@ async def sigef_reference_flow(browser, width, height, scenarios):
     await page.goto(BASE, wait_until="domcontentloaded", timeout=30000)
     await wait_runtime(page)
     await page.route("**/v1/live/map-panel/**", map_panel)
-    for pattern in ("**/v1/live/snapshot/**", "**/v1/live/property-identity/**", "**/v1/live/conformity/**", "**/v1/live/car-integrity/**"):
+    # F1B: opening the card's "VER ANÁLISE COMPLETA" starts the full reading (report engine): quiet too, the
+    # fixture CAR codes do not exist and the engine is not what this flow checks.
+    for pattern in ("**/v1/live/snapshot/**", "**/v1/live/property-identity/**", "**/v1/live/conformity/**", "**/v1/live/car-integrity/**",
+                    "**/v1/live/quick/**", "**/v1/live/progressive/**"):
         await page.route(pattern, quiet)
     # Below z11 the viewport loader stays idle, so no external source is involved.
     await js(page, "()=>map.setView([-19.2,-45.0],10,{animate:false})")
