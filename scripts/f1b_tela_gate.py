@@ -343,6 +343,9 @@ def judge_harness(r: dict) -> list[str]:
         p.append(f"failed reading re-asked on re-render: {f.get('after_rerender')}")
     if (f.get("after_force") or 0) <= 2:
         p.append("explicit retry did not ask again")
+    qn = r.get("quick_not_ok") or {}
+    if qn.get("phase") != "failed" or qn.get("status") != 0 or qn.get("quick") != 2:
+        p.append(f"engine answer ok:false treated as a run to wait for: {qn}")
     se = r.get("status_errors") or {}
     if se.get("quick") != 2 or se.get("status") != 6 or se.get("phase") != "failed":
         p.append(f"status errors not bounded (3 per attempt, one retry): {se}")
@@ -451,6 +454,7 @@ def main() -> int:
         "automatic retry for a closed panel": "automatic retry for a closed panel",
         "failure turns the main button into a retry": "main button stays VER ANÁLISE COMPLETA",
         "loading renames the main button": "main button renamed while loading",
+        "engine ok:false waited for": "ok:false treated as a run",
         "audit lists unasked sources": "audit lists sources nobody asked",
         "audit ignores the full analysis": "audit contradicts the full analysis",
     }
@@ -472,6 +476,7 @@ def main() -> int:
         ("merge overwrites answers", "f1b", "if(r.answer===PEND&&n&&n.answer!==PEND){changed=true;return n}", "if(n){changed=true;return n}"),
         ("automatic retry for a closed panel", "f1b", "if(!card(car)){mine.fill={state:'idle'};return}", ""),
         ("failure turns the main button into a retry", "f1b", "b.textContent='VER ANÁLISE COMPLETA';", "b.textContent=e.phase==='failed'?'CONSULTAR DE NOVO':'VER ANÁLISE COMPLETA';"),
+        ("engine ok:false waited for", "f1b", "if(!first.ok||!first.d||first.d.ok===false)return null;", "if(!first.ok||!first.d)return null;"),
         ("loading renames the main button", "f1b", "b.textContent='VER ANÁLISE COMPLETA';", "b.textContent=e.phase==='loading'?'CONSULTANDO FONTES…':'VER ANÁLISE COMPLETA';"),
         ("audit lists unasked sources", "audit", "if(!row||!row.dataset.state)return;", "if(!row||!row.dataset.state){items.push(auditItem(source.label,'NÃO CONSULTADA','Estado desta fonte nesta consulta.'));return}"),
         ("audit ignores the full analysis", "audit", "else if(R&&R.phase==='ready'&&Array.isArray(R.rows))", "else if(false)"),

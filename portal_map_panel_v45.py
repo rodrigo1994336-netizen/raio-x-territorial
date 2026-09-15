@@ -291,8 +291,9 @@ body.rx43-dossier-open #panel{background:transparent!important;pointer-events:no
  const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
  const fmt=(v,d=2)=>window.rxNum?window.rxNum.num(v,d):'';
  // F1B: the card enrichment (V46) and this panel ask /map-panel ONCE per property: one in-flight request is shared
- // and an answer that came back ok is reused for 2 min. Failures are never remembered (the C3 retries still ask).
- if(!window.rxMapPanelOnce){const inflight=new Map(),memo=new Map(),TTL=120000,copy=x=>x==null?x:JSON.parse(JSON.stringify(x));window.rxMapPanelOnce=function(car){car=String(car||'').trim().toUpperCase();const m=memo.get(car);if(m&&Date.now()-m.at<TTL)return Promise.resolve({ok:true,d:copy(m.d)});let p=inflight.get(car);if(!p){p=fetch(`/v1/live/map-panel/${encodeURIComponent(car)}`).then(async r=>{let d=null;try{d=await r.json()}catch(e){}if(r.ok&&d&&d.ok===true)memo.set(car,{at:Date.now(),d});return {ok:r.ok,d}}).finally(()=>inflight.delete(car));inflight.set(car,p)}return p.then(x=>({ok:x.ok,d:copy(x.d)}))}}
+ // and an answer that came back ok is reused for 2 min. Failures are never remembered (the C3 retries still ask), and
+ // neither is an answer with a pending part (INCRA reference 'unavailable'): a re-click asks again (C2b, tentar não é responder).
+ if(!window.rxMapPanelOnce){const inflight=new Map(),memo=new Map(),TTL=120000,copy=x=>x==null?x:JSON.parse(JSON.stringify(x));window.rxMapPanelOnce=function(car){car=String(car||'').trim().toUpperCase();const m=memo.get(car);if(m&&Date.now()-m.at<TTL)return Promise.resolve({ok:true,d:copy(m.d)});let p=inflight.get(car);if(!p){p=fetch(`/v1/live/map-panel/${encodeURIComponent(car)}`).then(async r=>{let d=null;try{d=await r.json()}catch(e){}if(r.ok&&d&&d.ok===true&&d.sigef_reference_state!=='unavailable')memo.set(car,{at:Date.now(),d});return {ok:r.ok,d}}).finally(()=>inflight.delete(car));inflight.set(car,p)}return p.then(x=>({ok:x.ok,d:copy(x.d)}))}}
  const ident=p=>{if(window.rxCardIdentityC2)return window.rxCardIdentityC2(p||{});const car=String(p?.car_code||'').trim().toUpperCase();return {named:false,title:car,code:car,place:''}};
  const text=v=>(v===null||v===undefined||v==='')?'Não informado':String(v);
  const currentCar=()=>String((window.current||{}).car_code||'').trim().toUpperCase();

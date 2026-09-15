@@ -255,6 +255,15 @@ async function main() {
     first.after_force = count(env.calls, '/v1/live/quick/');
     out.failure = first;
   }
+  // ---- the engine answers 200 with ok:false: no waiting for a run that does not exist
+  {
+    const env = makeEnv(async (u) => u.includes('/v1/live/quick/') ? { body: { ok: false, detail: 'x' } } : { body: { state: 'running' } });
+    vm.runInContext(input.f1b, env.win);
+    const F = env.win.rxFullReadingF1b;
+    F.start(CAR);
+    await waitFor(settled(F));
+    out.quick_not_ok = { quick: count(env.calls, '/v1/live/quick/'), status: count(env.calls, '/v1/live/progressive/status/'), phase: (F.peek(CAR) || {}).phase };
+  }
   // ---- the engine state endpoint keeps failing: polling stops after 3 errors in a row (per attempt)
   {
     const env = makeEnv(async (u) => u.includes('/v1/live/quick/') ? { body: { ok: true, mode: 'quick-car', deep_state: { state: 'running' } } } : { status: 503, body: {} });

@@ -838,7 +838,10 @@ async def sigef_reference_flow(browser, width, height, scenarios):
     await page.goto(BASE, wait_until="domcontentloaded", timeout=30000)
     await wait_runtime(page)
     await page.route("**/v1/live/map-panel/**", map_panel)
-    for pattern in ("**/v1/live/snapshot/**", "**/v1/live/property-identity/**", "**/v1/live/conformity/**", "**/v1/live/car-integrity/**"):
+    # F1B: opening the card's "VER ANÁLISE COMPLETA" starts the full reading (report engine): quiet too, the
+    # fixture CAR codes do not exist and the engine is not what this flow checks.
+    for pattern in ("**/v1/live/snapshot/**", "**/v1/live/property-identity/**", "**/v1/live/conformity/**", "**/v1/live/car-integrity/**",
+                    "**/v1/live/quick/**", "**/v1/live/progressive/**"):
         await page.route(pattern, quiet)
     # Below z11 the viewport loader stays idle, so no external source is involved.
     await js(page, "()=>map.setView([-19.2,-45.0],10,{animate:false})")

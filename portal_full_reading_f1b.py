@@ -183,7 +183,8 @@ FULL_READING_UI = r'''
  async function attempt(car,alive,hardUntil){
   const enc=encodeURIComponent(car);
   const first=await fetchJson(`/v1/live/quick/${enc}?deep=1`,QUICK_TIMEOUT_MS);
-  if(!first.ok||!first.d)return null;
+  // An engine answer that says it did not work (ok:false) is no reason to wait for a run.
+  if(!first.ok||!first.d||first.d.ok===false)return null;
   const d=first.d,ds=d.deep_state||{};
   // Only a cache hit answers on the first response. On any other mode the engine has just scheduled a new run
   // and deep_state may still be the PREVIOUS run's "ready": showing it would pass old data as current.

@@ -194,7 +194,9 @@ async function mapPanelCases() {
   const calls = [];
   let answer = 'fail';
   const win = baseWindow({
-    fetch: async (url) => { calls.push(String(url)); return answer === 'fail' ? { ok: false, status: 503, json: async () => ({ ok: false, detail: 'x' }) } : { ok: true, status: 200, json: async () => ({ ok: true, car: CAR }) }; },
+    fetch: async (url) => { calls.push(String(url)); return answer === 'fail' ? { ok: false, status: 503, json: async () => ({ ok: false, detail: 'x' }) }
+      : answer === 'partial' ? { ok: true, status: 200, json: async () => ({ ok: true, car: CAR, sigef_reference_state: 'unavailable' }) }
+      : { ok: true, status: 200, json: async () => ({ ok: true, car: CAR }) }; },
   });
   const err = run(win, input.mappanel, 'mappanel');
   if (err) return { fatal: err };
@@ -203,7 +205,11 @@ async function mapPanelCases() {
   answer = 'ok';
   const r3 = await win.rxMapPanelOnce(CAR);
   const r4 = await win.rxMapPanelOnce(CAR);          // an answer is memorised: no network
-  return { calls: calls.length, r1_ok: r1.ok, r2_ok: r2.ok, r3_ok: r3.ok, r4_ok: r4.ok, r4_d: r4.d && r4.d.ok };
+  const before = calls.length;
+  answer = 'partial';                                // the INCRA reference did not answer: a re-click asks again
+  const OTHER = CAR.slice(0, -1) + '0';
+  await win.rxMapPanelOnce(OTHER); await win.rxMapPanelOnce(OTHER);
+  return { partial_calls: calls.length - before, calls: before, r1_ok: r1.ok, r2_ok: r2.ok, r3_ok: r3.ok, r4_ok: r4.ok, r4_d: r4.d && r4.d.ok };
 }
 
 (async () => {

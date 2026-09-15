@@ -791,6 +791,8 @@ def judge_mappanel(m: dict) -> list[str]:
     p = []
     if m.get("calls") != 3 or m.get("r2_ok") is not False or m.get("r4_ok") is not True or m.get("r4_d") is not True:
         p.append(f"failed /map-panel answer memorised (the retry never reaches the network): calls={m.get('calls')} {m}")
+    if m.get("partial_calls") != 2:
+        p.append(f"answer with a pending INCRA reference memorised (a re-click never asks again): {m.get('partial_calls')}")
     return p
 
 
@@ -939,8 +941,10 @@ def run_all(html: str, check: Callable[[bool, str], bool]) -> None:
     pl_control("1B.6 coordinate 502 says 'no CAR here'", "coord",
                "toast(r.status===404?'Coordenada localizada; nenhum CAR exato foi encontrado neste ponto.':'Consulta ao SICAR pendente para esta coordenada. Tente de novo em instantes.')",
                "toast('Coordenada localizada; nenhum CAR exato foi encontrado neste ponto.')", judge_coord, "did not answer shown as 'no CAR here'")
-    pl_control("1B.3 /map-panel memorises failures", "mappanel", "if(r.ok&&d&&d.ok===true)memo.set(car,{at:Date.now(),d})", "memo.set(car,{at:Date.now(),d})",
+    pl_control("1B.3 /map-panel memorises failures", "mappanel", "if(r.ok&&d&&d.ok===true&&d.sigef_reference_state!=='unavailable')memo.set(car,{at:Date.now(),d})", "memo.set(car,{at:Date.now(),d})",
                judge_mappanel, "failed /map-panel answer memorised")
+    pl_control("1B.3 /map-panel memorises a pending INCRA reference", "mappanel", "&&d.sigef_reference_state!=='unavailable')memo.set(", ")memo.set(",
+               judge_mappanel, "pending INCRA reference memorised")
     import municipios_ibge_br as mun_m10
 
     control("1B.6 ambiguous municipality prefix answered", judge_find(mutate_function(mun_m10.find, "return prefix[0] if len(prefix) == 1 else None", "return prefix[0] if prefix else None")),
