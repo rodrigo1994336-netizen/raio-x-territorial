@@ -223,6 +223,7 @@ class PonteEnv:
                                  log_stream=self.log, **svc_kwargs)
         self.server = ponte.make_server(("127.0.0.1", 0), self.svc)
         self.port = self.server.server_address[1]
+        self.answered = 0
         self.thread = threading.Thread(target=self.server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
         self.thread.start()
 
@@ -255,9 +256,22 @@ class PonteEnv:
                 conn.endheaders()
             resp = conn.getresponse()
             data = resp.read()
+            self.answered += 1
             return resp.status, {k.lower(): v for k, v in resp.getheaders()}, data
         finally:
             conn.close()
+
+    def settle(self, timeout_s=5.0):
+        """Espera o servidor terminar cada pedido já respondido. A ponte envia a resposta e só depois, no
+        finally do handler, devolve a reserva de memória e grava a linha "req" do log; o cliente recebe a
+        resposta antes disso. Ler budget.used ou o log sem esperar é corrida (CI de 15/09: "memória não
+        liberada na recusa", 40 = um corpo ainda reservado). A linha do log sai depois da devolução."""
+        deadline = time.monotonic() + timeout_s
+        while self.log.getvalue().count('"event": "req"') < self.answered:
+            if time.monotonic() >= deadline:
+                raise AssertionError(("pedido respondido sem terminar no servidor", self.answered,
+                                      self.log.getvalue().count('"event": "req"')))
+            time.sleep(0.005)
 
     def close(self):
         self.server.shutdown()
@@ -407,18 +421,21 @@ def s_response_size():
         refused(e.call(url="https://geoserver.car.gov.br/nolen/1001"), 502, "response_too_large")
         st, _, body = e.call(url="https://geoserver.car.gov.br/size/1000")
         assert st == 200 and len(body) == 1000, (st, len(body))
+        e.settle()
         assert e.svc.budget.used == 0, ("memória não liberada", e.svc.budget.used)
     limit = ponte.MAX_RESPONSE_BYTES
     with PonteEnv() as e:  # limite de produção (25 MiB), não só o reduzido
         assert e.svc.max_response_bytes == limit == 25 * 1024 * 1024
         refused(e.call(url=f"https://geoserver.car.gov.br/size/{limit + 1}", timeout=60), 502, "response_too_large")
         refused(e.call(url=f"https://geoserver.car.gov.br/nolen/{limit + 1}", timeout=60), 502, "response_too_large")
+        e.settle()
         assert e.svc.budget.used == 0, e.svc.budget.used
 
 
 def s_incomplete():
     with PonteEnv() as e:
         refused(e.call(url="https://geoserver.car.gov.br/truncated"), 502, "upstream_incomplete")
+        e.settle()
         assert e.svc.budget.used == 0
 
 
@@ -502,6 +519,7 @@ def s_inflight_release():
             if ok:
                 e.svc.inflight.release()
         assert got.count(True) == ponte.MAX_INFLIGHT, ("vagas livres depois das buscas", got.count(True))
+        e.settle()
         assert e.svc.budget.used == 0, e.svc.budget.used
 
 
@@ -512,6 +530,7 @@ def s_malformed():
         refused(e.call(method="POST", url="https://geoserver.car.gov.br/echo", headers={"Content-Length": "²"}),
                 400, "bad_content_length")
         assert e.connects == []
+        e.settle()
         assert '"status": 500' not in e.log.getvalue(), e.log.getvalue()
 
 
@@ -657,16 +676,32 @@ def s_egress_budget():
     with PonteEnv(egress=ponte.EgressBudget(2 * body_len, clock=clock)) as e:
         assert e.call()[0] == 200 and e.call()[0] == 200
         refused(e.call(), 429, "egress_budget")
-        assert '"error": "egress_budget"' in e.log.getvalue(), e.log.getvalue()[-300:]
+        e.settle()
+        assert '"error": "egress_budget"' in e.log.getvalue(), ("recusa egress_budget sem linha no log", e.log.getvalue()[-300:])
         clock.t += 1900.0          # pouco mais de meia hora devolve um corpo
         assert e.call()[0] == 200
         refused(e.call(), 429, "egress_budget")
         clock.t += 36000.0         # dez horas não passam do tamanho do balde (dois corpos)
         assert e.call()[0] == 200 and e.call()[0] == 200
         refused(e.call(), 429, "egress_budget")
+        e.settle()
         assert e.svc.budget.used == 0, ("memória não liberada na recusa", e.svc.budget.used)
     assert ponte.EGRESS_BYTES_PER_HOUR == 1024 ** 3, ("teto de saída de produção mudou", ponte.EGRESS_BYTES_PER_HOUR)
     assert ponte.Service().egress.capacity == float(ponte.EGRESS_BYTES_PER_HOUR), "Service sem o teto de produção"
+
+
+def s_settle_after_send():
+    """Corrida do CI de 15/09 reproduzida: a devolução da memória atrasada 0,2 s depois do envio da resposta
+    não pode derrubar as verificações que leem budget.used e o log (sem settle, caem sempre)."""
+    orig = ponte.ByteBudget.release
+
+    def slow_release(self, n):
+        time.sleep(0.2)
+        return orig(self, n)
+
+    with mock.patch.object(ponte.ByteBudget, "release", slow_release):
+        s_egress_budget()
+        s_log_hygiene()
 
 
 def s_log_hygiene():
@@ -675,6 +710,7 @@ def s_log_hygiene():
         e.call(url="https://geoserver.car.gov.br/ok?q=MARCA-CONSULTA")
         e.call(token=WRONG)
         e.call(url="https://evil.example.com/MARCA-CONSULTA")
+        e.settle()
         text = e.log.getvalue()
         assert text.count('"event": "req"') == 4, text
         for secret in (TOKEN, WRONG, "SEGREDO-CORPO", "MARCA-CONSULTA", "RESPOSTA-OK"):
@@ -2486,11 +2522,15 @@ MUTATIONS = [
                                                   'print(f"  chave: lida {cfg.token} {cfg.audience}", flush=True)'), i_conferir),
     # revisão de 15/09/2026: teto de saída, prazo depois da credencial, arranque, 401, guia rodado com gcloud falso
     ("saída sem teto por hora", lambda: mock.patch.object(ponte.EgressBudget, "take", lambda self, n: True), s_egress_budget),
+    ("memória da resposta não devolvida", _ponte_mut("                svc.budget.release(upstream.reserved)\n", "                pass\n"),
+     s_egress_budget),
     ("teto de saída não conferido na resposta", _ponte_mut("            if not svc.egress.take(len(upstream.body)):\n",
                                                            "            if False:\n"), s_egress_budget),
     ("balde de saída sem tamanho máximo", _ponte_mut("self.available = min(self.capacity, self.available + max(0.0, now - self.last) * self.rate)",
                                                      "self.available = self.available + max(0.0, now - self.last) * self.rate"),
      s_egress_budget),
+    ("verificação sem esperar o servidor terminar o pedido", lambda: mock.patch.object(PonteEnv, "settle", lambda self, timeout_s=5.0: None),
+     s_settle_after_send),
     ("teto de saída de 1 TiB", _ponte_mut("EGRESS_BYTES_PER_HOUR = 1024 ** 3", "EGRESS_BYTES_PER_HOUR = 1024 ** 4"), s_egress_budget),
     ("SICAR pela ponte com menos que o prazo mínimo depois da credencial",
      _bridge_mut("        if budget is not None and budget < MIN_BRIDGE_BUDGET_S:\n"
@@ -2596,7 +2636,7 @@ def main() -> int:
     checks = [
         s_token, s_not_configured, s_health_and_paths, s_scheme, s_host_list, s_ip_literal, s_userinfo, s_port,
         s_canonical, s_private_dns, s_redirects, s_response_size, s_incomplete, s_methods, s_request_body, s_timeout, s_headers,
-        s_rate_limit, s_egress_budget, s_log_hygiene, s_upstream_status, s_tls_and_source,
+        s_rate_limit, s_egress_budget, s_settle_after_send, s_log_hygiene, s_upstream_status, s_tls_and_source,
         s_inflight_release, s_malformed, s_content_type, s_redirect_post, s_slow_client, s_connection_cap,
         c_off_identical, c_incra_bridge, c_sicar_direct_then_bridge, c_sicar_budget_and_codes, c_sicar_window_rule,
         c_cancel_and_timeout, c_no_bridge_url_leak, c_probe_sources,
