@@ -77,6 +77,10 @@ jobs:
         env:
           RX_RELEASE: V8_OPERATIONAL_ZERO_COST
         run: PYTHONPATH=. python scripts/f1b_tela_gate.py
+      - name: O2 tela nova /novo gate (rotas, arquivos com hash, nada escrito sobre o mapa, sem m², sem CPF/CNPJ, sem texto interno, alvos de 44 px, fontes oficiais, regras da leitura no node; controles positivos; needs Node)
+        env:
+          RX_RELEASE: OFF
+        run: PYTHONPATH=. python scripts/o2_tela_nova_gate.py
       - name: Import standalone engines
         env:
           RX_RELEASE: OFF
@@ -373,3 +377,21 @@ jobs:
         env:
           RX_RELEASE: OFF
         run: PYTHONPATH=. python scripts/f2_relatorio_v20_gate.py
+
+  o2-tela-nova-browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install browser gate dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install fastapi uvicorn httpx playwright
+          python -m playwright install --with-deps chromium
+      - name: O2 tela nova browser gate (Chromium sem rede - leitura nunca fica de outro imóvel, pendente tenta sozinha, município com imóveis ou aviso, Voltar do celular, celular deitado, medida com cartão, Concluir mantém a medida, código inexistente fica no endereço; controles positivos)
+        env:
+          RX_RELEASE: OFF
+        run: PYTHONPATH=. python scripts/o2_tela_nova_browser_gate.py

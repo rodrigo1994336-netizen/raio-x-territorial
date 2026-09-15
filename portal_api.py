@@ -208,3 +208,9 @@ def portal_status():
 import portal_boot_assets_w1a  # noqa: E402
 
 portal_boot_assets_w1a.install(app)
+
+# O2: tela nova em /novo (app próprio, sem âncora no PORTAL_HTML). Instalada aqui para abrir
+# mesmo enquanto os módulos do portal carregam em segundo plano.
+import tela_nova_o2  # noqa: E402
+
+tela_nova_o2.install(app)
