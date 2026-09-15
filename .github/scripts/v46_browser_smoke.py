@@ -87,7 +87,10 @@ async def proven_empty_map_point(page):
 # containing the point, exactly like L.Canvas._onClick). The 4 neighbours at PAD px must hit the same
 # parcel, so rounding cannot move the click to a border or to a neighbour. Pixels with a single
 # parcel are preferred. No pixel yet: wait for cells; still none: pan to a loaded parcel's interior.
-# The click must open the card of THAT CAR (tags below name each failure).
+# The click must open the card of THAT CAR (tags below name each failure). A repeated click passes the
+# CARs already clicked as `avoid`: the grid is deterministic and would pick the same parcel again, so
+# a card stuck on the first property would pass unnoticed (review of 15/09: 5 of 7 live clicks hit one
+# CAR); with `avoid` the next click targets another parcel and its card must show that one.
 PARCEL_BOX = {"l": 30, "r": 60, "t": 60, "b": 70, "step": 18, "pad": 5, "want": 4}
 PARCEL_TARGET_JS = """(o)=>{
   const mapEl=document.querySelector('#map');if(!mapEl||typeof map==='undefined'||!map)return {cands:[],parcels:0,stats:{no_map:true}};
@@ -106,7 +109,7 @@ PARCEL_TARGET_JS = """(o)=>{
   const stats={parcels:parcels.length,points:0,empty:0,edge:0,covered:{}},cx=(box.l+box.r)/2,cy=(box.t+box.b)/2,pts=[];
   for(let y=box.t;y<=box.b;y+=o.step)for(let x=box.l;x<=box.r;x+=o.step)pts.push([x,y]);
   pts.sort((a,b)=>Math.hypot(a[0]-cx,a[1]-cy)-Math.hypot(b[0]-cx,b[1]-cy));
-  const alone=[],shared=[],seen=new Set();
+  const alone=[],shared=[],seen=new Set(o.avoid||[]);
   for(const [x,y] of pts){if(alone.length>=o.want)break;stats.points++;const p=probe(x,y);
     if(!p.target){if(p.why==='covered')stats.covered[p.by]=(stats.covered[p.by]||0)+1;else stats.empty++;continue}
     const car=carOf(p.target);if(seen.has(car))continue;let ok=true,solo=p.alone;
@@ -128,16 +131,17 @@ PARCEL_PAN_JS = """(o)=>{const mapEl=document.querySelector('#map');if(!mapEl)re
   return null}"""
 
 
-async def click_first_parcel(page, timeout_ms=30000, pan_after_ms=6000):
-    """Clicks a pixel proven to belong to one visible interactive CAR parcel and requires the card of
-    that CAR. Returns the click, with the map centre read right before it (card contract)."""
+async def click_first_parcel(page, timeout_ms=30000, pan_after_ms=6000, avoid=()):
+    """Clicks a pixel proven to belong to one visible interactive CAR parcel outside `avoid` and requires
+    the card of that CAR. Returns the click, with the map centre read right before it (card contract)."""
     assert await page.locator(".rx46-card").count() == 0, "click_first_parcel expects no open card"
+    avoid = [str(c) for c in avoid]
     loop = asyncio.get_running_loop()
     t0 = loop.time()
     deadline, next_pan = t0 + timeout_ms / 1000, t0 + pan_after_ms / 1000
     pans, races = [], 0
     while True:
-        found = await js(page, PARCEL_TARGET_JS, PARCEL_BOX)
+        found = await js(page, PARCEL_TARGET_JS, {**PARCEL_BOX, "avoid": avoid})
         if found["cands"]:
             cand = found["cands"][0]
             center = await map_center(page)
@@ -149,7 +153,7 @@ async def click_first_parcel(page, timeout_ms=30000, pan_after_ms=6000):
                 raise AssertionError(("CLICK_NO_CARD: a pixel of a visible interactive CAR parcel opened no card", cand, now)) from None
             got = (await page.locator(".rx46-card").get_attribute("data-car") or "").strip()
             if got == cand["car"]:
-                info = {**cand, "center": center, "waited_ms": round((loop.time() - t0) * 1000), "pans": pans, "races": races, "parcels": found["parcels"]}
+                info = {**cand, "center": center, "waited_ms": round((loop.time() - t0) * 1000), "pans": pans, "races": races, "parcels": found["parcels"], "avoid": avoid}
                 print("RX_V46_PARCEL_CLICK", json.dumps(info, ensure_ascii=False))
                 return info
             now = await js(page, PARCEL_TARGET_JS, {**PARCEL_BOX, "at": [cand["x"], cand["y"]]})
@@ -160,6 +164,8 @@ async def click_first_parcel(page, timeout_ms=30000, pan_after_ms=6000):
                 await js(page, "()=>window.rxV46CloseAnchor?.()")
                 await page.locator(".rx46-card").wait_for(state="detached", timeout=1500)
                 continue
+            if got in avoid:
+                raise AssertionError(("CLICK_STALE_CAR: the card still shows a property clicked before, not the one under the pixel", cand, got, now))
             raise AssertionError(("CLICK_OTHER_CAR: the click opened the card of another property", cand, got, now))
         tick = loop.time()
         if tick >= deadline:
@@ -167,7 +173,7 @@ async def click_first_parcel(page, timeout_ms=30000, pan_after_ms=6000):
             raise AssertionError(("NO_CLICKABLE_PARCEL: no pixel of a visible interactive CAR parcel could be clicked",
                                   {"stats": found["stats"], "grid": grid, "pans": pans, "in_view": await visible_parcels(page)}))
         if tick >= next_pan and len(pans) < 3:
-            pan = await js(page, PARCEL_PAN_JS, {**PARCEL_BOX, "skip": [p["car"] for p in pans]})
+            pan = await js(page, PARCEL_PAN_JS, {**PARCEL_BOX, "skip": avoid + [p["car"] for p in pans]})
             if pan:
                 await js(page, "d=>map.panBy([d.dx,d.dy],{animate:false})", pan)
                 pans.append(pan)
@@ -606,7 +612,10 @@ async def viewport_flow(browser, width, height, label):
         "selected property disappeared with card close"
     )
 
-    clicked = await click_first_parcel(page)
+    # Another property: the card has to follow the click, not stay on the first one.
+    first_car = clicked["car"]
+    clicked = await click_first_parcel(page, avoid=[first_car])
+    assert clicked["car"] != first_car, (first_car, clicked)
     await assert_card_contract(page, clicked["center"], width)
     late = await delay_snapshot(page)
     await open_full(page, width)
@@ -1093,6 +1102,9 @@ CLICK_MUTATIONS = {
     "other_car": ("CLICK_OTHER_CAR", "const live=l.feature||ff,p=propertyFromFeature(live);if(typeof window.rxV46SelectProperty==='function')",
                   "const live=(()=>{let o=null;map.eachLayer(x=>{if(!o&&x.feature?.properties?.cod_imovel&&x.feature!==l.feature)o=x.feature});return o})()||l.feature||ff,p=propertyFromFeature(live);if(typeof window.rxV46SelectProperty==='function')"),
     "not_interactive": ("NO_CLICKABLE_PARCEL", "L.geoJSON(f,{renderer,style:rxParcelStyleFor", "L.geoJSON(f,{renderer,interactive:false,style:rxParcelStyleFor"),
+    # the card keeps the FIRST property ever clicked: the first click passes, the second must not.
+    "stuck_first_car": ("CLICK_STALE_CAR", "const live=l.feature||ff,p=propertyFromFeature(live);if(typeof window.rxV46SelectProperty==='function')",
+                        "const live=(window.__rxStuckFeature||=(l.feature||ff)),p=propertyFromFeature(live);if(typeof window.rxV46SelectProperty==='function')"),
 }
 
 
@@ -1115,7 +1127,7 @@ def click_layout_features(layout: str) -> list[dict]:
     return feats
 
 
-async def click_fixture_run(browser, layout: str, mutation: str | None = None, timeout_ms: int = 30000) -> dict:
+async def click_fixture_run(browser, layout: str, mutation: str | None = None, timeout_ms: int = 30000) -> list[dict]:
     context = await browser.new_context(viewport={"width": 1440, "height": 900})
     page = await context.new_page()
     feats = click_layout_features(layout)
@@ -1157,9 +1169,17 @@ async def click_fixture_run(browser, layout: str, mutation: str | None = None, t
         await wait_runtime(page)
         assert not mutation or applied, ("CLICK_MUTATION_NOT_APPLIED", mutation)
         await set_dense(page)
-        clicked = await click_first_parcel(page, timeout_ms=timeout_ms)
-        assert clicked["car"] in {f["properties"]["cod_imovel"] for f in feats}, clicked
-        return clicked
+        cars = {f["properties"]["cod_imovel"] for f in feats}
+        first = await click_first_parcel(page, timeout_ms=timeout_ms)
+        assert first["car"] in cars, first
+        # Same sequence as viewport_flow: close on an empty pixel, then click the OTHER parcel.
+        empty = await proven_empty_map_point(page)
+        assert empty, "no provably empty map pixel found"
+        await page.mouse.click(empty["x"], empty["y"])
+        await page.locator(".rx46-card").wait_for(state="detached", timeout=1500)
+        second = await click_first_parcel(page, timeout_ms=timeout_ms, avoid=[first["car"]])
+        assert second["car"] in cars and second["car"] != first["car"], (first, second)
+        return [first, second]
     finally:
         await context.close()
 
@@ -1168,7 +1188,7 @@ async def click_controls(browser) -> None:
     report = {"layouts": {}, "mutations": {}}
     for layout in CLICK_LAYOUTS:
         clicked = await click_fixture_run(browser, layout)
-        assert layout != "edge" or clicked["pans"], ("edge layout must need the pan (premise)", clicked)
+        assert layout != "edge" or all(c["pans"] for c in clicked), ("edge layout must need the pan on both clicks (premise)", clicked)
         report["layouts"][layout] = clicked
         print("RX_V46_CLICK_LAYOUT", layout, "PASS")
     missed = []

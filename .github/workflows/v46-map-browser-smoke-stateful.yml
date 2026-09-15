@@ -10,7 +10,8 @@ jobs:
     runs-on: ubuntu-latest
     # Measured locally on the W1A integration (loaded machine): V46 smoke 283 s, W1a boot smoke 27 s + cold server 14 s,
     # parcels smoke 88 s (103-160 s on the front), mutation controls 86 s (134-262 s), link smoke 96 s. ~10 min of smokes
-    # plus install; 25 min keeps about 2x margin. V46 parcel click controls: 31-39 s (10 local runs, 15/09).
+    # plus install; 25 min keeps about 2x margin. V46 parcel click controls, two clicks per run: 37 s (local, 15/09).
+    # Not measured, ceiling only: the live V46 smoke clicks 7 parcels and each click may wait up to 30 s (+3.5 min).
     timeout-minutes: 25
     env:
       RX_RELEASE: V8_OPERATIONAL_ZERO_COST
@@ -60,7 +61,8 @@ jobs:
       - name: Selection card panel and 10-movement visual gate
         run: python .github/scripts/v46_browser_smoke.py
       # SICAR mocked: the parcel click used above must reach concave and edge-only parcels, and each broken
-      # click rule (no dispatch, other CAR's card, parcels not interactive) must fail at its own tag.
+      # click rule (no dispatch, other CAR's card, parcels not interactive, card stuck on the first property clicked)
+      # must fail at its own tag.
       - name: V46 parcel click helper (concave and edge-only parcels, mutation controls, SICAR mocked)
         if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
         run: python .github/scripts/v46_browser_smoke.py --click-controls
