@@ -73,7 +73,7 @@ def test_normalize_text() -> None:
         "Altitude mediana 712.0 m": "Altitude mediana 712 m",
         "chuva 6.08 mm/dia • média 23.97 °C": "chuva 6,08 mm/dia • média 23,97 °C",
         "cena Sentinel-2 datada de 2026-08-28": "cena Sentinel-2 datada de 28/08/2026",
-        "Emitido em 2026-09-13T21:27:57.820727+00:00": "Emitido em 13/09/2026 18:27",
+        "Emitido em 2026-09-13T21:27:57.820727+00:00": "Emitido em 13/09/2026 18:27 (horário de Brasília)",
         "20260828": "28/08/2026",
         "AT": "Ativo",
         " IRU ": " Imóvel Rural ",
@@ -96,7 +96,7 @@ def test_normalize_text() -> None:
         "Completar a consulta SNCI/INCRA quando o conector público/autenticado estiver disponível.": "Consultar a certificação do imóvel no SNCI/INCRA.",
         "camada: IDE:ide_1502_mg_mapa_solos_pol": "camada: IDE-Sisema",
         "área_somada_ha: 14.804099; baixo_pct: 12.3456": "área somada (ha): 14,80; vigor baixo (%): 12,35",
-        "Último arquivo processado: focos_10min_20260913_1820.csv.": "Último arquivo processado: arquivo de 10 minutos de 13/09/2026 18:20.",
+        "Último arquivo processado: focos_10min_20260913_1820.csv.": "Último arquivo processado: arquivo de 10 minutos de 13/09/2026 15:20 (horário de Brasília).",
     }
     for raw, expected in cases.items():
         got = n(raw)

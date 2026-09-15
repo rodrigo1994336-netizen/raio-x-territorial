@@ -37,6 +37,10 @@ jobs:
         env:
           RX_RELEASE: OFF
         run: PYTHONPATH=. python scripts/r1_report_ptbr_gate.py
+      - name: V2 small truths gate (Brasília time with the note on PDF and screen; only an empty exact SICAR answer is 404, any failure is 503 pending, on the booted report and portal chains and the PDF viewer; rules and positive controls; needs Node)
+        env:
+          RX_RELEASE: OFF
+        run: PYTHONPATH=. python scripts/v2_verdade_pequenas_gate.py
       - name: H1 empty or broken public layer never becomes "nenhum" gate
         env:
           RX_RELEASE: OFF

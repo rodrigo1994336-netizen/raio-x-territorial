@@ -24,6 +24,7 @@ from ide_catalog import benchmark_targets, search_catalog
 from ide_layer_probe import probe_benchmark
 from critical_minerals import query_critical_minerals
 from live_report_adapter_v8 import generate_live_report
+from sicar_lookup_http import lookup_http_error
 
 APP_VERSION='0.18.6-memory-hardened'
 app = FastAPI(title='Raio-X Territorial Report API', version=APP_VERSION)
@@ -165,7 +166,8 @@ async def _safe_thread(label:str, fn, *args, source:str|None=None):
 
 async def _analyze_uncached(car_code:str):
     result=await analyze_car(car_code); car=result.get('car') or {}
-    if not car.get('ok'): raise HTTPException(status_code=404 if car.get('not_found') else 502,detail=_safe_summary(result))
+    # 404 only when SICAR answered without the property; a lookup that failed is 503 + Retry-After.
+    if not car.get('ok'): raise lookup_http_error(car)
     result=await _retry_failed_core(result); car=result.get('car') or {}
     geometry=car.get('geometry'); bbox=car.get('bbox')
     jobs=[
@@ -278,7 +280,7 @@ async def ide_catalog(q:str='solo,aptidão,Mapbiomas,declividade,rodovias,APPs')
 @app.get('/v1/internal/ide/probe/{car_code}')
 async def ide_probe(car_code:str):
     car=await asyncio.to_thread(fetch_car_live,car_code.upper())
-    if not car.get('ok'): raise HTTPException(status_code=404 if car.get('not_found') else 502,detail=car)
+    if not car.get('ok'): raise lookup_http_error(car)
     return await asyncio.to_thread(probe_benchmark,car.get('geometry'),car.get('bbox'))
 @app.get('/v1/reports/property/{car_code}/meta')
 async def report_meta(car_code:str):

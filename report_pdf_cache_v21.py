@@ -45,7 +45,9 @@ def _public(state:dict):
         'state':state.get('state'),'car_code':state.get('car_code'),'property_name':state.get('property_name'),
         'started_at_ms':state.get('started_at_ms'),'elapsed_ms':state.get('elapsed_ms'),
         'report_id':meta.get('report_id'),'bytes':meta.get('bytes'),'sha256':meta.get('sha256'),
-        'detail':state.get('detail'),'cached':state.get('state')=='ready'
+        'detail':state.get('detail'),'cached':state.get('state')=='ready',
+        # A failed lookup keeps its HTTP meaning in the job state: 404 not located, 503 pending (+ Retry-After).
+        'status_code':state.get('status_code'),'retry_after':state.get('retry_after'),
     }
 
 
@@ -63,7 +65,8 @@ def _prefer_name(current:str|None,new:str|None)->str:
 async def _worker(code:str,property_name:str,key:str):
     started=time.monotonic(); st=_CACHE.setdefault(key,{})
     property_name=_prefer_name(st.get('property_name'),property_name)
-    st.update(state='running',car_code=code,property_name=property_name,started_at_ms=int(time.time()*1000),ts=time.monotonic())
+    st.update(state='running',car_code=code,property_name=property_name,started_at_ms=int(time.time()*1000),ts=time.monotonic(),
+              detail=None,status_code=None,retry_after=None)
     print(f'RX_PDF_STAGE={code}:worker_start:name={property_name or "(auto)"}',flush=True)
     try:
         t0=time.monotonic()
@@ -75,6 +78,15 @@ async def _worker(code:str,property_name:str,key:str):
         print(f'RX_PDF_STAGE={code}:build_complete:{build_ms}ms',flush=True)
         print(f'RX_PDF_CACHE_READY={code}:{st["elapsed_ms"]}ms:{meta.get("bytes")}',flush=True)
         return result,meta
+    except HTTPException as e:
+        # The lookup answer (404 not located, 503 pending) reaches the viewer as it is: its own text, status
+        # and Retry-After, never "HTTPException:503: ...".
+        retry=(e.headers or {}).get('Retry-After')
+        st.update(state='failed',detail=e.detail if isinstance(e.detail,str) else 'Relatório não concluído agora.',
+                  status_code=e.status_code,retry_after=int(retry) if str(retry or '').isdigit() else None,
+                  elapsed_ms=round((time.monotonic()-started)*1000),ts=time.monotonic())
+        print(f'RX_PDF_CACHE_FAIL={code}:http_{e.status_code}',flush=True)
+        raise
     except Exception as e:
         st.update(state='failed',detail=f'{type(e).__name__}:{str(e)[:260]}',elapsed_ms=round((time.monotonic()-started)*1000),ts=time.monotonic())
         print(f'RX_PDF_CACHE_FAIL={code}:{st["detail"]}',flush=True)
@@ -95,6 +107,9 @@ def _ensure(code:str,property_name:str=''):
         print(f'RX_PDF_DEDUP_HIT={code}:existing_task',flush=True)
         return key,task
     _TASKS[key]=asyncio.create_task(_worker(code,property_name,key));task=_TASKS[key]
+    # A prepared job nobody awaits (the viewer polls /status) keeps its failure in the state; reading it here
+    # stops asyncio from logging "Task exception was never retrieved" with a traceback for every pending lookup.
+    task.add_done_callback(lambda t:t.cancelled() or t.exception())
     return key,task
 
 
@@ -128,6 +143,8 @@ async def report_meta_v21(car_code:str,property_name:str|None=None):
     key,task=_ensure(car_code,property_name or '')
     if task:
         try:result,meta=await task
+        # A lookup answer (404 not located, 503 pending) keeps its status and text.
+        except HTTPException:raise
         except Exception as e:raise HTTPException(status_code=502,detail=f'Falha ao gerar relatório: {type(e).__name__}')
     else:
         st=_CACHE[key];meta=st['meta'];result=await base._analyze_with_live_addons(car_code.upper())
@@ -140,6 +157,7 @@ async def report_pdf_v21(car_code:str,property_name:str|None=None):
     key,task=_ensure(car_code,property_name or '')
     if task:
         try:_,meta=await task
+        except HTTPException:raise
         except Exception as e:raise HTTPException(status_code=502,detail=f'Falha ao gerar relatório: {type(e).__name__}')
     else:meta=_CACHE[key]['meta']
     pdf=Path(str(meta.get('pdf_path') or ''))

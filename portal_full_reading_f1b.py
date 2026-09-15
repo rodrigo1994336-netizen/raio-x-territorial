@@ -75,8 +75,12 @@ FULL_READING_UI = r'''
  const ha=v=>{if(window.rxNum&&typeof window.rxNum.ha==='function')return window.rxNum.ha(v);return isNum(v)?v.toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2})+' ha':''};
  const plural=(n,one,many)=>`${int(n)} ${n===1?one:many}`;
  const YES='sim',NO='nao',PEND='pendente',LABEL={sim:'Sim',nao:'Não',pendente:'Consulta pendente'};
- const when=at=>{try{const d=new Date(at);return d.toLocaleDateString('pt-BR')+', '+d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})}catch(e){return ''}};
- const clock=at=>{try{return new Date(at).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})}catch(e){return ''}};
+ // Times of data (INPE bulletin, consultation) and of the next retry in Brasília time, the hour the PDF prints, whatever the
+ // device clock (MT, MS, RO and AM run one hour behind it, AC two); BRT_NOTE says so once per block. A browser without
+ // time zones falls back to its own clock and then says nothing about Brasília.
+ const TZ=(()=>{try{new Date(0).toLocaleTimeString('pt-BR',{timeZone:'America/Sao_Paulo'});return {timeZone:'America/Sao_Paulo'}}catch(e){return null}})(),BRT_NOTE=TZ?' (horário de Brasília)':'';
+ const when=at=>{try{const d=new Date(at),o=TZ||{};return d.toLocaleDateString('pt-BR',o)+', '+d.toLocaleTimeString('pt-BR',{...o,hour:'2-digit',minute:'2-digit'})}catch(e){return ''}};
+ const clock=at=>{try{return new Date(at).toLocaleTimeString('pt-BR',{...(TZ||{}),hour:'2-digit',minute:'2-digit'})}catch(e){return ''}};
  // INPE names each 10-minute bulletin by its time in UTC: focos_10min_YYYYMMDD_HHMM.csv
  function bulletin(name){const m=/focos_10min_(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})/.exec(String(name||''));if(!m)return null;const t=Date.UTC(+m[1],+m[2]-1,+m[3],+m[4],+m[5]);return isNum(t)?t:null}
  // Every year, never a cut list: up to five by name, more as a count with the first and the last.
@@ -119,7 +123,7 @@ FULL_READING_UI = r'''
    // An answer about fire is only an answer with the time of the bulletin it read.
    if(f.ok===true&&isNum(n)&&n>=0&&b!==null){const r=f.radius_km,near=f.near_count,m=/(\d+)\s+arquivos de 10 minutos/i.exec(String(f.window_note||''));
     const around=isNum(near)&&isNum(r)&&r>0?(near>0?`${plural(near,'foco','focos')} a até ${int(r)} km`:`nenhum foco a até ${int(r)} km`):'';
-    add('fire',q,n>0?YES:NO,[n>0?plural(n,'foco dentro do imóvel','focos dentro do imóvel'):'',around,`${m?int(Number(m[1]))+' boletins de 10 min do INPE':'boletins de 10 min do INPE'}, o mais recente de ${when(b)}`].filter(Boolean).join(' · '),src,true)}
+    add('fire',q,n>0?YES:NO,[n>0?plural(n,'foco dentro do imóvel','focos dentro do imóvel'):'',around,`${m?int(Number(m[1]))+' boletins de 10 min do INPE':'boletins de 10 min do INPE'}, o mais recente de ${when(b)}${BRT_NOTE}`].filter(Boolean).join(' · '),src,true)}
    else add('fire',q,PEND,'',src,true)}
   const w=a.water_mg;
   if(w&&typeof w==='object'&&!/outside_source_coverage/.test(String(w.detail||''))){const q='Há outorga de uso de água no imóvel?',src='IGAM e ANA — outorgas',n=w.inside_count;
@@ -146,7 +150,7 @@ FULL_READING_UI = r'''
   return `<div class="rx-f1b-row ${esc(r.answer)}" data-rx-f1b-row="${esc(r.id)}" data-answer="${esc(r.answer)}"><div class="rx-f1b-q">${esc(r.q)}</div><div class="rx-f1b-a ${esc(cls)}">${esc(LABEL[r.answer]||LABEL.pendente)}</div>${meta?`<div class="rx-f1b-d">${esc(meta)}</div>`:''}</div>`}
  function fillHtml(e){if(!pending(e))return '';const f=e.fill||{};
   if(f.state==='running')return '<div class="rx-f1b-fill" role="status" data-rx-f1b-filling><span><i class="rx-f1b-spin" aria-hidden="true"></i><span>Consultando de novo as fontes pendentes…</span></span></div>';
-  if(f.state==='scheduled'&&isNum(f.when))return `<div class="rx-f1b-fill" role="status" data-rx-f1b-fill-at><span>Nova tentativa das consultas pendentes às ${esc(clock(f.when))}.</span></div>`;
+  if(f.state==='scheduled'&&isNum(f.when))return `<div class="rx-f1b-fill" role="status" data-rx-f1b-fill-at><span>Nova tentativa das consultas pendentes às ${esc(clock(f.when)+BRT_NOTE)}.</span></div>`;
   return '<div class="rx-f1b-fill"><span>Há consultas pendentes.</span><button type="button" class="rx-f1b-retry" data-rx-f1b-fill>Consultar de novo</button></div>'}
  // Pure: state -> inner HTML of the section.
  function html(e){
@@ -155,7 +159,7 @@ FULL_READING_UI = r'''
   if(e.phase==='ready'&&Array.isArray(e.rows)&&e.rows.length){
    // The time the engine produced the data, never the time the browser received it; unknown -> not shown.
    const stamp=[isNum(e.at)?`Consulta feita em ${when(e.at)}`:'',isNum(e.refilled)?`pendências consultadas de novo em ${when(e.refilled)}`:''].filter(Boolean).join(' · ');
-   return head(stamp?`<span class="rx-f1b-when">${esc(stamp)}</span>`:'')+`<div class="rx-f1b-rows">${e.rows.map(rowHtml).join('')}</div>`+fillHtml(e)}
+   return head(stamp?`<span class="rx-f1b-when">${esc(stamp+BRT_NOTE)}</span>`:'')+`<div class="rx-f1b-rows">${e.rows.map(rowHtml).join('')}</div>`+fillHtml(e)}
   return head()+'<div class="rx-f1b-state" data-rx-f1b-pending="1"><span><span><strong>Consulta pendente.</strong> As fontes oficiais não responderam agora; nada foi presumido.</span></span><button type="button" class="rx-f1b-retry" data-rx-f1b-retry>Consultar de novo</button></div>';
  }
 

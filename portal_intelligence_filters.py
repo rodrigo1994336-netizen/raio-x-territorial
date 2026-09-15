@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from fastapi import HTTPException
 
 import portal_v8
 from map_mineral_routes import register_map_mineral_routes
 from agropecuaria import build_agro_profile
 from report_api import _analyze_with_live_addons
+from sicar_lookup_http import lookup_http_error
 
 app=portal_v8.app
 register_map_mineral_routes(app)
@@ -16,7 +16,7 @@ async def live_agropecuaria(car_code:str):
     result=await _analyze_with_live_addons(car_code.upper())
     car=result.get('car') or {}
     if not car.get('ok'):
-        raise HTTPException(status_code=404 if car.get('not_found') else 502,detail='CAR não localizado ou fonte indisponível')
+        raise lookup_http_error(car)
     return await build_agro_profile(result,car_code.upper())
 
 

@@ -62,7 +62,8 @@ _BASE_RE = re.compile(
     r"^https://[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+(?::\d{2,5})?$"
 )
 # car_resilient.fetch_car_live_resilient strategies that query the exact code. One of them
-# returning JSON is SICAR answering; the municipality scan pages are not (they can stop early).
+# answering with features: 0 is SICAR saying "not here"; the municipality scan pages are not
+# (they can stop early).
 EXACT_STRATEGIES = ("wfs1_equal", "wfs1_in", "wfs2_equal", "wfs1_like_exact", "wfs1_ogc_filter")
 SLOW_MS = 8000
 DEADLINE_MS = 70000
@@ -162,9 +163,10 @@ UI = r'''
  function say(text,kind,retry,onClose){let el=document.getElementById('rxShareStateW1a');if(!text){clearTimeout(sayTimer);onSayClose=null;if(el)el.hidden=true;return}if(!el){el=document.createElement('div');el.id='rxShareStateW1a';el.className='rx-share-state';el.setAttribute('role','status');el.setAttribute('aria-live','polite');const t=document.createElement('span');t.className='rx-share-state-text';const b=document.createElement('button');b.type='button';b.className='rx-share-state-retry';b.textContent='Tentar de novo';const x=document.createElement('button');x.type='button';x.className='rx-share-state-x';x.setAttribute('aria-label','Fechar aviso');x.textContent='×';x.addEventListener('click',()=>{const f=onSayClose;onSayClose=null;clearTimeout(sayTimer);el.hidden=true;if(f)f()});el.append(t,b,x);document.body.appendChild(el)}el.dataset.kind=kind||'info';el.querySelector('.rx-share-state-text').textContent=text;const b=el.querySelector('.rx-share-state-retry');b.hidden=!retry;b.onclick=retry?()=>retry():null;el.querySelector('.rx-share-state-x').hidden=false;el.hidden=false;onSayClose=onClose||null;clearTimeout(sayTimer);if(kind==='info')sayTimer=setTimeout(()=>{el.hidden=true;onSayClose=null},9000)}
  function cancelLink(){linkSeq++;pendingCode='';const ctl=linkCtl;linkCtl=null;if(ctl){try{ctl.abort()}catch(e){}}}
  async function lookup(code,ms){const ctl=new AbortController();linkCtl=ctl;const timer=setTimeout(()=>{try{ctl.abort()}catch(e){}},Math.max(0,ms));try{const r=await fetch(`/v1/live/car/${encodeURIComponent(code)}`,{cache:'no-store',signal:ctl.signal});const d=await r.json().catch(()=>null);return {r,d}}catch(e){return {r:null,d:null}}finally{clearTimeout(timer);if(linkCtl===ctl)linkCtl=null}}
- // "Não encontramos" only when SICAR answered the exact query: a 404 whose attempts all failed is
- // the server giving up, which is a pending consultation (tentar não é responder).
- function sicarSaidNotFound(r,d){const c=r&&r.status===404&&d&&d.detail&&d.detail.car;if(!c||c.not_found!==true)return false;if(c.detail==='invalid_car_format')return true;return Array.isArray(c.attempts)&&c.attempts.some(a=>!!a&&a.ok===true&&EXACT.has(a.strategy))}
+ // "Não encontramos" only when SICAR answered the exact query with NO feature: a 404 whose attempts all
+ // failed is the server giving up, and features for another property mean the filter was ignored; both
+ // are a pending consultation (tentar não é responder). An impossible code is 422 (SICAR never asked).
+ function sicarSaidNotFound(r,d){const c=r&&(r.status===404||r.status===422)&&d&&d.detail&&d.detail.car;if(!c||c.not_found!==true)return false;if(c.detail==='invalid_car_format')return true;if(r.status!==404||!Array.isArray(c.attempts))return false;const ex=c.attempts.filter(a=>!!a&&EXACT.has(a.strategy));return ex.some(a=>a.ok===true&&a.features===0)&&!ex.some(a=>Number(a.features)>0)}
  async function openFromLink(code){cancelLink();const my=++linkSeq,t0=Date.now();pendingCode=code;
   const stop=()=>{if(my!==linkSeq)return;cancelLink();setCar('')};
   say(MSG.busy,'busy',null,stop);

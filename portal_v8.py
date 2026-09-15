@@ -12,6 +12,7 @@ import portal_api as base
 from critical_minerals import query_critical_minerals
 from premium_integrations import status as premium_status
 from report_api import _analyze_with_live_addons
+from sicar_lookup_http import lookup_http_error
 from whatsapp_gateway import register_routes as register_whatsapp_routes
 from monitoring_routes import register_monitoring_routes
 import monitoring_store
@@ -138,7 +139,7 @@ async def live_critical_minerals(car_code: str):
     result=await _analyze_with_live_addons(car_code.upper())
     car=result.get('car') or {}
     if not car.get('ok'):
-        raise HTTPException(status_code=404 if car.get('not_found') else 502,detail='CAR não localizado ou fonte indisponível')
+        raise lookup_http_error(car)
     return await query_critical_minerals(car.get('geometry'),result.get('anm'))
 
 

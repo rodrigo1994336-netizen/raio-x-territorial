@@ -18,7 +18,20 @@ import re
 from datetime import datetime, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal
 
-BRT = timezone(timedelta(hours=-3))
+# Brasília time from the tz database (America/Sao_Paulo), the same zone the screen uses: if daylight
+# saving time comes back, PDF and screen change together. Without a tz database (Windows without the
+# tzdata package) it falls back to UTC-3, correct since Decreto 9.772/2019, and says so in the log.
+try:
+    from zoneinfo import ZoneInfo
+
+    BRT = ZoneInfo("America/Sao_Paulo")
+    BRT_SOURCE = "tzdb"
+except Exception:  # ZoneInfoNotFoundError or no zoneinfo module
+    BRT = timezone(timedelta(hours=-3))
+    BRT_SOURCE = "fixed_utc-3"
+print(f"RX_REPORT_BRT_ZONE={BRT_SOURCE}", flush=True)
+# Said once per text block next to the first time converted to Brasília (screen does the same).
+BRT_NOTE = " (horário de Brasília)"
 
 _UNITS = (
     r"ha|%|mm/dia|mm|m³/h|cmol\(c\)/kg|g/kg|°C|°|km|m|t|cabeças|"
@@ -134,6 +147,25 @@ def _iso_dt(m: re.Match) -> str:
         return m.group(0)
 
 
+def _inpe_bulletin(m: re.Match) -> str:
+    # INPE names each 10-minute fire file by its time in UTC; the client reads Brasília time.
+    y, mo, d, hh, mi = (int(x) for x in m.groups())
+    try:
+        local = datetime(y, mo, d, hh, mi, tzinfo=timezone.utc).astimezone(BRT)
+    except ValueError:
+        return m.group(0)
+    return f"arquivo de 10 minutos de {local.strftime('%d/%m/%Y %H:%M')}"
+
+
+def _zone_note(text: str, m: re.Match, zone: dict | None) -> str:
+    # The first time of a block converted to Brasília says which clock it is, once: MT, MS, RO and AM
+    # read one hour behind it, AC two. A time left as it was (not a real time) gets no note.
+    if zone is None or zone.get("noted") or text == m.group(0):
+        return text
+    zone["noted"] = True
+    return text + BRT_NOTE
+
+
 def _iso_d(m: re.Match) -> str:
     y, mo, d = m.groups()
     try:
@@ -149,7 +181,7 @@ _LICENSE_VERSION = re.compile(r"\bCC[ -]BY(?:[ -](?:SA|NC|ND))*[ -]\d+\.\d+")
 _KEPT = re.compile(r"(\d+)")
 
 
-def _normalize_segment(out: str) -> str:
+def _normalize_segment(out: str, zone: dict | None = None) -> str:
     out = _OFF.sub("", out)
     out = out.replace("INTEGRAÇÃO PREPARADA", "NÃO ATIVADA NESTA VERSÃO").replace("INTEGRAÇÃO RESTRITA", "NÃO ATIVADA NESTA VERSÃO")
     out = re.sub(r"\bClimatologia (JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\b", lambda m: "Climatologia " + _MONTHS[m.group(1)], out)
@@ -158,8 +190,8 @@ def _normalize_segment(out: str) -> str:
     out = re.sub(r"IDE-Sisema(?:[;,]\s*IDE-Sisema)+", "IDE-Sisema", _IDE_LAYER.sub("IDE-Sisema", out))
     for old, new in _PHRASES.items():
         out = out.replace(old, new)
-    out = _INPE_FILE.sub(lambda m: f"arquivo de 10 minutos de {m.group(3)}/{m.group(2)}/{m.group(1)} {m.group(4)}:{m.group(5)}", out)
-    out = _ISO_DT.sub(_iso_dt, out)
+    out = _INPE_FILE.sub(lambda m: _zone_note(_inpe_bulletin(m), m, zone), out)
+    out = _ISO_DT.sub(lambda m: _zone_note(_iso_dt(m), m, zone), out)
     out = _ISO_D.sub(_iso_d, out)
     out = _COMPACT_D.sub(lambda m: _iso_d(m) if 1 <= int(m.group(2)) <= 12 and 1 <= int(m.group(3)) <= 31 else m.group(0), out)
     kept: list[str] = []
@@ -193,7 +225,8 @@ def normalize_text(text):
         tech = _TECH_TAIL.search(out)
         if tech:
             out = _drop_tail(out, tech.start(), ".")
-    return "".join(part if part.startswith("<") and part.endswith(">") else _normalize_segment(part) for part in _TAG.split(out))
+    zone = {"noted": BRT_NOTE.strip() in out}
+    return "".join(part if part.startswith("<") and part.endswith(">") else _normalize_segment(part, zone) for part in _TAG.split(out))
 
 
 _PENDING_TEXT = "Esta consulta não pôde ser confirmada nesta emissão. Isso não é tratado como ausência de ocorrência; a consulta é refeita na próxima emissão."

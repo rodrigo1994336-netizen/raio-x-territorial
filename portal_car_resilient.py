@@ -6,6 +6,7 @@ from fastapi import HTTPException, Request
 
 import portal_v8
 from car_resilient import fetch_car_live_resilient
+from sicar_lookup_http import lookup_http_error
 from external_process_lifecycle import ManagedOperationTimeout, RequestDisconnected, install_shutdown_cleanup, run_sync_with_request_lifecycle
 
 app=portal_v8.app
@@ -20,7 +21,9 @@ async def live_car_resilient(car_code:str, request:Request):
     except ManagedOperationTimeout:
         raise HTTPException(status_code=504,detail='sicar_lookup_timeout')
     if not car.get('ok'):
-        raise HTTPException(status_code=404 if car.get('not_found') else 502,detail={
+        # Same body for every answer (422 invalid code, 404 not located, 503 pending): the link reader (W1a)
+        # checks detail.car and the exact attempts itself.
+        body={
             'car':{
                 'ok':False,
                 'source':car.get('source'),
@@ -28,7 +31,8 @@ async def live_car_resilient(car_code:str, request:Request):
                 'detail':car.get('detail'),
                 'attempts':car.get('attempts') or [],
             }
-        })
+        }
+        raise lookup_http_error(car,not_found_detail=body,pending_detail=body,invalid_detail=body)
     # Lookup endpoint is intentionally light and fast. The deep analysis is started
     # separately after the property has been located.
     return {'car':car,'lookup_mode':'resilient_multi_strategy'}

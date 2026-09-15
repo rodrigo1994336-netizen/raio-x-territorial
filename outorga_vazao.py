@@ -30,7 +30,7 @@ from __future__ import annotations
 import math
 import os
 import re
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -419,9 +419,17 @@ def _authority(item: dict[str, Any], props: dict[str, Any]) -> str | None:
     return label.split(" - ")[0].split(" — ")[0].strip() or None
 
 
+def today_brasilia() -> date:
+    """Hoje no horário de Brasília. O servidor roda em UTC: das 21h à meia-noite o date.today() dele já é
+    amanhã, e uma outorga que vence hoje sairia como vencida três horas antes."""
+    from report_ptbr_v50 import BRT
+
+    return datetime.now(BRT).date()
+
+
 def grant_view(item: dict[str, Any], today: date | None = None, layer_unit: str | None = None) -> dict[str, Any]:
     """Uma outorga pronta para o cliente. ``layer_unit`` só para camadas da ANA CNARH com unidade provada."""
-    today = today or date.today()
+    today = today or today_brasilia()
     props = item.get("properties") or {}
     authority = _authority(item, props)
     phrase = None
@@ -655,7 +663,7 @@ def water_grants_payload(
     · ``pending`` (fonte não respondeu; nada é afirmado) · ``not_covered``
     (imóvel fora de MG sem a camada nacional: a seção não aparece).
     """
-    today = today or date.today()
+    today = today or today_brasilia()
     uf_norm = str(uf or "").strip().upper() or None
     title = "Outorgas de água dentro do imóvel"
     ana_ok = bool(ana and ana.get("ok"))

@@ -135,10 +135,15 @@ def fetch_car_live(car_code:str):
     q={'service':'WFS','version':'1.0.0','request':'GetFeature','typeName':tn,'outputFormat':'application/json','CQL_FILTER':f"cod_imovel IN ('{car_code}')"}
     r=_curl(SICAR+'?'+urlencode(q),True)
     if not r.get('ok'):return {'ok':False,'source':'SICAR',**{k:r.get(k) for k in ('detail','preview','bytes')}}
-    fs=r['json'].get('features') or []
+    fs=r['json'].get('features') if isinstance(r.get('json'),dict) else None
+    # Only a FeatureCollection is SICAR answering: an exception document is a failed lookup, not absence.
+    if not isinstance(fs,list):return {'ok':False,'source':'SICAR','detail':'sicar_answer_without_features','bytes':r.get('bytes')}
     if not fs:return {'ok':False,'source':'SICAR','not_found':True,'feature_count':0}
-    f=fs[0]
-    return {'ok':True,'source':'SICAR','feature_count':len(fs),'properties':f.get('properties') or {},'geometry':f.get('geometry'),'bbox':_bbox(f.get('geometry')),'bytes':r.get('bytes',0)}
+    # Only this property: features for another code mean the filter was ignored (or a proxy answered), never this CAR.
+    exact=[f for f in fs if isinstance(f,dict) and str((f.get('properties') or {}).get('cod_imovel') or '').strip().upper()==str(car_code or '').strip().upper()]
+    if not exact:return {'ok':False,'source':'SICAR','detail':'sicar_answer_other_property','bytes':r.get('bytes')}
+    f=exact[0]
+    return {'ok':True,'source':'SICAR','feature_count':len(exact),'properties':f.get('properties') or {},'geometry':f.get('geometry'),'bbox':_bbox(f.get('geometry')),'bytes':r.get('bytes',0)}
 
 async def arcgis_bbox(url,bbox,out_fields='*',in_sr='4674',out_sr='4674',f='geojson'):
     env=','.join(str(x) for x in bbox)
