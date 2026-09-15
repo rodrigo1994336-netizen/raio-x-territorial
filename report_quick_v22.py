@@ -8,6 +8,7 @@ from fastapi import HTTPException
 import report_api as base
 import report_v9_patch as prog
 from car_resilient import fetch_car_live_resilient
+from external_process_lifecycle import wait_for_cancelling_processes
 from sicar_lookup_http import lookup_http_error
 
 app=base.app
@@ -33,7 +34,7 @@ async def quick_analysis_v24(car_code:str,deep:bool=False):
     cached=prog._quick_get(code)
     if cached is None:
         try:
-            car=await asyncio.wait_for(asyncio.to_thread(fetch_car_live_resilient,code),timeout=6)
+            car=await wait_for_cancelling_processes(asyncio.to_thread(fetch_car_live_resilient,code),6)
         except asyncio.TimeoutError:
             raise HTTPException(status_code=504,detail='SICAR demorou além de 6 segundos para confirmar o imóvel.')
         if not car.get('ok'):

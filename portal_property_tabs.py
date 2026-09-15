@@ -6,6 +6,7 @@ import time
 
 import portal_v8
 import report_api as report_base
+from external_process_lifecycle import wait_for_cancelling_processes
 from car_resilient import fetch_car_live_resilient
 from sicar_lookup_http import lookup_http_error
 from climate_nasa import query_climate_nasa, query_climatology_nasa, build_drought_screening
@@ -46,7 +47,7 @@ async def crop_context(car_code:str):
 @app.get('/v1/live/embargos-detail/{car_code}')
 async def embargos_detail(car_code:str):
     code=car_code.upper()
-    try:result=await asyncio.wait_for(report_base.analyze_car(code),timeout=18)
+    try:result=await wait_for_cancelling_processes(report_base.analyze_car(code),18)
     except asyncio.TimeoutError:result={'car':await _car(code)}
     car=result.get('car') or {}
     # 404 only when SICAR answered without the property; a lookup that failed is a pending consultation.

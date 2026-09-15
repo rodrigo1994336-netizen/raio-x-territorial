@@ -30,6 +30,15 @@ from sicar_lookup_http import lookup_http_error
 APP_VERSION='0.18.6-memory-hardened'
 app = FastAPI(title='Raio-X Territorial Report API', version=APP_VERSION)
 
+# M1: este app é o servido pelos dois serviços (o portal importa daqui). Linha RX_PROC_STATS no log no
+# arranque e a cada RX_PROC_STATS_MIN minutos, rota GET /v1/diag/processos; e, no desligamento, os
+# processos externos gerenciados param (antes só o app de deploy_app, que não é servido, tinha isso).
+import external_process_lifecycle as _process_lifecycle  # noqa: E402
+import rx_proc_stats as _proc_stats  # noqa: E402
+
+_process_lifecycle.install_shutdown_cleanup(app)
+_proc_stats.install(app)
+
 # Heavy live-analysis objects can contain many GeoJSON features/geometries. Keep the
 # cache deliberately tiny on Render's 512 MB instances and never deepcopy them.
 CACHE_TTL_SECONDS=int(os.getenv('RX_CACHE_TTL_SECONDS','180'))

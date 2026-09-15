@@ -328,7 +328,8 @@ jobs:
           assert 'async def _read4' in sent and 'items[:2]' in sent and "'GDAL_HTTP_TIMEOUT':'9'" in sent
           assert 'httpx.Timeout(12,connect=5)' in hi
           assert 'ThreadPoolExecutor' in car and 'CAP_TTL=21600' in car and "'share_pct'" in car
-          assert 'asyncio.wait_for' in extras and "_timed('visual_hybrid'" in extras and ',34)' in extras
+          # M1: o slot usa o prazo que também derruba o curl gerenciado da thread abandonada (scripts/m1_processos_gate.py).
+          assert 'wait_for_cancelling_processes(coro,timeout_s)' in extras and "_timed('visual_hybrid'" in extras and ',34)' in extras
           assert "car['environmental_composition']" in adapter and 'passivo/excedente legal' in adapter
           # F2: the PRODES report rows come from the single reading; the rule itself is proven by
           # scripts/f2_prodes_leitura_gate.py (step above), never by legacy strings kept alive in code.
@@ -399,3 +400,20 @@ jobs:
         env:
           RX_RELEASE: OFF
         run: PYTHONPATH=. python scripts/o2_tela_nova_browser_gate.py
+
+  m1-processos-linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install gate dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install fastapi httpx shapely pyproj pillow reportlab uvicorn "psycopg[binary]" "redis>=5,<7" "numpy>=2,<3" "rasterio>=1.4,<2" "PyJWT[crypto]>=2.10,<3" "pypdf>=4,<7"
+      - name: M1 processos pendurados gate (Linux /proc - consulta abandonada, prazo do servidor, desligamento e slots do relatório com curl travado não deixam filho vivo nem pipe aberto; wait_for puro sobre cadeia com processo reprova; todo subprocess com timeout; RX_PROC_STATS e /v1/diag/processos com números conferidos por provas independentes, "indisponivel" sem /proc, sem dado sensível, limite de taxa; controles positivos por mutação no arquivo)
+        env:
+          RX_RELEASE: OFF
+        run: python scripts/m1_processos_gate.py --exigir-linux

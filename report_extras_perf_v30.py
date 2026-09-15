@@ -9,12 +9,14 @@ import live_report_adapter_v17 as v17
 import report_visual_identity_v28 as identity_v28
 from visual_hybrid import build_hybrid_property_imagery
 from sicar_detail_sources_v2 import query_sicar_details_v2
+from external_process_lifecycle import wait_for_cancelling_processes
 
 
 async def _timed(label:str,coro,timeout_s:float):
     t0=time.monotonic()
     try:
-        value=await asyncio.wait_for(coro,timeout=timeout_s)
+        # M1: o prazo que estoura também derruba o curl gerenciado da thread abandonada
+        value=await wait_for_cancelling_processes(coro,timeout_s)
         ok=isinstance(value,dict) and bool(value.get('ok'))
         print(f'RX_EXTRA_STAGE={label}:{round((time.monotonic()-t0)*1000)}ms:ok={ok}',flush=True)
         return value

@@ -6,6 +6,7 @@ from collections import OrderedDict
 from datetime import datetime, timezone
 
 import report_api as base
+from external_process_lifecycle import wait_for_cancelling_processes
 from live_report_adapter_v9 import generate_live_report as generate_live_report_v9
 
 app=base.app
@@ -113,7 +114,7 @@ async def quick_analysis(car_code:str):
             # Core sources are CAR/SIGEF/IBAMA/ANM/PRODES. The deep state (fire,
             # territorial constraints, water, pivots, climate, SGB and IDE layers)
             # is deliberately not awaited here.
-            result=await asyncio.wait_for(base.analyze_car(code),timeout=15)
+            result=await wait_for_cancelling_processes(base.analyze_car(code),15)
         except asyncio.TimeoutError:
             # CAR alone is still useful for an immediate acknowledgement.
             car=await asyncio.to_thread(base.fetch_car_live,code)
