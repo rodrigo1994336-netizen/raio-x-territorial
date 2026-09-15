@@ -21,7 +21,8 @@ async def live_car_resilient(car_code:str, request:Request):
     except ManagedOperationTimeout:
         raise HTTPException(status_code=504,detail='sicar_lookup_timeout')
     if not car.get('ok'):
-        # Same body for both: the link reader (W1a) checks detail.car and the exact attempts itself.
+        # Same body for every answer (422 invalid code, 404 not located, 503 pending): the link reader (W1a)
+        # checks detail.car and the exact attempts itself.
         body={
             'car':{
                 'ok':False,
@@ -31,7 +32,7 @@ async def live_car_resilient(car_code:str, request:Request):
                 'attempts':car.get('attempts') or [],
             }
         }
-        raise lookup_http_error(car,not_found_detail=body,pending_detail=body)
+        raise lookup_http_error(car,not_found_detail=body,pending_detail=body,invalid_detail=body)
     # Lookup endpoint is intentionally light and fast. The deep analysis is started
     # separately after the property has been located.
     return {'car':car,'lookup_mode':'resilient_multi_strategy'}

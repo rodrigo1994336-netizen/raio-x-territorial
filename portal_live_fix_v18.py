@@ -3,12 +3,12 @@ from __future__ import annotations
 import asyncio
 import os
 import httpx
-from fastapi import HTTPException
 
 import portal_v8
 from critical_minerals import query_critical_minerals
 from agropecuaria import build_agro_profile
 from car_resilient import fetch_car_live_resilient
+from sicar_lookup_http import lookup_http_error
 from anm_resilient import query_anm_curl_exact
 
 app=portal_v8.app
@@ -20,7 +20,7 @@ app.router.routes=[r for r in app.router.routes if getattr(r,'path',None) not in
 async def _car(code:str):
     car=await asyncio.to_thread(fetch_car_live_resilient,code.upper())
     if not car.get('ok'):
-        raise HTTPException(status_code=404 if car.get('not_found') else 502,detail='CAR não localizado ou SICAR indisponível')
+        raise lookup_http_error(car)
     return car
 
 @app.get('/v1/live/critical-minerals/{car_code}')

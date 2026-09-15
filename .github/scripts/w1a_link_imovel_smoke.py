@@ -60,7 +60,7 @@ def car_body(code: str, answer_code: str | None = None) -> dict:
 
 
 def not_found_body(answered: bool) -> dict:
-    attempts = [{"strategy": s, "ok": answered, "bytes": 147 if answered else 0, "detail": None if answered else "curl: (28) timeout"} for s in EXACT]
+    attempts = [{"strategy": s, "ok": answered, "bytes": 147 if answered else 0, "detail": None if answered else "curl: (28) timeout", "features": 0 if answered else None} for s in EXACT]
     return {"detail": {"car": {"ok": False, "source": "SICAR", "not_found": True, "detail": "CAR não localizado", "attempts": attempts}}}
 
 

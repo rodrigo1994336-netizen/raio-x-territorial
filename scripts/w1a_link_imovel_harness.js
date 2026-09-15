@@ -86,8 +86,8 @@ function carBody(code, answer) {
   return { car: { ok: true, source: 'SICAR', properties: { cod_imovel: answer || code, status_imovel: 'AT', area: 14.795, condicao: 'Aguardando análise', uf: 'MG', municipio: 'Curvelo', m_fiscal: 0.37, tipo_imovel: 'IRU' }, geometry: { type: 'Point', coordinates: [-44.18, -18.89] } } };
 }
 function notFoundBody(answered) {
-  const attempts = K.exact.map(s => ({ strategy: s, ok: answered, bytes: answered ? 147 : 0, detail: answered ? null : 'curl: (28) Operation timed out' }))
-    .concat([{ strategy: 'municipality_codes_0', ok: false, bytes: 0, detail: 'curl: (28) Operation timed out' }]);
+  const attempts = K.exact.map(s => ({ strategy: s, ok: answered, bytes: answered ? 147 : 0, detail: answered ? null : 'curl: (28) Operation timed out', features: answered ? 0 : null }))
+    .concat([{ strategy: 'municipality_codes_0', ok: false, bytes: 0, detail: 'curl: (28) Operation timed out', features: null }]);
   return { detail: { car: { ok: false, source: 'SICAR', not_found: true, detail: 'CAR não localizado após múltiplas estratégias de consulta SICAR.', attempts } } };
 }
 

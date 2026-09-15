@@ -3,11 +3,11 @@ from __future__ import annotations
 import asyncio
 import time
 
-from fastapi import HTTPException
 
 import portal_v8
 import report_api as report_base
 from car_resilient import fetch_car_live_resilient
+from sicar_lookup_http import lookup_http_error
 from climate_nasa import query_climate_nasa, query_climatology_nasa, build_drought_screening
 from groundwater_siagas import query_groundwater
 from safras_ibge import query_safras
@@ -18,7 +18,7 @@ app=portal_v8.app
 async def _car(code:str):
     car=await asyncio.to_thread(fetch_car_live_resilient,code.upper())
     if not car.get('ok'):
-        raise HTTPException(status_code=404 if car.get('not_found') else 502,detail='CAR não localizado ou SICAR indisponível')
+        raise lookup_http_error(car)
     return car
 
 
@@ -47,7 +47,8 @@ async def embargos_detail(car_code:str):
     try:result=await asyncio.wait_for(report_base.analyze_car(code),timeout=18)
     except asyncio.TimeoutError:result={'car':await _car(code)}
     car=result.get('car') or {}
-    if not car.get('ok'):raise HTTPException(status_code=404 if car.get('not_found') else 502,detail='Imóvel não localizado')
+    # 404 only when SICAR answered without the property; a lookup that failed is a pending consultation.
+    if not car.get('ok'):raise lookup_http_error(car)
     ib=result.get('embargos_ibama') or {};exact=ib.get('exact') or {}
     # H1: a count exists only for a complete answer from the live official layer.
     answered=ib.get('ok') is True and isinstance(exact,dict)
