@@ -53,7 +53,7 @@ jobs:
         env:
           RX_RELEASE: OFF
         run: PYTHONPATH=. python scripts/f2_incra_sigef_snci_gate.py
-      - name: Ponte no Brasil gate (token, host list, IP literal, userinfo, port, redirect, private DNS, body/method limits, slot release, slow client, connection cap, per-host TLS, client routing on/off identical, bridge URL never leaks, window rule, real curl; positive controls incl. code mutations)
+      - name: Ponte no Brasil gate (token, host list, IP literal, userinfo, port, redirect, private DNS, body/method limits, slot release, slow client, connection cap, per-host TLS, client routing on/off identical, bridge URL never leaks, window rule, real curl; bridge closed by Google IAM - service account key parse, RS256 pure Python byte-identical to cryptography, ID token cache and bounded wait, credential failure is pending never unauthenticated call, Cloud Shell check script, hourly egress cap, first ID token at boot, owner guide bash blocks run with fake gcloud/git/python3 - project lock never touches another project, --project on every call, role/resource/member of each grant, runtime account without roles, key umask, check before deleting keys, new-token notice, reviewed code pin; positive controls incl. code and guide mutations)
         env:
           RX_RELEASE: OFF
         run: PYTHONPATH=. python scripts/ponte_brasil_gate.py

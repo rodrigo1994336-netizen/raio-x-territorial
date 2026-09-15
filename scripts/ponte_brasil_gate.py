@@ -13,6 +13,17 @@ injetados que levam os hosts oficiais a uma fonte falsa local, e confere:
      direto e usa a ponte só com prazo, janela, cancelamento, tempo total que não cresce; curl
      real lendo os cabeçalhos pela entrada padrão; lista de hosts igual nos dois lados e igual
      aos hosts que o código chama;
+  I  ponte fechada pelo Google (15/09/2026): chave da conta de serviço (JSON ou base64) lida e conferida,
+     chave inválida desliga a ponte (nunca meio ligada), assinatura RS256 em Python puro idêntica byte a
+     byte à da biblioteca cryptography e verificada pela chave pública, JWT com target_audience, token de
+     identidade no cabeçalho X-Serverless-Authorization só pela entrada padrão, cache (uma troca por hora),
+     espera limitada ao prazo da consulta, falha da credencial vira consulta pendente (nunca chamada sem
+     credencial), log e resultado sem chave/token; conferência do Cloud Shell (scripts/ponte_brasil_conferir.py);
+  G  guia (docs/PONTE_BRASIL_ATIVACAO.md): blocos bash com sintaxe válida, ponte fechada, PAROU em falha,
+     segredo nunca impresso fora da caixa do Render; CODIGO_REVISADO igual aos hashes do git do código; cada
+     bloco rodado como o dono cola, com gcloud/git/python3/openssl/cloudshell falsos: trava de projeto (AFP,
+     outro, Firebase, nenhum), --project em toda chamada, papel/recurso/membro de cada permissão, publicação
+     fechada com conta sem papel, umask 077 na chave, conferência antes de apagar chaves, aviso de token novo;
   M  controles positivos: cada trava desligada por mutação faz a verificação dela falhar.
 
 Uso: PYTHONPATH=. python scripts/ponte_brasil_gate.py
@@ -20,7 +31,9 @@ Uso: PYTHONPATH=. python scripts/ponte_brasil_gate.py
 from __future__ import annotations
 
 import ast
+import base64
 import contextlib
+import hashlib
 import http.client
 import importlib.util
 import io
@@ -31,9 +44,11 @@ import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import types
+import urllib.error
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest import mock
@@ -295,7 +310,10 @@ def s_health_and_paths():
         refused(e.call(path="/qualquer", token=TOKEN), 404, "not_found")
         refused(e.call(path="/healthz", token=TOKEN), 404, "not_found")
     doc = (ROOT / "docs" / "PONTE_BRASIL_ATIVACAO.md").read_text(encoding="utf-8")
-    assert f'"$URL{health}"' in doc and "healthz" not in doc, "guia fora do caminho de saúde da ponte"
+    assert f"{{URL}}{health}" in doc and "healthz" not in doc, "guia fora do caminho de saúde da ponte"
+    # a conferência do Cloud Shell (que o guia manda rodar) bate no mesmo caminho
+    conferir = (ROOT / "scripts" / "ponte_brasil_conferir.py").read_text(encoding="utf-8")
+    assert f'"{health}"' in conferir and "healthz" not in conferir, "conferência fora do caminho de saúde da ponte"
 
 
 def s_scheme():
@@ -606,6 +624,7 @@ def s_headers():
     with PonteEnv() as e:
         st, hdrs, body = e.call(url="https://geoserver.car.gov.br/echo", headers={
             "Cookie": "sessao=cliente", "Authorization": "Bearer cliente", "X-Forwarded-For": "1.2.3.4",
+            "X-Serverless-Authorization": "Bearer identidade.do.google",
             "Referer": "https://raioxterritorial.com.br/", "Origin": "https://raioxterritorial.com.br",
             "Accept": "application/json", "User-Agent": "Raio-X-Territorial/gate"})
         seen = json.loads(body)["headers"]
@@ -614,7 +633,7 @@ def s_headers():
         assert set(seen) <= allowed, ("cabeçalho do cliente chegou à fonte", sorted(set(seen) - allowed))
         assert seen["user-agent"] == "Raio-X-Territorial/gate" and seen["accept"] == "application/json"
         assert seen["host"].split(":")[0] == "geoserver.car.gov.br" and seen["accept-encoding"] == "identity"
-        assert all(TOKEN not in v for v in seen.values()), "token repassado à fonte"
+        assert all(TOKEN not in v and "identidade" not in v for v in seen.values()), "token repassado à fonte"
         st, hdrs, _ = e.call(url="https://geoserver.car.gov.br/ok")
         assert st == 200 and "set-cookie" not in hdrs and "x-interno" not in hdrs, hdrs
         assert hdrs.get("content-type") == "application/json", hdrs
@@ -629,6 +648,25 @@ def s_rate_limit():
         refused(e.call(token=WRONG), 401, "unauthorized")
         refused(e.call(token=WRONG), 429, "rate_limited")
     assert (ponte.RATE_PER_S, ponte.RATE_BURST, ponte.UNAUTH_RATE_PER_S, ponte.UNAUTH_BURST) == (20.0, 40, 5.0, 10)
+
+
+def s_egress_budget():
+    """Teto de saída: no máximo EGRESS_BYTES_PER_HOUR de corpo devolvido por hora (balde); acima, 429 egress_budget."""
+    clock = FakeClock()
+    body_len = len(b'{"features": [], "marca": "RESPOSTA-OK"}')
+    with PonteEnv(egress=ponte.EgressBudget(2 * body_len, clock=clock)) as e:
+        assert e.call()[0] == 200 and e.call()[0] == 200
+        refused(e.call(), 429, "egress_budget")
+        assert '"error": "egress_budget"' in e.log.getvalue(), e.log.getvalue()[-300:]
+        clock.t += 1900.0          # pouco mais de meia hora devolve um corpo
+        assert e.call()[0] == 200
+        refused(e.call(), 429, "egress_budget")
+        clock.t += 36000.0         # dez horas não passam do tamanho do balde (dois corpos)
+        assert e.call()[0] == 200 and e.call()[0] == 200
+        refused(e.call(), 429, "egress_budget")
+        assert e.svc.budget.used == 0, ("memória não liberada na recusa", e.svc.budget.used)
+    assert ponte.EGRESS_BYTES_PER_HOUR == 1024 ** 3, ("teto de saída de produção mudou", ponte.EGRESS_BYTES_PER_HOUR)
+    assert ponte.Service().egress.capacity == float(ponte.EGRESS_BYTES_PER_HOUR), "Service sem o teto de produção"
 
 
 def s_log_hygiene():
@@ -709,7 +747,7 @@ class FakeClock:
 
 @contextlib.contextmanager
 def ponte_env(values):
-    keys = (br_bridge.ENV_URL, br_bridge.ENV_TOKEN)
+    keys = (br_bridge.ENV_URL, br_bridge.ENV_TOKEN, br_bridge.ENV_KEY)
     saved = {k: os.environ.get(k) for k in keys}
     try:
         for k in keys:
@@ -772,6 +810,9 @@ OFF_ENVS = (
     {br_bridge.ENV_URL: BRIDGE_BASE, br_bridge.ENV_TOKEN: "curto"},
     {br_bridge.ENV_URL: BRIDGE_BASE, br_bridge.ENV_TOKEN: TOKEN[:20] + " " + TOKEN[20:]},
     {br_bridge.ENV_URL: "https://user@ponte-gate.a.run.app", br_bridge.ENV_TOKEN: TOKEN},
+    {br_bridge.ENV_URL: BRIDGE_BASE, br_bridge.ENV_TOKEN: TOKEN, br_bridge.ENV_KEY: "nao-e-uma-chave"},
+    {br_bridge.ENV_URL: BRIDGE_BASE, br_bridge.ENV_TOKEN: TOKEN, br_bridge.ENV_KEY: '{"type": "service_account"}'},
+    {br_bridge.ENV_KEY: "nao-e-uma-chave"},
 )
 
 
@@ -1031,8 +1072,10 @@ def c_config():
     for env in OFF_ENVS:
         assert br_bridge.config(env) is None, env
     line = br_bridge.status_line(ENV_ON)
-    assert line.startswith("RX_PONTE_BRASIL=on") and TOKEN not in line, line
+    assert line == "RX_PONTE_BRASIL=on host=ponte-gate.a.run.app incra=ponte sicar=direto_primeiro", line
     assert br_bridge.status_line({}) == "RX_PONTE_BRASIL=off"
+    assert br_bridge.status_line(OFF_ENVS[-2]) == "RX_PONTE_BRASIL=off motivo=chave_invalida", br_bridge.status_line(OFF_ENVS[-2])
+    assert br_bridge.status_line(OFF_ENVS[-1]) == "RX_PONTE_BRASIL=off motivo=configuracao_invalida"
     assert br_bridge.route_for(INCRA_URL, ENV_ON) == "bridge"
     assert br_bridge.route_for(SICAR_URL, ENV_ON) == "direct_then_bridge"
     assert br_bridge.route_for(OTHER_URL, ENV_ON) == "direct"
@@ -1222,24 +1265,1038 @@ def c_hosts_and_transports():
 # M · controles positivos
 # ---------------------------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------------------------
+# I · ponte fechada pelo Google (conta de serviço)
+# ---------------------------------------------------------------------------------------------
+
+GATE_SA_EMAIL = "ponte-render@raio-x-gate.iam.gserviceaccount.com"
+GATE_KEY_ID = "0123456789abcdef0123456789abcdef01234567"
+_GATE_KEY: dict = {}
+
+
+def gate_key():
+    """Chave RSA de teste gerada na hora (nunca gravada no repositório) e o JSON no formato do Google."""
+    if not _GATE_KEY:
+        try:
+            from cryptography.hazmat.primitives import serialization
+            from cryptography.hazmat.primitives.asymmetric import rsa
+        except ImportError:  # o CI instala PyJWT[crypto]; sem ela a comparação byte a byte não roda
+            raise AssertionError("biblioteca cryptography ausente: o gate precisa dela para conferir a assinatura") from None
+        private = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        pem = private.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+                                    serialization.NoEncryption()).decode("ascii")
+        info = {"type": "service_account", "project_id": "raio-x-gate", "private_key_id": GATE_KEY_ID,
+                "private_key": pem, "client_email": GATE_SA_EMAIL, "client_id": "1",
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth", "token_uri": br_bridge.GOOGLE_TOKEN_URI}
+        raw = json.dumps(info)
+        _GATE_KEY.update(private=private, pem=pem, info=info, json=raw, b64=base64.b64encode(raw.encode()).decode("ascii"))
+    return _GATE_KEY
+
+
+def env_identity():
+    return {**ENV_ON, br_bridge.ENV_KEY: gate_key()["b64"]}
+
+
+def _b64url_json(obj) -> str:
+    return base64.urlsafe_b64encode(json.dumps(obj).encode()).rstrip(b"=").decode()
+
+
+def _b64url_dec(text: str) -> bytes:
+    return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
+
+
+def fake_id_token(audience=BRIDGE_BASE, lifetime=3600.0, marker="GATEIDTOKEN"):
+    return _b64url_json({"alg": "RS256"}) + "." + _b64url_json({"aud": audience, "exp": time.time() + lifetime, "m": marker}) + ".c2ln"
+
+
+class FakeTokenEndpoint:
+    """Troca falsa do JWT: registra a asserção e devolve o token de identidade (ou erro, ou demora)."""
+
+    def __init__(self, *, error=None, delay=0.0, audience=BRIDGE_BASE, lifetime=3600.0):
+        self.assertions: list[str] = []
+        self.error, self.delay = error, delay
+        self.token = fake_id_token(audience, lifetime)
+
+    def __call__(self, assertion, timeout):
+        self.assertions.append(assertion)
+        assert timeout == br_bridge.ID_TOKEN_HTTP_TIMEOUT_S, timeout
+        if self.delay:
+            time.sleep(self.delay)
+        if self.error is not None:
+            raise self.error
+        return json.dumps({"id_token": self.token}).encode()
+
+
+def _wait_refresh_idle(seconds=5.0):
+    assert _wait(lambda: not br_bridge._id_refreshing, seconds), "troca de credencial pendurada"
+
+
+def _verify_rs256(public_key, signing_input: bytes, signature: bytes):
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import padding
+    public_key.verify(signature, signing_input, padding.PKCS1v15(), hashes.SHA256())
+
+
+def i_key_parse_and_signature():
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    k = gate_key()
+    for raw in (k["json"], k["b64"], base64.urlsafe_b64encode(k["json"].encode()).decode().rstrip("="),
+                "\n".join(k["b64"][i:i + 76] for i in range(0, len(k["b64"]), 76))):
+        br_bridge.parse_service_account.cache_clear()
+        cfg = br_bridge.config({**ENV_ON, br_bridge.ENV_KEY: raw})
+        assert cfg is not None and cfg.identity is not None and cfg.identity.email == GATE_SA_EMAIL, raw[:20]
+        assert cfg.identity.signer == "cryptography" and cfg.audience == BRIDGE_BASE, cfg.identity
+    line = br_bridge.status_line(env_identity())
+    assert line == ("RX_PONTE_BRASIL=on host=ponte-gate.a.run.app incra=ponte sicar=direto_primeiro "
+                    "acesso=google assinatura=cryptography"), line
+    identity = br_bridge.config(env_identity()).identity
+    pem_line = k["pem"].splitlines()[5]
+    for text in (repr(identity), repr(identity.numbers), repr(br_bridge.config(env_identity())), line):
+        assert pem_line not in text and str(identity.numbers.d)[:40] not in text, ("chave no repr", text[:120])
+    # Python puro: mesma assinatura, byte a byte, que a biblioteca (PKCS#1 v1.5 é determinística) e verificável
+    for data in (b"", b"cabecalho.claims", os.urandom(333)):
+        pure = br_bridge.sign_rs256_python(identity.numbers, data)
+        assert pure == identity.sign(data), "assinatura em Python puro diferente da cryptography"
+        _verify_rs256(k["private"].public_key(), data, pure)
+    with mock.patch.object(br_bridge, "_cryptography_signer", lambda pem: None):
+        br_bridge.parse_service_account.cache_clear()
+        cfg = br_bridge.config(env_identity())
+        assert cfg.identity.signer == "python" and cfg.identity.sign(b"x") == identity.sign(b"x"), cfg.identity
+        assert br_bridge.status_line(env_identity()).endswith("acesso=google assinatura=python")
+    br_bridge.parse_service_account.cache_clear()
+    pkcs1 = k["private"].private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.TraditionalOpenSSL,
+                                       serialization.NoEncryption()).decode("ascii")
+    assert br_bridge.rsa_numbers_from_pem(pkcs1) == identity.numbers
+    # chave estragada: ponte desligada e dito no log (nunca meio ligada, só com token)
+    info = k["info"]
+    small = rsa.generate_private_key(public_exponent=65537, key_size=1024).private_bytes(
+        serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()).decode("ascii")
+    other = rsa.generate_private_key(public_exponent=65537, key_size=2048).private_numbers()
+    mine = k["private"].private_numbers()
+    der = bytearray(k["private"].private_bytes(serialization.Encoding.DER, serialization.PrivateFormat.TraditionalOpenSSL,
+                                               serialization.NoEncryption()))
+    n_bytes = mine.public_numbers.n.to_bytes(257, "big")
+    at = bytes(der).find(n_bytes)
+    assert at > 0, "n não achado no DER de teste"
+    mixed_der = bytes(der[:at]) + other.public_numbers.n.to_bytes(257, "big") + bytes(der[at + 257:])
+    incoherent = ("-----BEGIN RSA PRIVATE KEY-----\n" + base64.encodebytes(mixed_der).decode("ascii")
+                  + "-----END RSA PRIVATE KEY-----\n")
+    # n = p·q certo, mas d mod (p-1) errado: só a segunda conferência dos números pega
+    dp_len = mine.dmp1.bit_length() // 8 + 1
+    dp_bytes = mine.dmp1.to_bytes(dp_len, "big")
+    at = bytes(der).find(dp_bytes)
+    assert at > 0 and bytes(der).count(dp_bytes) == 1, "dp não achado no DER de teste"
+    dp_der = bytes(der[:at]) + (mine.dmp1 ^ 1).to_bytes(dp_len, "big") + bytes(der[at + dp_len:])
+    wrong_dp = ("-----BEGIN RSA PRIVATE KEY-----\n" + base64.encodebytes(dp_der).decode("ascii")
+                + "-----END RSA PRIVATE KEY-----\n")
+    bad = [
+        k["b64"][: len(k["b64"]) // 2],                                   # colada pela metade
+        k["json"][:-40],
+        json.dumps({**info, "type": "authorized_user"}),
+        json.dumps({**info, "token_uri": "https://evil.example.com/token"}),
+        json.dumps({**info, "client_email": "alguem@gmail.com"}),
+        json.dumps({**info, "private_key_id": "x"}),
+        json.dumps({**info, "private_key": small}),                       # 1024 bits
+        json.dumps({**info, "private_key": incoherent}),                  # n de outra chave
+        json.dumps({**info, "private_key": wrong_dp}),                    # CRT incoerente
+        json.dumps({**info, "private_key": k["pem"].replace("PRIVATE KEY-----", "PUBLIC KEY-----")}),
+        json.dumps([info]),
+        "A" * (br_bridge.MAX_KEY_ENV_LEN + 1),
+    ]
+    for raw in bad:
+        br_bridge.parse_service_account.cache_clear()
+        env = {**ENV_ON, br_bridge.ENV_KEY: raw}
+        assert br_bridge.config(env) is None, ("chave estragada aceita", raw[:60])
+        assert br_bridge.status_line(env) == "RX_PONTE_BRASIL=off motivo=chave_invalida", (raw[:60], br_bridge.status_line(env))
+        assert br_bridge.route_for(INCRA_URL, env) == "direct"
+    br_bridge.parse_service_account.cache_clear()
+
+
+def i_assertion():
+    k = gate_key()
+    identity = br_bridge.config(env_identity()).identity
+    jwt = br_bridge.signed_assertion(identity, BRIDGE_BASE, 1_800_000_000)
+    head, body, sig = jwt.split(".")
+    assert json.loads(_b64url_dec(head)) == {"alg": "RS256", "typ": "JWT", "kid": GATE_KEY_ID}, _b64url_dec(head)
+    assert json.loads(_b64url_dec(body)) == {
+        "iss": GATE_SA_EMAIL, "sub": GATE_SA_EMAIL, "aud": "https://oauth2.googleapis.com/token",
+        "iat": 1_800_000_000, "exp": 1_800_003_600, "target_audience": BRIDGE_BASE}, _b64url_dec(body)
+    _verify_rs256(k["private"].public_key(), f"{head}.{body}".encode(), _b64url_dec(sig))
+    token, exp = br_bridge.parse_id_token_response(json.dumps({"id_token": fake_id_token()}).encode(), BRIDGE_BASE, time.time())
+    assert token.count(".") == 2 and exp > time.time() + 3000
+    for raw in (b"{}", json.dumps({"id_token": fake_id_token(audience="https://outra.a.run.app")}).encode(),
+                json.dumps({"id_token": fake_id_token(lifetime=5)}).encode(),
+                json.dumps({"id_token": "a.b.c\r\nX-Injetado: 1"}).encode(), b"nao-json"):
+        try:
+            br_bridge.parse_id_token_response(raw, BRIDGE_BASE, time.time())
+        except (ValueError, TypeError):
+            continue
+        raise AssertionError(("resposta estranha aceita como token", raw[:60]))
+    try:
+        br_bridge.bridge_request(["curl", INCRA_URL], br_bridge.config(env_identity()), id_token="a.b.c\r\nX-Injetado: 1")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("token de identidade com CR/LF foi para os cabeçalhos")
+
+
+def _id_header(call):
+    stdin = call[1].get("input_bytes") or call[1].get("input") or b""
+    found = [ln for ln in stdin.split(b"\r\n") if ln.lower().startswith(b"x-serverless-authorization:")]
+    return found[0].decode() if found else None
+
+
+def i_incra_identity():
+    _, acervo, snci, _, _ = _import_transports()
+    clock = FakeClock()
+    endpoint = FakeTokenEndpoint()
+    with ponte_env(env_identity()), mock.patch.object(br_bridge, "_now", clock), \
+            mock.patch.object(br_bridge, "_post_token", endpoint):
+        rec = Recorder((0, 0.0, b"<gml/>", b""))
+        with mock.patch.object(epl, "run_managed_process", rec):
+            out = acervo.curl_fetch(INCRA_URL)
+        assert out["ok"] is True and len(rec.calls) == 1, (out, rec.calls)
+        _bridge_call_ok(rec.calls[0], "acervo google", url=INCRA_URL, timeout=10, max_time=8)
+        assert _id_header(rec.calls[0]) == f"X-Serverless-Authorization: Bearer {endpoint.token}", _id_header(rec.calls[0])
+        assert all(endpoint.token not in a and "GATE" not in a for a in rec.calls[0][0]), "token de identidade na linha de comando"
+        rec = Recorder((0, 0.0, b"<xml/>", b""))
+        with mock.patch.object(subprocess, "run", rec):
+            snci._curl(INCRA_URL, 10)
+        _bridge_call_ok(rec.calls[0], "snci google", url=INCRA_URL, timeout=14, max_time=10)
+        assert _id_header(rec.calls[0]) is not None
+        _wait_refresh_idle()
+        assert len(endpoint.assertions) == 1, ("uma troca por hora, não uma por consulta", len(endpoint.assertions))
+        claims = json.loads(_b64url_dec(endpoint.assertions[0].split(".")[1]))
+        assert claims["target_audience"] == BRIDGE_BASE and claims["iss"] == GATE_SA_EMAIL, claims
+    # sem a chave (variáveis antigas): nenhuma troca, nenhum cabeçalho do Google
+    endpoint = FakeTokenEndpoint()
+    with ponte_env(ENV_ON), mock.patch.object(br_bridge, "_post_token", endpoint):
+        rec = Recorder((0, 0.0, b"<gml/>", b""))
+        with mock.patch.object(epl, "run_managed_process", rec):
+            acervo.curl_fetch(INCRA_URL)
+        assert _id_header(rec.calls[0]) is None and not endpoint.assertions, (rec.calls, endpoint.assertions)
+    # token perto de vencer (faltam 200 s): usa o que ainda vale, renova em segundo plano, a seguinte usa o novo
+    endpoint = FakeTokenEndpoint()
+    wall = [time.time()]
+    with ponte_env(env_identity()), mock.patch.object(br_bridge, "_post_token", endpoint),             mock.patch.object(br_bridge, "_wall", lambda: wall[0]):
+        rec = Recorder(*([(0, 0.0, b"<gml/>", b"")] * 3))
+        with mock.patch.object(epl, "run_managed_process", rec):
+            acervo.curl_fetch(INCRA_URL)
+            _wait_refresh_idle()
+            first = endpoint.token
+            endpoint.token = fake_id_token(lifetime=7000.0, marker="RENOVADO")
+            wall[0] += 3400.0
+            acervo.curl_fetch(INCRA_URL)
+            _wait_refresh_idle()
+            acervo.curl_fetch(INCRA_URL)
+            _wait_refresh_idle()
+        got = [_id_header(c) for c in rec.calls]
+        assert got == [f"X-Serverless-Authorization: Bearer {t}" for t in (first, first, endpoint.token)], got
+        assert len(endpoint.assertions) == 2, ("renovação do token perto de vencer", len(endpoint.assertions))
+
+
+def i_sicar_identity():
+    deploy_app = _import_transports()[0]
+    clock = FakeClock()
+    endpoint = FakeTokenEndpoint()
+    with ponte_env(env_identity()), mock.patch.object(br_bridge, "_now", clock), \
+            mock.patch.object(br_bridge, "_post_token", endpoint):
+        # direto responde: nem ponte, nem troca de credencial
+        rec = Recorder((0, 0.4, b'{"features": []}', b""), clock=clock)
+        with mock.patch.object(deploy_app, "run_managed_process", rec):
+            deploy_app._curl(SICAR_URL, True)
+        assert len(rec.calls) == 1 and not endpoint.assertions, (rec.calls, endpoint.assertions)
+        # direto cai (12 s): ponte com o que sobra e com o token de identidade
+        rec = Recorder((7, 12.0, b"", b"curl: (7) Failed to connect"), (0, 1.0, b'{"features": []}', b""), clock=clock)
+        with mock.patch.object(deploy_app, "run_managed_process", rec):
+            out = deploy_app._curl(SICAR_URL, True)
+        assert out["ok"] and len(rec.calls) == 2, rec.calls
+        _bridge_call_ok(rec.calls[1], "sicar google", url=SICAR_URL, timeout=33.0, max_time=32.75)
+        assert _id_header(rec.calls[1]) is not None and 12.0 + rec.calls[1][1]["timeout_seconds"] <= 45 + 1e-9
+    # direto cai e a credencial falha: devolve a falha direta (honesta), sem chamar a ponte sem credencial
+    endpoint = FakeTokenEndpoint(error=urllib.error.HTTPError(br_bridge.GOOGLE_TOKEN_URI, 400, "invalid_grant", {}, None))
+    with ponte_env(env_identity()), mock.patch.object(br_bridge, "_post_token", endpoint), \
+            contextlib.redirect_stdout(io.StringIO()):
+        rec = Recorder((7, 0.0, b"", b"curl: (7) Failed to connect to geoserver.car.gov.br"))
+        with mock.patch.object(deploy_app, "run_managed_process", rec):
+            out = deploy_app._curl(SICAR_URL, True)
+        _wait_refresh_idle()
+        assert out["ok"] is False and len(rec.calls) == 1 and "input_bytes" not in rec.calls[0][1], rec.calls
+        br_bridge.reset_state()
+        rec = Recorder((7, 0.0, b"", b"curl: (7) Failed to connect to geoserver.car.gov.br"))
+        proc = br_bridge.run_curl(["curl", "-sS", "--max-time", "10", SICAR_URL], timeout_seconds=12.0, runner=rec)
+        _wait_refresh_idle()
+        assert (proc.returncode, proc.stderr) == (7, b"curl: (7) Failed to connect to geoserver.car.gov.br"), proc
+        assert len(rec.calls) == 1, ("chamou a ponte sem credencial", rec.calls)
+        # janela aberta e credencial indisponível: fecha a janela e a próxima tenta direto
+        br_bridge._open_skip_window("geoserver.car.gov.br", "gate")
+        rec = Recorder((0, 0.0, b'{"features": []}', b""))
+        with mock.patch.object(deploy_app, "run_managed_process", rec):
+            out = deploy_app._curl(SICAR_URL, True)
+            assert out["ok"] is False and not rec.calls, ("chamou a ponte sem credencial", rec.calls)
+            assert not br_bridge.direct_skipped("geoserver.car.gov.br"), "janela devia fechar sem credencial"
+            out = deploy_app._curl(SICAR_URL, True)
+        assert out["ok"] and len(rec.calls) == 1 and "input_bytes" not in rec.calls[0][1], rec.calls
+
+
+def i_credential_failures():
+    _, acervo, _, _, _ = _import_transports()
+    k = gate_key()
+    errors = (
+        (urllib.error.HTTPError(br_bridge.GOOGLE_TOKEN_URI, 400, "invalid_grant", {}, None), "http_400"),
+        (urllib.error.URLError("sem rede"), "rede"),
+        (TimeoutError("tempo"), "rede"),
+    )
+    for error, reason in errors:
+        endpoint = FakeTokenEndpoint(error=error)
+        log = io.StringIO()
+        br_bridge.reset_state()
+        with ponte_env(env_identity()), mock.patch.object(br_bridge, "_post_token", endpoint), contextlib.redirect_stdout(log):
+            rec = Recorder((0, 0.0, b"<gml/>", b""))
+            with mock.patch.object(epl, "run_managed_process", rec):
+                out = acervo.curl_fetch(INCRA_URL)
+                _wait_refresh_idle()
+                out2 = acervo.curl_fetch(INCRA_URL)   # dentro de 30 s: não insiste na troca
+            _wait_refresh_idle()
+        assert out["ok"] is False and out2["ok"] is False and not rec.calls, ("chamada sem credencial", reason, rec.calls)
+        assert len(endpoint.assertions) == 1, (reason, "insistiu na troca", len(endpoint.assertions))
+        text = log.getvalue() + json.dumps([out, out2], default=str, ensure_ascii=False)
+        assert f"RX_PONTE_BRASIL=erro_credencial motivo={reason}" in log.getvalue(), log.getvalue()
+        for secret in (TOKEN, k["pem"].splitlines()[3], endpoint.assertions[0][-60:], "ponte-gate"):
+            assert secret not in text, ("vazou", reason, secret[:20])
+    # resposta estranha do Google
+    endpoint = FakeTokenEndpoint()
+    endpoint.token = "nao-e-token"
+    log = io.StringIO()
+    with ponte_env(env_identity()), mock.patch.object(br_bridge, "_post_token", endpoint), contextlib.redirect_stdout(log):
+        rec = Recorder()
+        with mock.patch.object(epl, "run_managed_process", rec):
+            assert acervo.curl_fetch(INCRA_URL)["ok"] is False and not rec.calls
+        _wait_refresh_idle()
+    assert "motivo=resposta_invalida" in log.getvalue(), log.getvalue()
+    # a espera pela credencial nunca passa do prazo da consulta menos o mínimo da ponte (4 s - 3 s = 1 s)
+    # (a troca falsa demora 3 s: se a espera passasse do limite, o token chegaria e a chamada iria à ponte)
+    endpoint = FakeTokenEndpoint(delay=3.0)
+    with ponte_env(env_identity()), mock.patch.object(br_bridge, "_post_token", endpoint):
+        rec = Recorder((0, 0.0, b"<gml/>", b""))
+        started = time.monotonic()
+        proc = br_bridge.run_curl(["curl", "-sS", "--max-time", "3", INCRA_URL], timeout_seconds=4.0, runner=rec)
+        elapsed = time.monotonic() - started
+        _wait_refresh_idle()
+        assert proc.returncode == br_bridge.CREDENTIAL_FAILURE_EXIT and not rec.calls, (proc, rec.calls)
+        assert 0.8 <= elapsed <= 2.5, ("espera pela credencial fora do prazo", round(elapsed, 2))
+        # cancelamento durante a espera: sai já
+        br_bridge.reset_state()
+        event = threading.Event()
+        event.set()
+        started = time.monotonic()
+        proc = br_bridge.run_curl(["curl", "-sS", INCRA_URL], timeout_seconds=30.0, cancel_event=event, runner=rec)
+        assert proc.returncode != 0 and time.monotonic() - started < 0.5 and not rec.calls, proc
+        _wait_refresh_idle()
+
+
+def i_sicar_budget_after_credential():
+    """SICAR: se a espera pela credencial consumir o prazo, a falha direta volta; nunca ponte com menos de 3 s."""
+    for advance, bridged in ((3.0, False), (0.0, True)):
+        clock = FakeClock()
+        endpoint = FakeTokenEndpoint()
+
+        def slow_endpoint(assertion, timeout, advance=advance):
+            clock.t += advance      # a troca "levou" advance segundos no relógio da consulta
+            return endpoint(assertion, timeout)
+
+        with ponte_env(env_identity()), mock.patch.object(br_bridge, "_now", clock), \
+                mock.patch.object(br_bridge, "_post_token", slow_endpoint):
+            rec = Recorder((7, 40.0, b"", b"curl: (7) Failed to connect"), (0, 1.0, b'{"features": []}', b""), clock=clock)
+            proc = br_bridge.run_curl(["curl", "-sS", "--max-time", "43", SICAR_URL], timeout_seconds=45.0, runner=rec)
+            _wait_refresh_idle()
+        if bridged:   # controle: sem demora na credencial, a mesma queda vai à ponte (o teste não é vazio)
+            assert proc.returncode == 0 and len(rec.calls) == 2 and _id_header(rec.calls[1]), rec.calls
+        else:
+            assert proc.returncode == 7 and len(rec.calls) == 1, ("ponte com menos que o prazo mínimo", rec.calls)
+
+
+def i_prewarm():
+    """Arranque real (módulo carregado do zero): com a chave, o br_bridge já pede o primeiro token sozinho."""
+    path = ROOT / "br_bridge.py"
+    source = _BRIDGE_FILE_OVERRIDE.get("src") or path.read_text(encoding="utf-8")
+    endpoint = FakeTokenEndpoint()
+    seen = []
+
+    def fake_urlopen(request, timeout=None):
+        seen.append((request.full_url, timeout))
+        return io.BytesIO(json.dumps({"id_token": endpoint.token}).encode())
+
+    for env, wants_token in ((env_identity(), True), (ENV_ON, False)):
+        seen.clear()
+        name = "br_bridge_arranque"
+        module = types.ModuleType(name)
+        module.__file__ = str(path)
+        sys.modules[name] = module
+        out = io.StringIO()
+        try:
+            with ponte_env(env), mock.patch("urllib.request.urlopen", fake_urlopen), contextlib.redirect_stdout(out):
+                exec(compile(source, str(path), "exec"), module.__dict__)
+                if wants_token:
+                    assert _wait(lambda: bool(module._id_tokens), 5.0), ("arranque sem pedir o token de identidade", seen)
+                    assert seen == [(module.GOOGLE_TOKEN_URI, module.ID_TOKEN_HTTP_TIMEOUT_S)], seen
+                else:
+                    time.sleep(0.3)
+                    assert not seen and not module._id_tokens, seen
+        finally:
+            sys.modules.pop(name, None)
+        assert ("acesso=google" in out.getvalue()) == wants_token, out.getvalue()
+
+
+def i_real_curl_identity():
+    """curl de verdade com o token de identidade pela entrada padrão: a ponte aceita e a fonte nunca o vê."""
+    assert shutil.which("curl"), "curl ausente"
+    target = "https://acervofundiario.incra.gov.br/ok?tema=x"
+    base_args = ["curl", "-sS", "--fail", "--connect-timeout", "5", "--max-time", "8", "-A", "Raio-X-Territorial/gate-curl", target]
+    idt = fake_id_token()
+    with PonteEnv() as e:
+        cfg = br_bridge.config({br_bridge.ENV_URL: f"https://127.0.0.1:{e.port}", br_bridge.ENV_TOKEN: TOKEN,
+                                br_bridge.ENV_KEY: gate_key()["b64"]})
+        args, stdin = br_bridge.bridge_request(base_args, cfg, id_token=idt)
+        assert all(idt not in a and TOKEN not in a for a in args)
+        assert f"X-Serverless-Authorization: Bearer {idt}".encode() in stdin
+        args = [a.replace(f"https://127.0.0.1:{e.port}", f"http://127.0.0.1:{e.port}") for a in args]
+        before = len(UPSTREAM_SEEN)
+        proc = epl.run_managed_process(args, timeout_seconds=20, input_bytes=stdin)
+        assert proc.returncode == 0 and b"RESPOSTA-OK" in proc.stdout, (proc.returncode, proc.stderr[:200])
+        seen = UPSTREAM_SEEN[before:]
+        assert len(seen) == 1 and not any("serverless" in h or "authorization" in h for h in seen[0]["headers"]), seen
+        assert all(idt not in v for v in seen[0]["headers"].values())
+        assert "GATEIDTOKEN" not in e.log.getvalue() and idt not in e.log.getvalue()
+        assert epl.active_child_pids() == [], "processo curl pendurado"
+
+
+def _load_conferir():
+    spec = importlib.util.spec_from_file_location("ponte_brasil_conferir", ROOT / "scripts" / "ponte_brasil_conferir.py")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["ponte_brasil_conferir"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+CONFERIR = _load_conferir()
+
+
+def _conferir_run(env, statuses, *, token_ok=True, incra_rc=0, sicar_rc=0, esperar="0", clock=None):
+    """Roda a conferência com o Google e as fontes falsos. statuses(com_identidade) -> código HTTP."""
+    mod = CONFERIR
+    calls = {"health": [], "fetch": []}
+
+    def http_status(url, headers):
+        calls["health"].append((url, dict(headers)))
+        return statuses(br_bridge.ID_TOKEN_HEADER in headers)
+
+    def fetch_via_bridge(args, *, timeout_seconds, runner, env=None):
+        calls["fetch"].append(list(args))
+        rc = incra_rc if "incra" in args[-1] else sicar_rc
+        return subprocess.CompletedProcess(args, rc, b"", b"curl: (22) The requested URL returned error: 502" if rc == 22 else b"")
+
+    out = io.StringIO()
+    endpoint = FakeTokenEndpoint(error=None if token_ok else OSError("sem rede"))
+    patches = [mock.patch.object(mod, "http_status", http_status), mock.patch.object(br_bridge, "fetch_via_bridge", fetch_via_bridge),
+               mock.patch.object(br_bridge, "_post_token", endpoint), mock.patch.object(mod, "_sleep", lambda s: None)]
+    if clock is not None:
+        patches.append(mock.patch.object(mod, "_monotonic", clock))
+    with contextlib.ExitStack() as stack, contextlib.redirect_stdout(out):
+        for p in patches:
+            stack.enter_context(p)
+        code = mod.main(["--esperar", esperar], env=env)
+    _wait_refresh_idle()
+    br_bridge.reset_state()
+    return code, out.getvalue(), calls, endpoint
+
+
+def i_conferir():
+    env = env_identity()
+    k = gate_key()
+    code, text, calls, endpoint = _conferir_run(env, lambda with_id: 200 if with_id else 403)
+    assert code == 0 and text.rstrip().endswith("RESULTADO=ok"), text
+    assert "INCRA: respondeu pela ponte" in text and "fechada: pedido sem credencial do Google recusado (403)" in text, text
+    assert [c[0] for c in calls["health"]] == [BRIDGE_BASE + "/v1/health"] * 2, calls["health"]
+    assert br_bridge.ID_TOKEN_HEADER not in calls["health"][0][1] and calls["health"][0][1].get("X-Ponte-Token") == TOKEN
+    assert [a[-1] for a in calls["fetch"]] == [CONFERIR.INCRA_URL, CONFERIR.SICAR_URL], calls["fetch"]
+    for secret in (TOKEN, "ponte-gate", endpoint.token, k["b64"][:80], k["pem"].splitlines()[3]):
+        assert secret not in text, ("conferência imprimiu segredo", secret[:20])
+    scenarios = (
+        (lambda w: 200, {}, "PAROU: a ponte continua aberta ao publico"),
+        (lambda w: 200 if w else 403, {"token_ok": False}, "PAROU: o Google nao entregou a credencial"),
+        (lambda w: 403, {}, "PAROU: a chave ainda nao tem permissao"),
+        (lambda w: 200 if w else 403, {"incra_rc": 22}, "PAROU: o INCRA nao respondeu pela ponte"),
+        (lambda w: None, {}, "PAROU: a ponte nao respondeu como esperado"),
+        (lambda w: 200 if w else 401, {}, "PAROU: a ponte nao respondeu como esperado"),
+    )
+    for statuses, kwargs, want in scenarios:
+        code, text, calls, _ = _conferir_run(env, statuses, **kwargs)
+        assert code == 1 and text.rstrip().splitlines()[-1].startswith(want), (want, text)
+        assert "RESULTADO=ok" not in text and TOKEN not in text and "ponte-gate" not in text, text
+        if "INCRA" not in want:
+            assert not calls["fetch"], ("consultou as fontes com a ponte errada", want)
+    code, text, _, _ = _conferir_run(ENV_ON, lambda w: 200 if w else 403)
+    assert code == 1 and "PAROU: falta a chave" in text, text
+    code, text, _, _ = _conferir_run({**ENV_ON, br_bridge.ENV_KEY: "estragada"}, lambda w: 200 if w else 403)
+    assert code == 1 and "PAROU: a URL, o token ou a chave" in text and "motivo=chave_invalida" in text, text
+    # espera: tenta de novo até a permissão valer (relógio falso, sem dormir de verdade)
+    answers = iter([403, 403, 200])
+    ticks = iter(range(0, 1000, 5))
+    code, text, calls, _ = _conferir_run(env, lambda w: next(answers) if w else 403, esperar="100",
+                                         clock=lambda: float(next(ticks)))
+    assert code == 0 and "aguardando o Google" in text and len(calls["health"]) == 6, (text, len(calls["health"]))
+    # sem esperar: não repete
+    code, text, calls, _ = _conferir_run(env, lambda w: 403, esperar="0")
+    assert code == 1 and len(calls["health"]) == 2, len(calls["health"])
+
+
+# ---------------------------------------------------------------------------------------------
+# G · guia do dono
+# ---------------------------------------------------------------------------------------------
+
+GUIDE = ROOT / "docs" / "PONTE_BRASIL_ATIVACAO.md"
+
+
+def guide_blocks(text: str) -> dict[str, str]:
+    blocks = {}
+    for body in re.findall(r"```bash\n(.*?)```", text, re.S):
+        marker = re.match(r"bash <<'([A-Z]+)'", body.strip())
+        blocks[marker.group(1) if marker else f"linha{len(blocks)}"] = body
+    return blocks
+
+
+def guide_problems(text: str) -> list[str]:
+    problems = []
+    blocks = guide_blocks(text)
+    main = blocks.get("PONTE", "")
+    if not main:
+        return ["bloco principal PONTE ausente"]
+    if "--no-allow-unauthenticated" not in main or "--allow-unauthenticated" in main:
+        problems.append("ponte publicada sem --no-allow-unauthenticated")
+    if "remove-iam-policy-binding" not in main or "allUsers" not in main:
+        problems.append("acesso público antigo não é retirado")
+    if "roles/run.invoker" not in main or "ponte_brasil_conferir.py" not in main:
+        problems.append("sem permissão da conta de serviço ou sem conferência")
+    for name, body in blocks.items():
+        if name.startswith("linha"):
+            continue
+        if "set -Eeuo pipefail" not in body or "trap " not in body or "PAROU" not in body:
+            problems.append(f"{name}: falha sem PAROU")
+        for bad in (r'cat\s+"?\$(CHAVE|HOME/\.raio-x)', r"echo[^\n]*\$\(base64", r"set -x", r"echo[^\n]*\$CHAVE"):
+            if re.search(bad, body):
+                problems.append(f"{name}: segredo impresso ({bad})")
+        for echo in re.findall(r'echo "([^"\n]*\$TOKEN[^"\n]*)"', body):
+            if not echo.startswith("RX_PONTE_BRASIL_TOKEN"):
+                problems.append(f"{name}: token impresso fora da caixa do Render")
+    for needed in ("NAO MANDE NO CHAT", "raio-x-territorial-app", "raio-x-territorial-report", "RX_PONTE_BRASIL_CHAVE",
+                   "Add Environment Variable", "dashboard.render.com"):
+        if needed not in text:
+            problems.append(f"guia sem: {needed}")
+    return problems
+
+
+def g_guide():
+    text = GUIDE.read_text(encoding="utf-8")
+    assert guide_problems(text) == [], guide_problems(text)
+    bash = shutil.which("bash")
+    assert bash, "bash ausente: o CI precisa dele para conferir os blocos do guia"
+    blocks = guide_blocks(text)
+    assert {"PONTE", "CONFERE", "TROCA"} <= set(blocks), sorted(blocks)
+    for name, body in blocks.items():
+        proc = subprocess.run([bash, "-n"], input=body.encode("utf-8"), capture_output=True, timeout=20)
+        assert proc.returncode == 0, (name, proc.stderr.decode("utf-8", "replace")[:300])
+        inner = re.search(r"bash <<'([A-Z]+)'\n(.*)\n\1\s*$", body.strip() + "\n", re.S)
+        if inner:   # o heredoc não é analisado pelo bash -n de fora: confere o de dentro também
+            proc = subprocess.run([bash, "-n"], input=inner.group(2).encode("utf-8"), capture_output=True, timeout=20)
+            assert proc.returncode == 0, (name, "interno", proc.stderr.decode("utf-8", "replace")[:300])
+    proc = subprocess.run([bash, "-n"], input=b"if then fi\n", capture_output=True, timeout=20)
+    assert proc.returncode != 0, "bash -n não pega erro de sintaxe"
+    # controles positivos da própria conferência do guia
+    main = blocks["PONTE"]
+    for label, mutated in (
+        ("ponte aberta", text.replace("--no-allow-unauthenticated", "--allow-unauthenticated")),
+        ("sem retirar allUsers", text.replace("remove-iam-policy-binding", "get-iam-policy")),
+        ("sem PAROU", text.replace(main, main.replace("set -Eeuo pipefail", "set -uo pipefail"))),
+        ("chave impressa", text.replace(main, main.replace("\nPONTE", '\ncat "$CHAVE_JSON"\nPONTE'))),
+        ("token fora da caixa", text.replace(main, main.replace("\nPONTE", '\necho "token: $TOKEN"\nPONTE'))),
+        ("sem o serviço do relatório", text.replace("raio-x-territorial-report", "relatorio")),
+    ):
+        assert guide_problems(mutated), ("conferência do guia cega", label)
+
+
+# ---------------------------------------------------------------------------------------------
+# G2 · código revisado (CODIGO_REVISADO) e blocos do guia rodados com gcloud/git/python3 falsos
+# ---------------------------------------------------------------------------------------------
+
+PIN_PATHS = ("ponte_brasil", "br_bridge.py", "scripts/ponte_brasil_conferir.py")
+_GUIDE_OVERRIDE: dict[str, str] = {}
+
+
+def _guide_text() -> str:
+    return _GUIDE_OVERRIDE.get("text") or GUIDE.read_text(encoding="utf-8")
+
+
+def _pin_read(rel: str) -> bytes:
+    return (ROOT / rel).read_bytes()
+
+
+_ORIG_PIN_READ = _pin_read
+
+
+def _git_object(kind: str, data: bytes) -> str:
+    return hashlib.sha1(kind.encode("ascii") + b" %d\0" % len(data) + data).hexdigest()
+
+
+def reviewed_code_hashes() -> str:
+    """Hashes do git (árvore de ponte_brasil/, blobs do cliente e da conferência) calculados do conteúdo atual."""
+    listing = subprocess.run(["git", "ls-files", "-s", "--", *PIN_PATHS], cwd=ROOT, capture_output=True, timeout=30)
+    assert listing.returncode == 0, listing.stderr[:300]
+    entries: dict[str, tuple[str, str]] = {}
+    for line in listing.stdout.decode("utf-8").splitlines():
+        meta, path = line.split("\t", 1)
+        entries[path] = (meta.split()[0], _git_object("blob", _pin_read(path)))
+    assert {"ponte_brasil/app.py", "br_bridge.py", "scripts/ponte_brasil_conferir.py"} <= set(entries), sorted(entries)
+
+    def tree(prefix: str) -> str:
+        children: dict[str, tuple[str, str]] = {}
+        for path, (mode, blob) in entries.items():
+            if path.startswith(prefix + "/"):
+                rest = path[len(prefix) + 1:]
+                name = rest.split("/", 1)[0]
+                children[name] = ("40000", tree(prefix + "/" + name)) if "/" in rest else (mode, blob)
+        order = sorted(children, key=lambda n: n + "/" if children[n][0] == "40000" else n)
+        data = b"".join(children[n][0].encode("ascii") + b" " + n.encode("utf-8") + b"\0" + bytes.fromhex(children[n][1])
+                        for n in order)
+        return _git_object("tree", data)
+
+    return " ".join((tree("ponte_brasil"), entries["br_bridge.py"][1], entries["scripts/ponte_brasil_conferir.py"][1]))
+
+
+def g_code_pin():
+    want = reviewed_code_hashes()
+    blocks = guide_blocks(_guide_text())
+    for name in ("PONTE", "CONFERE"):
+        got = re.findall(r'^CODIGO_REVISADO="([^"\n]*)"$', blocks.get(name, ""), re.M)
+        assert got == [want], (f"{name}: CODIGO_REVISADO do guia difere do código atual (mudou a ponte, o br_bridge ou a "
+                               "conferência? atualize os blocos PONTE e CONFERE)", got, want)
+    clean = subprocess.run(["git", "diff", "--quiet", "HEAD", "--", *PIN_PATHS], cwd=ROOT, timeout=30).returncode == 0
+    if os.environ.get("CI"):
+        assert clean, "no CI o código da ponte tem de ser o do HEAD"
+    if clean:   # conferência independente do cálculo: o próprio git
+        proc = subprocess.run(["git", "rev-parse", *[f"HEAD:{p}" for p in PIN_PATHS]], cwd=ROOT, capture_output=True, timeout=30)
+        assert proc.returncode == 0 and proc.stdout.decode("ascii").split() == want.split(), ("hash calculado difere do git",
+                                                                                            proc.stdout[:200], want)
+    else:
+        print("PONTE_AVISO g_code_pin: código da ponte difere do HEAD; a conferência com git rev-parse roda no CI", flush=True)
+
+
+SIM_PROJECT = "raio-x-4711"
+SIM_OLD_TOKEN = "0a" * 32
+SIM_NEW_TOKEN = "5e" * 32
+SIM_NEW_KEY = "c0ffee" * 6 + "abcd"
+SIM_SECRET = "SIMSEGREDO-CHAVE-PRIVADA"
+SIM_URL = "https://ponte-brasil-sim-rj.a.run.app"
+SIM_BUILD_MEMBER = "serviceAccount:123456789012-compute@developer.gserviceaccount.com"
+SIM_RENDER_MEMBER = f"serviceAccount:ponte-render@{SIM_PROJECT}.iam.gserviceaccount.com"
+SIM_RUNTIME = f"ponte-runtime@{SIM_PROJECT}.iam.gserviceaccount.com"
+SIM_OPEN_POLICY = '{"bindings": [{"members": ["allUsers"], "role": "roles/run.invoker"}]}'
+
+_SIM_LOG_LINE = """{ printf '%s' "$(umask)"; printf '\\037%s' "$@"; printf '\\n'; } >> "$SIM_LOG\""""
+
+FAKE_BIN = {
+    "gcloud": r"""#!/usr/bin/env bash
+# gcloud falso do gate: registra a chamada (umask, argumentos) e responde pelo estado em $SIM_STATE
+set -- gcloud "$@"
+""" + _SIM_LOG_LINE + r"""
+shift
+st="$SIM_STATE"
+case "$*" in
+  "config get-value project"*) printf '%s\n' "$SIM_CONFIG_PROJECT" ;;
+  "projects describe "*"value(name)"*) printf '%s\n' "$SIM_PROJECT_NAME" ;;
+  "projects describe "*"projectNumber"*) printf '123456789012\n' ;;
+  "projects list"*) if [ -n "$SIM_CANDIDATE" ]; then printf '%s\n' "$SIM_CANDIDATE"; fi ;;
+  "services list"*) if [ "$SIM_FIREBASE" = 1 ]; then printf 'firebase.googleapis.com\n'; fi ;;
+  "run services list"*) if [ -e "$st/service" ]; then printf 'ponte-brasil\n'; fi ;;
+  "run services describe"*"--format=json"*)
+    [ -e "$st/service" ] || { echo "ERROR: (gcloud.run.services.describe) Cannot find service [ponte-brasil]" >&2; exit 1; }
+    printf '{"spec": {"template": {"spec": {"containers": [{"env": [{"name": "PONTE_TOKEN", "value": "%s"}]}]}}}}\n' "$(cat "$st/token")" ;;
+  "run services describe"*)
+    [ -e "$st/service" ] || { echo "ERROR: (gcloud.run.services.describe) Cannot find service [ponte-brasil]" >&2; exit 1; }
+    printf 'https://ponte-brasil-sim-rj.a.run.app\n' ;;
+  "run deploy"*|"run services update"*)
+    for a in "$@"; do case "$a" in PONTE_TOKEN=*) printf '%s' "${a#PONTE_TOKEN=}" > "$st/token" ;; esac; done
+    : > "$st/service" ;;
+  "run services delete"*) [ -e "$st/service" ] || exit 1; rm -f "$st/service" ;;
+  "run services get-iam-policy"*) printf '%s\n' "$SIM_POLICY" ;;
+  "iam service-accounts describe "*) [ -e "$st/sa-${4%%@*}" ] || { echo "ERROR: NOT_FOUND" >&2; exit 1; } ;;
+  "iam service-accounts create "*) : > "$st/sa-$4" ;;
+  "iam service-accounts keys list"*) cat "$st/keys" ;;
+  "iam service-accounts keys create "*)
+    id="$(cat "$st/next-key")"
+    printf '{"type": "service_account", "private_key_id": "%s", "private_key": "-----BEGIN PRIVATE KEY-----\\nSIMSEGREDO-CHAVE-PRIVADA\\n-----END PRIVATE KEY-----\\n", "client_email": "ponte-render@sim"}\n' "$id" > "$5"
+    printf '%s\n' "$id" >> "$st/keys" ;;
+  "iam service-accounts keys delete "*) { grep -vx -- "$5" "$st/keys" || true; } > "$st/keys.novo"; mv -f "$st/keys.novo" "$st/keys" ;;
+esac
+exit 0
+""",
+    "git": r"""#!/usr/bin/env bash
+set -- git "$@"
+""" + _SIM_LOG_LINE + r"""
+shift
+if [ "$1" = clone ]; then
+  for alvo in "$@"; do :; done
+  mkdir -p "$alvo/scripts" "$alvo/ponte_brasil"
+  : > "$alvo/scripts/ponte_brasil_conferir.py"
+elif [ "$1" = -C ] && [ "$3" = rev-parse ]; then
+  printf '%s\n' $SIM_REV_PARSE
+fi
+exit 0
+""",
+    "python3": r"""#!/usr/bin/env bash
+case "${1:-}" in
+  *ponte_brasil_conferir.py)
+    set -- conferir "$@" "url=${RX_PONTE_BRASIL_URL:-}" "token=${RX_PONTE_BRASIL_TOKEN:-}" "chave=${RX_PONTE_BRASIL_CHAVE:+presente}"
+""" + _SIM_LOG_LINE + r"""
+    exit "$SIM_CONFERIR_RC" ;;
+esac
+"$SIM_PYTHON" "$@" | tr -d '\r'
+exit "${PIPESTATUS[0]}"
+""",
+    "openssl": r"""#!/usr/bin/env bash
+set -- openssl "$@"
+""" + _SIM_LOG_LINE + r"""
+printf '%s\n' "$SIM_NEW_TOKEN"
+""",
+    "cloudshell": r"""#!/usr/bin/env bash
+set -- cloudshell "$@"
+""" + _SIM_LOG_LINE + r"""
+exit 0
+""",
+    "sleep": "#!/usr/bin/env bash\nexit 0\n",
+}
+
+
+class SimResult:
+    def __init__(self, rc: int, out: str, calls: list[list[str]], render: str | None, keys: list[str], service: bool):
+        self.rc, self.out, self.calls, self.render, self.keys, self.service = rc, out, calls, render, keys, service
+
+    def gcloud(self) -> list[list[str]]:
+        return [c[2:] for c in self.calls if c[1] == "gcloud"]
+
+    def index(self, predicate) -> list[int]:
+        return [i for i, c in enumerate(self.calls) if predicate(c)]
+
+    def tail(self) -> str:
+        return self.out[-700:]
+
+
+def sim_block(name: str, *, project: str = SIM_PROJECT, project_name: str = "Raio-X", firebase: bool = False,
+              candidate: str = "", service: bool = False, token: str = SIM_OLD_TOKEN, accounts=(), keys=(),
+              key_json_id: str | None = None, conferir_rc: int = 0, policy: str = '{"bindings": []}',
+              rev_parse: str | None = None) -> SimResult:
+    """Roda um bloco do guia como o dono cola (bash lendo o bloco), com executáveis falsos na frente do PATH."""
+    bash = shutil.which("bash")
+    assert bash, "bash ausente"
+    body = guide_blocks(_guide_text()).get(name)
+    assert body, f"bloco {name} ausente"
+    tmp = Path(tempfile.mkdtemp(prefix="ponte-sim-"))
+    try:
+        home, state, bin_dir = tmp / "home", tmp / "state", tmp / "bin"
+        for folder in (home, state, bin_dir):
+            folder.mkdir()
+        for tool, script in FAKE_BIN.items():
+            path = bin_dir / tool
+            path.write_bytes(script.encode("utf-8"))
+            path.chmod(0o755)
+        if service:
+            (state / "service").write_bytes(b"")
+            (state / "token").write_bytes(token.encode("ascii"))
+        for account in accounts:
+            (state / f"sa-{account}").write_bytes(b"")
+        (state / "keys").write_bytes("".join(k + "\n" for k in keys).encode("ascii"))
+        (state / "next-key").write_bytes(SIM_NEW_KEY.encode("ascii"))
+        if key_json_id:
+            (home / ".raio-x-ponte").mkdir()
+            (home / ".raio-x-ponte" / "chave.json").write_bytes(json.dumps(
+                {"private_key_id": key_json_id, "private_key": f"-----BEGIN PRIVATE KEY-----\n{SIM_SECRET}\n"}).encode("ascii"))
+        log = tmp / "calls.log"
+        log.write_bytes(b"")
+        env = {k: v for k, v in os.environ.items()
+               if k not in ("GOOGLE_CLOUD_PROJECT", "CLOUDSDK_CORE_PROJECT", br_bridge.ENV_URL, br_bridge.ENV_TOKEN, br_bridge.ENV_KEY)}
+        env.update(HOME=home.as_posix(), PATH=str(bin_dir) + os.pathsep + os.environ.get("PATH", ""), SIM_LOG=log.as_posix(),
+                   SIM_STATE=state.as_posix(), SIM_PYTHON=Path(sys.executable).as_posix(), SIM_CONFIG_PROJECT=project,
+                   SIM_PROJECT_NAME=project_name, SIM_FIREBASE="1" if firebase else "0", SIM_CANDIDATE=candidate,
+                   SIM_POLICY=policy, SIM_CONFERIR_RC=str(conferir_rc), SIM_NEW_TOKEN=SIM_NEW_TOKEN,
+                   SIM_REV_PARSE=reviewed_code_hashes() if rev_parse is None else rev_parse)
+        # umask 022 antes de colar: a trava "umask 077" do bloco tem de ser dele, não herdada do ambiente do gate
+        proc = subprocess.run([bash], input=("umask 022\n" + body).encode("utf-8"), capture_output=True, env=env, timeout=240)
+        calls = [line.split("\x1f") for line in log.read_bytes().decode("utf-8").splitlines() if line]
+        render_path = home / "raio-x-chave-render.txt"
+        render = render_path.read_bytes().decode("ascii") if render_path.exists() else None
+        left = [k for k in (state / "keys").read_bytes().decode("ascii").split() if k]
+        return SimResult(proc.returncode, (proc.stdout + proc.stderr).decode("utf-8", "replace"), calls, render, left,
+                         (state / "service").exists())
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+_LOCK_ONLY = {("config", "get-value"), ("projects", "describe"), ("projects", "list"), ("services", "list")}
+_READ_ONLY = (("config", "get-value"), ("projects", "describe"), ("projects", "list"), ("services", "list"),
+              ("run", "services", "describe"), ("run", "services", "list"), ("run", "services", "get-iam-policy"),
+              ("iam", "service-accounts", "describe"), ("iam", "service-accounts", "keys", "list"))
+
+
+def _flag(args, name):
+    for i, arg in enumerate(args):
+        if arg == name and i + 1 < len(args):
+            return args[i + 1]
+        if arg.startswith(name + "="):
+            return arg.split("=", 1)[1]
+    return None
+
+
+def _read_only(args) -> bool:
+    return any(tuple(args[:len(prefix)]) == prefix for prefix in _READ_ONLY)
+
+
+def _gcloud_project(args):
+    if tuple(args[:2]) in (("config", "get-value"), ("projects", "list")):
+        return None
+    if tuple(args[:2]) in (("projects", "describe"), ("projects", "add-iam-policy-binding")):
+        return args[2]
+    return _flag(args, "--project") or ""
+
+
+def _assert_on_project(r: SimResult, label: str):
+    for args in r.gcloud():
+        got = _gcloud_project(args)
+        assert got is None or got == SIM_PROJECT, (label, "chamada do gcloud fora do projeto conferido", args)
+
+
+def _bindings(r: SimResult):
+    found = set()
+    for args in r.gcloud():
+        if "add-iam-policy-binding" in args:
+            i = args.index("add-iam-policy-binding")
+            found.add((" ".join(args[:i]), args[i + 1], _flag(args, "--member"), _flag(args, "--role")))
+    return found
+
+
+def _assert_secrets_hidden(r: SimResult, label: str, tokens=(SIM_OLD_TOKEN, SIM_NEW_TOKEN)):
+    assert SIM_SECRET not in r.out, (label, "chave impressa na tela")
+    if r.render is not None:   # a chave está mesmo no caminho (controle do próprio detector)
+        assert SIM_SECRET in base64.b64decode(r.render.strip()).decode("utf-8"), (label, "arquivo do Render sem a chave")
+        assert r.render.strip()[:48] not in r.out, (label, "chave em base64 impressa na tela")
+    for token in tokens:
+        shown = [ln for ln in r.out.splitlines() if token in ln]
+        assert all(ln.startswith("RX_PONTE_BRASIL_TOKEN = ") for ln in shown), (label, "token fora da caixa do Render", shown)
+
+
+def _assert_stopped(r: SimResult, label: str, *, lock_only=True):
+    assert r.rc != 0 and "PAROU:" in r.out, (label, r.rc, r.tail())
+    assert r.gcloud() and r.gcloud()[0][:2] == ["config", "get-value"], (label, "gcloud falso não foi chamado", r.calls)
+    for args in r.gcloud():
+        if lock_only:
+            assert tuple(args[:2]) in _LOCK_ONLY, (label, "agiu antes de conferir o projeto", args)
+        else:
+            assert _read_only(args), (label, "mudou algo no Google antes de parar", args)
+    assert not any(c[1] in ("conferir", "cloudshell") for c in r.calls), (label, r.calls)
+    assert "COPIE PARA O RENDER" not in r.out, label
+
+
+def g_sim_ponte():
+    """Bloco PONTE: projeto, permissões (papel, recurso, membro), publicação, umask, conferência, avisos, segredo."""
+    conferir_path = "/raio-x-ponte/scripts/ponte_brasil_conferir.py"
+
+    def deploy_of(r):
+        deploys = [a for a in r.gcloud() if a[:2] == ["run", "deploy"]]
+        assert len(deploys) == 1, deploys
+        return deploys[0]
+
+    def conferir_calls(r):
+        return [c for c in r.calls if c[1] == "conferir"]
+
+    # 1. primeira vez: tudo novo
+    r = sim_block("PONTE")
+    assert r.rc == 0 and "COPIE PARA O RENDER" in r.out, ("primeira vez", r.rc, r.tail())
+    assert len(r.gcloud()) >= 15, ("simulação não rodou o bloco", len(r.gcloud()))
+    _assert_on_project(r, "primeira vez")
+    assert _bindings(r) == {("projects", SIM_PROJECT, SIM_BUILD_MEMBER, "roles/run.builder"),
+                            ("run services", "ponte-brasil", SIM_RENDER_MEMBER, "roles/run.invoker")}, _bindings(r)
+    d = deploy_of(r)
+    assert d[2] == "ponte-brasil" and "--no-allow-unauthenticated" in d, d
+    assert (_flag(d, "--service-account"), _flag(d, "--max-instances"), _flag(d, "--region")) == (SIM_RUNTIME, "1", "southamerica-east1"), d
+    assert not [a for a in d if ("allow-unauthenticated" in a and a != "--no-allow-unauthenticated") or "invoker-iam" in a], d
+    assert _flag(d, "--set-env-vars") == f"PONTE_TOKEN={SIM_NEW_TOKEN}", d
+    created = [a[3] for a in r.gcloud() if a[:3] == ["iam", "service-accounts", "create"]]
+    assert created == ["ponte-runtime", "ponte-render"], created
+    umasks = [c[0] for c in r.calls if c[1] == "gcloud" and c[2:6] == ["iam", "service-accounts", "keys", "create"]]
+    assert umasks == ["0077"], ("chave criada sem umask 077", umasks)
+    conf = conferir_calls(r)
+    assert len(conf) == 1 and conf[0][2].endswith(conferir_path) and conf[0][3:] == [
+        "--esperar", "480", f"url={SIM_URL}", f"token={SIM_NEW_TOKEN}", "chave=presente"], conf
+    assert "O TOKEN E NOVO" in r.out and "A CHAVE E NOVA" in r.out and "IGUAIS AOS DE ANTES" not in r.out, r.tail()
+    assert any(c[1] == "cloudshell" and c[-1].endswith("raio-x-chave-render.txt") for c in r.calls), r.calls
+    _assert_secrets_hidden(r, "primeira vez")
+    # 2. colado de novo: reaproveita token e chave e diz que não precisa mexer no Render
+    r = sim_block("PONTE", service=True, accounts=("ponte-runtime", "ponte-render"), keys=("k1",), key_json_id="k1")
+    assert r.rc == 0 and "TOKEN E CHAVE IGUAIS AOS DE ANTES" in r.out, ("reaproveita", r.tail())
+    assert "O TOKEN E NOVO" not in r.out and "A CHAVE E NOVA" not in r.out, r.tail()
+    assert _flag(deploy_of(r), "--set-env-vars") == f"PONTE_TOKEN={SIM_OLD_TOKEN}"
+    assert not [a for a in r.gcloud() if a[:3] == ["iam", "service-accounts", "create"] or a[:4] == ["iam", "service-accounts", "keys", "create"]]
+    _assert_on_project(r, "reaproveita")
+    _assert_secrets_hidden(r, "reaproveita")
+    # 3. ponte apagada, chave mantida: token novo tem de ser avisado
+    r = sim_block("PONTE", accounts=("ponte-runtime", "ponte-render"), keys=("k1",), key_json_id="k1")
+    assert r.rc == 0 and "O TOKEN E NOVO" in r.out and "A CHAVE E NOVA" not in r.out, ("token novo sem aviso", r.tail())
+    assert "IGUAIS AOS DE ANTES" not in r.out and _flag(deploy_of(r), "--set-env-vars") == f"PONTE_TOKEN={SIM_NEW_TOKEN}"
+    # 4. chaves de tentativa anterior: apagadas só depois da conferência, nunca a nova
+    r = sim_block("PONTE", accounts=("ponte-runtime", "ponte-render"), keys=("k0", "k9"))
+    assert r.rc == 0 and r.keys == [SIM_NEW_KEY], ("chaves antigas", r.keys, r.tail())
+    deletes = r.index(lambda c: c[1] == "gcloud" and c[2:6] == ["iam", "service-accounts", "keys", "delete"])
+    conf = r.index(lambda c: c[1] == "conferir")
+    assert len(deletes) == 2 and len(conf) == 1 and conf[0] < min(deletes), ("apagou chave antes de conferir", deletes, conf)
+    # 5. conferência falhou: para, não apaga chave, não mostra a caixa, não baixa
+    r = sim_block("PONTE", accounts=("ponte-runtime", "ponte-render"), keys=("k0",), conferir_rc=1)
+    assert r.rc != 0 and "COPIE PARA O RENDER" not in r.out, ("seguiu depois da conferência falhar", r.rc, r.tail())
+    assert "k0" in r.keys and not any(c[1] == "cloudshell" for c in r.calls), (r.keys, r.calls)
+    # 6. ponte continua aberta ao público: para antes de conta, chave e conferência
+    r = sim_block("PONTE", policy=SIM_OPEN_POLICY)
+    assert r.rc != 0 and "PAROU: a ponte continua aberta" in r.out, ("ponte aberta", r.tail())
+    assert not [a for a in r.gcloud() if a[:4] == ["iam", "service-accounts", "keys", "create"] or "ponte-render" in a]
+    assert not conferir_calls(r) and "COPIE PARA O RENDER" not in r.out
+
+
+def g_sim_travas():
+    """Os quatro blocos param no projeto errado (AFP, outro, Raio-X com Firebase, nenhum) sem agir; PONTE e CONFERE
+    param com código diferente do revisado."""
+    cases = (   # "outro projeto sem Firebase" primeiro: sem a trava do nome, é ele que prova que o bloco agiria
+        ("outro projeto sem Firebase", dict(project="meu-outro-projeto", project_name="Outro")),
+        ("projeto do AFP", dict(project="metodo-afp-prod", project_name="Metodo AFP", firebase=True, candidate=SIM_PROJECT)),
+        ("nome Raio-X com Firebase", dict(firebase=True)),
+        ("nenhum projeto", dict(project="")),
+    )
+    for block in ("PONTE", "CONFERE", "TROCA", "PARAR"):
+        for label, kwargs in cases:
+            r = sim_block(block, service=True, accounts=("ponte-runtime", "ponte-render"), keys=("k1",), key_json_id="k1", **kwargs)
+            _assert_stopped(r, f"{block}: {label}")
+            if kwargs.get("project"):
+                assert ["projects", "describe", kwargs["project"], "--format=value(name)"] in r.gcloud(), (block, label, r.gcloud())
+            if kwargs.get("candidate"):
+                assert f"gcloud config set project {SIM_PROJECT}" in r.out, (block, label, r.tail())
+    wrong = " ".join(["0" * 40] * 3)
+    r = sim_block("PONTE", rev_parse=wrong)
+    _assert_stopped(r, "PONTE: código diferente do revisado")
+    assert any(c[1] == "git" and c[2] == "clone" for c in r.calls), r.calls
+    r = sim_block("CONFERE", service=True, key_json_id="k1", rev_parse=wrong)
+    _assert_stopped(r, "CONFERE: código diferente do revisado", lock_only=False)
+
+
+def g_sim_outros():
+    """CONFERE só lê; TROCA troca token e chave e apaga as antigas; PARAR apaga só a ponte do projeto conferido."""
+    r = sim_block("CONFERE", service=True, key_json_id="k1")
+    assert r.rc == 0, ("CONFERE", r.tail())
+    assert all(_read_only(a) for a in r.gcloud()), [a for a in r.gcloud() if not _read_only(a)]
+    conf = [c for c in r.calls if c[1] == "conferir"]
+    assert len(conf) == 1 and conf[0][3:] == ["--esperar", "0", f"url={SIM_URL}", f"token={SIM_OLD_TOKEN}", "chave=presente"], conf
+    _assert_on_project(r, "CONFERE")
+    _assert_secrets_hidden(r, "CONFERE")
+    r = sim_block("TROCA", service=True, accounts=("ponte-render",), keys=("k0", "k1"))
+    assert r.rc == 0 and r.keys == [SIM_NEW_KEY], ("TROCA", r.keys, r.tail())
+    updates = [a for a in r.gcloud() if a[:3] == ["run", "services", "update"]]
+    assert len(updates) == 1 and _flag(updates[0], "--update-env-vars") == f"PONTE_TOKEN={SIM_NEW_TOKEN}", updates
+    created = r.index(lambda c: c[1] == "gcloud" and c[2:6] == ["iam", "service-accounts", "keys", "create"])
+    deletes = r.index(lambda c: c[1] == "gcloud" and c[2:6] == ["iam", "service-accounts", "keys", "delete"])
+    assert len(created) == 1 and len(deletes) == 2 and created[0] < min(deletes), (created, deletes)
+    assert r.calls[created[0]][0] == "0077", ("TROCA sem umask 077", r.calls[created[0]][0])
+    assert "O TOKEN E NOVO" in r.out and "A CHAVE E NOVA" in r.out and f"RX_PONTE_BRASIL_TOKEN = {SIM_NEW_TOKEN}" in r.out, r.tail()
+    _assert_on_project(r, "TROCA")
+    _assert_secrets_hidden(r, "TROCA")
+    r = sim_block("TROCA", accounts=("ponte-render",), keys=("k0",))
+    assert r.rc == 0 and r.keys == [SIM_NEW_KEY] and "RX_PONTE_BRASIL_TOKEN =" not in r.out and "O TOKEN E NOVO" not in r.out, r.tail()
+    assert not [a for a in r.gcloud() if a[:3] == ["run", "services", "update"]]
+    r = sim_block("PARAR", service=True)
+    deletes = [a for a in r.gcloud() if a[:3] == ["run", "services", "delete"]]
+    assert r.rc == 0 and "PONTE APAGADA" in r.out and not r.service, ("PARAR", r.tail())
+    assert deletes == [["run", "services", "delete", "ponte-brasil", "--region", "southamerica-east1", "--project", SIM_PROJECT,
+                        "--quiet"]], deletes
+    _assert_on_project(r, "PARAR")
+    r = sim_block("PARAR")
+    assert r.rc == 0 and "ja nao existe" in r.out and not [a for a in r.gcloud() if a[:3] == ["run", "services", "delete"]], r.tail()
+
+
+@contextlib.contextmanager
+def guide_block_mutant(block: str, transform):
+    """Muda um trecho de um bloco do guia (como numa revisão) e roda a simulação contra o guia mudado."""
+    text = GUIDE.read_text(encoding="utf-8")
+    body = guide_blocks(text).get(block, "")
+    new_body = transform(body)
+    if not body or new_body == body:
+        raise MutationTargetMissing(f"{block}: mutação não mudou nada")
+    _GUIDE_OVERRIDE["text"] = text.replace(body, new_body)
+    try:
+        yield
+    finally:
+        _GUIDE_OVERRIDE.pop("text", None)
+
+
+def _guide_mut(block: str, old: str, new: str):
+    def transform(body: str) -> str:
+        if body.count(old) != 1:
+            raise MutationTargetMissing(f"{block}: trecho aparece {body.count(old)}x: {old.strip()[:70]!r}")
+        return body.replace(old, new)
+    return lambda: guide_block_mutant(block, transform)
+
+
+def _delete_keys_before_check(body: str) -> str:
+    match = re.search(r'if \[ "\$NOVA" = 1 \]; then\n  NOVO_ID=.*?\nfi\n', body, re.S)
+    line = 'python3 "$CODIGO/scripts/ponte_brasil_conferir.py" --esperar 480 || exit 1\n'
+    if not match or body.count(line) != 1:
+        raise MutationTargetMissing("PONTE: trecho de apagar chaves ou conferência não encontrado")
+    moved = body.replace(match.group(0), "")
+    return moved.replace(line, match.group(0) + line)
+
+
+_LOCK_PATTERN = "  raio-x*|*'|raio-x'*) ;;\n"
+_BRIDGE_FILE_OVERRIDE: dict[str, str] = {}
+
+
+@contextlib.contextmanager
+def bridge_file_mutant(old: str, new: str):
+    """Muda o br_bridge.py como lido por uma verificação que o carrega do zero (arranque)."""
+    _BRIDGE_FILE_OVERRIDE["src"] = _mutated_source(ROOT / "br_bridge.py", old, new)
+    try:
+        yield
+    finally:
+        _BRIDGE_FILE_OVERRIDE.pop("src", None)
+
+
 def _open_repinned(svc, host, ips, deadline):
     conn = svc.connector(host, host, ponte._remaining(deadline, svc.clock))
     conn.connect()
     return conn
 
 
-def _bridge_request_token_in_argv(args, cfg, *, budget_s=None):
-    out, stdin = _ORIG_BRIDGE_REQUEST(args, cfg, budget_s=budget_s)
+def _bridge_request_token_in_argv(args, cfg, *, budget_s=None, id_token=None):
+    out, stdin = _ORIG_BRIDGE_REQUEST(args, cfg, budget_s=budget_s, id_token=id_token)
     return out + ["-H", f"X-Ponte-Token: {cfg.token}"], stdin
 
 
-def _bridge_request_no_budget(args, cfg, *, budget_s=None):
-    return _ORIG_BRIDGE_REQUEST(args, cfg, budget_s=None)
+def _bridge_request_no_budget(args, cfg, *, budget_s=None, id_token=None):
+    return _ORIG_BRIDGE_REQUEST(args, cfg, budget_s=None, id_token=id_token)
 
 
-def _bridge_request_no_fail(args, cfg, *, budget_s=None):
-    out, stdin = _ORIG_BRIDGE_REQUEST(args, cfg, budget_s=budget_s)
+def _bridge_request_no_fail(args, cfg, *, budget_s=None, id_token=None):
+    out, stdin = _ORIG_BRIDGE_REQUEST(args, cfg, budget_s=budget_s, id_token=id_token)
     return [a for a in out if a != "--fail"], stdin
+
+
+def _bridge_request_id_in_argv(args, cfg, *, budget_s=None, id_token=None):
+    out, stdin = _ORIG_BRIDGE_REQUEST(args, cfg, budget_s=budget_s, id_token=id_token)
+    return (out + ["-H", f"{br_bridge.ID_TOKEN_HEADER}: Bearer {id_token}"] if id_token else out), stdin
 
 
 _ORIG_BRIDGE_REQUEST = br_bridge.bridge_request
@@ -1287,6 +2344,26 @@ def bridge_source_mutant(old: str, new: str):
     finally:
         br_bridge.__dict__.clear()
         br_bridge.__dict__.update(saved)
+
+
+@contextlib.contextmanager
+def conferir_source_mutant(old: str, new: str):
+    global CONFERIR
+    path = ROOT / "scripts" / "ponte_brasil_conferir.py"
+    module = types.ModuleType("ponte_brasil_conferir_mutante")
+    module.__file__ = str(path)
+    original = CONFERIR
+    try:
+        code = compile(_mutated_source(path, old, new), str(path), "exec")
+        exec(code, module.__dict__)
+        CONFERIR = module
+        yield
+    finally:
+        CONFERIR = original
+
+
+def _conferir_mut(old, new):
+    return lambda: conferir_source_mutant(old, new)
 
 
 def _ponte_mut(old, new):
@@ -1366,6 +2443,104 @@ MUTATIONS = [
     ("URL com CR/LF pela ponte", lambda: mock.patch.object(br_bridge, "url_has_forbidden_chars", lambda url: False), c_config),
     ("probe mede o INCRA por httpx com a ponte ligada",
      lambda: mock.patch.object(br_bridge, "route_for", lambda url, env=None: br_bridge.ROUTE_DIRECT), c_probe_sources),
+    # ponte fechada pelo Google (15/09/2026)
+    ("sem o cabeçalho X-Serverless-Authorization",
+     _bridge_mut('        headers += f"{ID_TOKEN_HEADER}: Bearer {id_token}\\r\\n"\n', "        pass\n"), i_incra_identity),
+    ("token de identidade na linha de comando", lambda: mock.patch.object(br_bridge, "bridge_request", _bridge_request_id_in_argv),
+     i_incra_identity),
+    ("uma troca de credencial por consulta", lambda: mock.patch.object(br_bridge, "ID_TOKEN_REFRESH_MARGIN_S", 10.0 ** 9),
+     i_incra_identity),
+    ("token perto de vencer nunca renova", lambda: mock.patch.object(br_bridge, "ID_TOKEN_REFRESH_MARGIN_S", 0.0), i_incra_identity),
+    ("chave estragada vira ponte só com token",
+     _bridge_mut("            return None   # chave colada pela metade: desligada e dito no log, nunca meio ligada\n",
+                 "            identity = None\n"), i_key_parse_and_signature),
+    ("chave com números incoerentes aceita",
+     _bridge_mut("    if dp != d % (p - 1) or dq != d % (q - 1) or (qinv * q) % p != 1 or pow(pow(2, e, n), d, n) != 2:\n"
+                 "        raise ValueError(\"rsa_incoerente\")\n", ""), i_key_parse_and_signature),
+    ("token_uri de outro endereço aceito",
+     _bridge_mut("        if data.get(\"token_uri\") not in (None, GOOGLE_TOKEN_URI):\n", "        if False:\n"),
+     i_key_parse_and_signature),
+    ("assinatura em Python puro com o algoritmo errado",
+     lambda: mock.patch.object(br_bridge, "_SHA256_DIGEST_INFO", bytes.fromhex("3041300d060960864801650304020205000430")),
+     i_key_parse_and_signature),
+    ("JWT sem target_audience", _bridge_mut('"exp": now + ASSERTION_LIFETIME_S, "target_audience": audience}',
+                                             '"exp": now + ASSERTION_LIFETIME_S}'), i_assertion),
+    ("token de identidade de outro serviço aceito",
+     _bridge_mut('    if claims.get("aud") != audience or exp - now < ID_TOKEN_MIN_LEFT_S:\n',
+                 "    if exp - now < ID_TOKEN_MIN_LEFT_S:\n"), i_assertion),
+    ("INCRA pela ponte sem credencial",
+     _bridge_mut("                return credential_failure(args)\n            budget = remaining_budget(timeout_seconds, started)\n",
+                 "                pass\n            budget = remaining_budget(timeout_seconds, started)\n"), i_credential_failures),
+    ("insiste na troca recusada", lambda: mock.patch.object(br_bridge, "ID_TOKEN_RETRY_AFTER_S", -1.0), i_credential_failures),
+    ("espera pela credencial sem limite", lambda: mock.patch.object(br_bridge, "_credential_wait", lambda t, s: 30.0),
+     i_credential_failures),
+    ("SICAR pela ponte sem credencial após queda direta",
+     _bridge_mut("        if token is None:\n            if proc is not None:\n",
+                 "        if False:\n            if proc is not None:\n"), i_sicar_identity),
+    ("SICAR devolve falha inventada em vez da falha direta",
+     _bridge_mut("                return proc                 # a falha direta é a resposta honesta\n", "                pass\n"),
+     i_sicar_identity),
+    ("conferência aceita ponte aberta", _conferir_mut("    if closed == 200:\n        print(\"PAROU: a ponte continua aberta",
+                                                      "    if False:\n        print(\"PAROU: a ponte continua aberta"), i_conferir),
+    ("conferência imprime segredo", _conferir_mut('print(f"  chave: lida (assinatura {cfg.identity.signer})", flush=True)',
+                                                  'print(f"  chave: lida {cfg.token} {cfg.audience}", flush=True)'), i_conferir),
+    # revisão de 15/09/2026: teto de saída, prazo depois da credencial, arranque, 401, guia rodado com gcloud falso
+    ("saída sem teto por hora", lambda: mock.patch.object(ponte.EgressBudget, "take", lambda self, n: True), s_egress_budget),
+    ("teto de saída não conferido na resposta", _ponte_mut("            if not svc.egress.take(len(upstream.body)):\n",
+                                                           "            if False:\n"), s_egress_budget),
+    ("balde de saída sem tamanho máximo", _ponte_mut("self.available = min(self.capacity, self.available + max(0.0, now - self.last) * self.rate)",
+                                                     "self.available = self.available + max(0.0, now - self.last) * self.rate"),
+     s_egress_budget),
+    ("teto de saída de 1 TiB", _ponte_mut("EGRESS_BYTES_PER_HOUR = 1024 ** 3", "EGRESS_BYTES_PER_HOUR = 1024 ** 4"), s_egress_budget),
+    ("SICAR pela ponte com menos que o prazo mínimo depois da credencial",
+     _bridge_mut("        if budget is not None and budget < MIN_BRIDGE_BUDGET_S:\n"
+                 "            return proc if proc is not None else credential_failure(args)\n", ""),
+     i_sicar_budget_after_credential),
+    ("arranque sem prewarm", lambda: bridge_file_mutant("\nprewarm()\n", "\n"), i_prewarm),
+    ("conferência aceita 401 sem credencial como fechada",
+     _conferir_mut("    if closed != 403 or healthy != 200:\n", "    if closed not in (401, 403) or healthy != 200:\n"), i_conferir),
+    ("guia: CODIGO_REVISADO desatualizado", lambda: mock.patch.object(
+        sys.modules[__name__], "_pin_read", lambda rel: _ORIG_PIN_READ(rel) + (b"#" if rel == "ponte_brasil/app.py" else b"")),
+     g_code_pin),
+    ("guia: run.invoker dado no PROJETO",
+     _guide_mut("PONTE", 'gcloud run services add-iam-policy-binding "$SERVICO" --region "$REGIAO" --project "$PROJETO" \\\n'
+                         '       --member="serviceAccount:$EMAIL"',
+                'gcloud projects add-iam-policy-binding "$PROJETO" \\\n       --member="serviceAccount:$EMAIL"'), g_sim_ponte),
+    ("guia: roles/editor extra para ponte-render",
+     _guide_mut("PONTE", '[ "$OK" = 1 ] || parou "o Google nao deu a permissao de chamar a ponte.',
+                'gcloud projects add-iam-policy-binding "$PROJETO" --member="serviceAccount:$EMAIL" --role=roles/editor '
+                '--condition=None --quiet >/dev/null\n[ "$OK" = 1 ] || parou "o Google nao deu a permissao de chamar a ponte.'),
+     g_sim_ponte),
+    ("guia: chave criada sem umask 077", _guide_mut("PONTE", "umask 077\n", ""), g_sim_ponte),
+    ("guia: TROCA sem umask 077", _guide_mut("TROCA", "umask 077\n", ""), g_sim_outros),
+    ("guia: sem conferir allUsers depois de publicar",
+     _guide_mut("PONTE", 'case "$POLITICA" in\n  *\'"allUsers"\'*|*\'"allAuthenticatedUsers"\'*) parou "a ponte continua aberta ao publico. '
+                         'NAO coloque nada no Render." ;;\nesac\n', ""), g_sim_ponte),
+    ("guia: publicação com --no-invoker-iam-check",
+     _guide_mut("PONTE", "--memory 256Mi --no-allow-unauthenticated", "--memory 256Mi --no-allow-unauthenticated --no-invoker-iam-check"),
+     g_sim_ponte),
+    ("guia: ponte roda com a conta padrão", _guide_mut("PONTE", '  --service-account "$RUNTIME" ', "  "), g_sim_ponte),
+    ("guia: publicação sem --project",
+     _guide_mut("PONTE", '--source "$CODIGO/ponte_brasil" --region "$REGIAO" --project "$PROJETO"',
+                '--source "$CODIGO/ponte_brasil" --region "$REGIAO"'), g_sim_ponte),
+    ("guia: chave impressa com printf",
+     _guide_mut("PONTE", 'export RX_PONTE_BRASIL_CHAVE\npython3 "$CODIGO',
+                'export RX_PONTE_BRASIL_CHAVE\nprintf \'%s\\n\' "$RX_PONTE_BRASIL_CHAVE"\npython3 "$CODIGO'), g_sim_ponte),
+    ("guia: conferência com || true", _guide_mut("PONTE", "--esperar 480 || exit 1", "--esperar 480 || true"), g_sim_ponte),
+    ("guia: chaves apagadas antes da conferência", lambda: guide_block_mutant("PONTE", _delete_keys_before_check), g_sim_ponte),
+    ("guia: token novo sem aviso", _guide_mut("PONTE", 'if [ "$TOKEN_NOVO" = 1 ]; then echo "O TOKEN E NOVO', 'if false; then echo "O TOKEN E NOVO'),
+     g_sim_ponte),
+    ("guia: TROCA sem apagar as chaves antigas", _guide_mut("TROCA", "for K in $ANTIGAS; do", "for K in; do"), g_sim_outros),
+    ("guia: PARAR sem --project no apagar",
+     _guide_mut("PARAR", 'gcloud run services delete "$SERVICO" --region "$REGIAO" --project "$PROJETO" --quiet',
+                'gcloud run services delete "$SERVICO" --region "$REGIAO" --quiet'), g_sim_outros),
+    ("guia: PONTE sem trava do nome do projeto", _guide_mut("PONTE", _LOCK_PATTERN, "  *) ;;\n"), g_sim_travas),
+    ("guia: CONFERE sem trava do nome do projeto", _guide_mut("CONFERE", _LOCK_PATTERN, "  *) ;;\n"), g_sim_travas),
+    ("guia: TROCA sem trava do nome do projeto", _guide_mut("TROCA", _LOCK_PATTERN, "  *) ;;\n"), g_sim_travas),
+    ("guia: PARAR sem trava do nome do projeto", _guide_mut("PARAR", _LOCK_PATTERN, "  *) ;;\n"), g_sim_travas),
+    ("guia: PONTE sem trava do Firebase", _guide_mut("PONTE", '[ -z "$FIREBASE" ] || parou', 'true || parou'), g_sim_travas),
+    ("guia: PONTE sem trava do código revisado", _guide_mut("PONTE", '[ "$ACHADO" = "$CODIGO_REVISADO " ]', "true"), g_sim_travas),
+    ("guia: CONFERE sem trava do código revisado", _guide_mut("CONFERE", '[ "$ACHADO" = "$CODIGO_REVISADO " ]', "true"), g_sim_travas),
 ]
 
 _ORIG_SERVICE_INIT = ponte.Service.__init__
@@ -1421,11 +2596,14 @@ def main() -> int:
     checks = [
         s_token, s_not_configured, s_health_and_paths, s_scheme, s_host_list, s_ip_literal, s_userinfo, s_port,
         s_canonical, s_private_dns, s_redirects, s_response_size, s_incomplete, s_methods, s_request_body, s_timeout, s_headers,
-        s_rate_limit, s_log_hygiene, s_upstream_status, s_tls_and_source,
+        s_rate_limit, s_egress_budget, s_log_hygiene, s_upstream_status, s_tls_and_source,
         s_inflight_release, s_malformed, s_content_type, s_redirect_post, s_slow_client, s_connection_cap,
         c_off_identical, c_incra_bridge, c_sicar_direct_then_bridge, c_sicar_budget_and_codes, c_sicar_window_rule,
         c_cancel_and_timeout, c_no_bridge_url_leak, c_probe_sources,
         c_config, c_real_curl, c_hosts_and_transports,
+        i_key_parse_and_signature, i_assertion, i_incra_identity, i_sicar_identity, i_credential_failures,
+        i_sicar_budget_after_credential, i_prewarm, i_real_curl_identity, i_conferir, g_guide, g_code_pin,
+        g_sim_travas, g_sim_ponte, g_sim_outros,
     ]
     for fn in checks:
         br_bridge.reset_state()
