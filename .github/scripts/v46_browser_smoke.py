@@ -680,6 +680,10 @@ CARD_FIELDS_JS = """()=>{const c=document.querySelector('.rx46-card');const f={}
 
 async def assert_card_rules_runtime(page, car, geometry):
     """Runs the shipped JS rules (not a Python twin) on deterministic payloads."""
+    # F1B: the card and the panel share ONE /map-panel request per CAR (window.rxMapPanelOnce). The real
+    # search just opened `car`, and its real /map-panel request may still be in flight (SICAR slow from
+    # GitHub): a fixture for the same code would never be asked. The deterministic payloads use their own code.
+    car = car[:-1] + ("0" if car[-1] != "0" else "1")
     fmt = await js(page, """()=>({ha0:rxNum.ha(0),haNull:rxNum.ha(null),haEmpty:rxNum.ha(''),haNaN:rxNum.ha(NaN),haStr0:rxNum.ha('0'),
       tiny:rxNum.num(0.003,2),edge:rxNum.num(0.005,2),big:rxNum.ha(1981.2),date:rxDateBR('2016-04-11T02:05:53.354Z'),dateNull:rxDateBR(null),
       renderWrapped:window.rxV46RenderV45Immediate?.__rxIdentitySanitizedV49===true})""")

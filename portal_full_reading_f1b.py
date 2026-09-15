@@ -171,8 +171,9 @@ FULL_READING_UI = r'''
  function slot(c){let s=c.querySelector('[data-rx-full-slot]');if(s)return s;s=document.createElement('section');s.className='rx45-section rx-f1b-full';s.setAttribute('data-rx-full-slot','');s.setAttribute('aria-live','polite');
   const comp=c.querySelector('.rx45-compliance'),sec=comp&&comp.closest('.rx45-section'),act=c.querySelector('.rx45-actions');
   if(sec&&sec.parentNode===c)sec.after(s);else if(act&&act.parentNode===c)act.before(s);else c.appendChild(s);return s}
- // The main button never turns into a retry: it opens the section; each section keeps its own "Consultar de novo".
- function button(c,e){const b=c.querySelector('#rx45Full');if(!b)return;if(e.phase==='loading'){b.textContent='CONSULTANDO FONTES…';b.setAttribute('aria-busy','true')}else{b.removeAttribute('aria-busy');b.textContent='VER ANÁLISE COMPLETA'}}
+ // The main button keeps its name in every state: it opens the section (where loading, pending and the
+ // section's own "Consultar de novo" live); loading is announced by aria-busy, never by a new label.
+ function button(c,e){const b=c.querySelector('#rx45Full');if(!b)return;b.textContent='VER ANÁLISE COMPLETA';if(e.phase==='loading')b.setAttribute('aria-busy','true');else b.removeAttribute('aria-busy')}
  function paint(car,scroll){const e=memo.get(car),c=card(car);if(!e||!c)return;const s=slot(c);s.dataset.phase=e.phase;s.innerHTML=html(e);button(c,e);try{if(typeof window.rxV48RefreshAudit==='function')window.rxV48RefreshAudit(c)}catch(x){}if(scroll){try{s.scrollIntoView({block:'start',behavior:'smooth'})}catch(x){}}}
  // The answer must be about THIS property; anything else is not an answer.
  const sameCar=(a,car)=>!!a&&typeof a==='object'&&norm(((a.car||{}).properties||{}).cod_imovel)===car;

@@ -316,6 +316,8 @@ def judge_harness(r: dict) -> list[str]:
     pol = r.get("polling") or {}
     if pol.get("quick") != 1 or pol.get("status") != 3 or pol.get("phase") != "ready" or not pol.get("at_recent"):
         p.append(f"deep polling wrong: {pol}")
+    if pol.get("loading_button") != "VER ANÁLISE COMPLETA" or pol.get("loading_busy") != "true" or pol.get("ready_busy") is not None:
+        p.append(f"main button renamed while loading (or busy state wrong): {pol.get('loading_button')!r} busy={pol.get('loading_busy')}/{pol.get('ready_busy')}")
     st = r.get("stale") or {}
     if "2 processos" not in (st.get("first_anm") or "") or "7 processos" not in (st.get("anm") or "") or (st.get("status") or 0) < 2:
         p.append(f"previous run shown as current after the engine cache expired: {st.get('first_anm')} -> {st.get('anm')} status={st.get('status')}")
@@ -448,6 +450,7 @@ def main() -> int:
         "merge overwrites answers": "merge replaced an answer by a later failure",
         "automatic retry for a closed panel": "automatic retry for a closed panel",
         "failure turns the main button into a retry": "main button stays VER ANÁLISE COMPLETA",
+        "loading renames the main button": "main button renamed while loading",
         "audit lists unasked sources": "audit lists sources nobody asked",
         "audit ignores the full analysis": "audit contradicts the full analysis",
     }
@@ -468,7 +471,8 @@ def main() -> int:
         ("no automatic retry of pending rows", "f1b", "if(mine.phase==='ready')fill(car,mine,false)", "if(false)fill(car,mine,false)"),
         ("merge overwrites answers", "f1b", "if(r.answer===PEND&&n&&n.answer!==PEND){changed=true;return n}", "if(n){changed=true;return n}"),
         ("automatic retry for a closed panel", "f1b", "if(!card(car)){mine.fill={state:'idle'};return}", ""),
-        ("failure turns the main button into a retry", "f1b", "b.textContent='VER ANÁLISE COMPLETA'}}", "b.textContent=e.phase==='failed'?'CONSULTAR DE NOVO':'VER ANÁLISE COMPLETA'}}"),
+        ("failure turns the main button into a retry", "f1b", "b.textContent='VER ANÁLISE COMPLETA';", "b.textContent=e.phase==='failed'?'CONSULTAR DE NOVO':'VER ANÁLISE COMPLETA';"),
+        ("loading renames the main button", "f1b", "b.textContent='VER ANÁLISE COMPLETA';", "b.textContent=e.phase==='loading'?'CONSULTANDO FONTES…':'VER ANÁLISE COMPLETA';"),
         ("audit lists unasked sources", "audit", "if(!row||!row.dataset.state)return;", "if(!row||!row.dataset.state){items.push(auditItem(source.label,'NÃO CONSULTADA','Estado desta fonte nesta consulta.'));return}"),
         ("audit ignores the full analysis", "audit", "else if(R&&R.phase==='ready'&&Array.isArray(R.rows))", "else if(false)"),
         ("unbounded polling on status errors", "f1b", "if(misses>=3)return null;", ""),

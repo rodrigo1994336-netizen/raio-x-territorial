@@ -170,9 +170,11 @@ async function main() {
     const F = env.win.rxFullReadingF1b;
     const t0 = Date.now();
     F.start(CAR); F.start(CAR);
+    const loadingButton = env.button.textContent, loadingBusy = env.button.getAttribute('aria-busy');
     await waitFor(settled(F));
     const e = F.peek(CAR) || {};
-    out.polling = { quick: count(env.calls, '/v1/live/quick/'), status: count(env.calls, '/v1/live/progressive/status/'), phase: e.phase, at_recent: typeof e.at === 'number' && e.at >= t0 };
+    out.polling = { quick: count(env.calls, '/v1/live/quick/'), status: count(env.calls, '/v1/live/progressive/status/'), phase: e.phase, at_recent: typeof e.at === 'number' && e.at >= t0,
+      loading_button: loadingButton, loading_busy: loadingBusy, ready_busy: env.button.getAttribute('aria-busy') };
   }
   // ---- crossing the engine cache expiry: the first answer after it is the PREVIOUS run's "ready" (deep_state
   // of quick-car), which must never be shown; the new run is asked for and shown
