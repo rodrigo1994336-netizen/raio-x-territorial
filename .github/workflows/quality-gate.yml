@@ -377,6 +377,10 @@ jobs:
         env:
           RX_RELEASE: OFF
         run: PYTHONPATH=. python scripts/f2_relatorio_v20_gate.py
+      - name: T1 terra-verdade gate (relevo em % pelas classes da Embrapa, sem "máximo" de percentil, solo nacional sem caixa de MG, sem SoilGrids e sem adjetivo da chuva da POWER, MCR com as datas da Res. CMN 5.303/2026, PDF da cadeia real; controles positivos por mutação no arquivo)
+        env:
+          RX_RELEASE: OFF
+        run: PYTHONPATH=. python scripts/t1_terra_verdade_gate.py
 
   o2-tela-nova-browser:
     runs-on: ubuntu-latest

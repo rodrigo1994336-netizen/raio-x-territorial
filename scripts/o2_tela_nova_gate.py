@@ -230,7 +230,16 @@ t('N6_found_with_pending_still_sim', () => { const a = clean(); a.embargos_ibama
 t('N7_no_services_is_pending', () => { const a = clean(); delete a.territorial_constraints; return row(a, 'protegida').seal === 'pendente' || row(a, 'protegida').seal; });
 t('N8_null_count_is_not_zero', () => { const a = clean(); a.anm = { ok: true, exact: { available: true, occurrence_count: null } }; return row(a, 'protegida').seal === 'pendente' || row(a, 'protegida').seal; });
 t('N9_water_outside_coverage_hidden', () => { const a = clean(); a.water_mg = { ok: false, detail: 'consulta_pendente:outside_source_coverage' }; const r = row(a, 'agua'); return (!/[Oo]utorga/.test(r.lead + r.details.join(' ')) && r.seal === null) || JSON.stringify(r); });
-t('N10_ide_only_in_mg', () => { const pa = R.facts(Object.assign({}, car, { cod_imovel: 'PA-1500602-8465DA50596B4D829325D2591083D5DB', uf: 'PA' })); const r = row(clean(), 'terra', pa); return (!/Solo|Declividade/.test(r.lead + r.details.join(' '))) || JSON.stringify(r); });
+// T1: solo pela base nacional (IBGE + Embrapa) em qualquer UF; a camada estadual de MG e o "risco de erosão" sozinho não voltam.
+t('N10_soil_national_not_state_layer', () => {
+  const a = clean(); a.ide_layers.erosion = { ok: true, exact_count: 1, samples: [{ properties: { indicador: 'Muito baixo' }, intersection_pct_car: 100 }] };
+  const mg = row(a, 'terra');
+  const pa = R.facts(Object.assign({}, car, { cod_imovel: 'PA-1500602-8465DA50596B4D829325D2591083D5DB', uf: 'PA' }));
+  const b = clean(); b.terra_nacional = { version: 'T1', states: { pedologia: 'found', aptidao: 'not_found', erodibilidade: 'found' }, texts: { solo: 'Cambissolo Háplico Tb Distrófico em cerca de 5 de cada 10 partes do imóvel.', erodibilidade: 'Erodibilidade média em todo o imóvel.' } };
+  const rp = row(b, 'terra', pa);
+  const mgText = mg.lead + ' ' + mg.details.join(' '), paText = rp.lead + ' ' + rp.details.join(' ');
+  return (!/Solo|erosão|Declividade|IDE-Sisema/.test(mgText) && /Solo no mapa oficial/.test(paText) && /fragilidade do próprio solo/.test(paText) && !/Risco potencial/.test(paText)) || JSON.stringify([mgText, paText]);
+});
 t('N11_title_only_validated', () => {
   const code = car.cod_imovel;
   const a = R.identity(code, { ok: true, validated_name: 'Fazenda X', validated_name_state: 'unresolved', panel_name_eligible: true });
@@ -401,7 +410,7 @@ def main() -> int:
         ("N17_pending_plus_none_never_nao", "pending ignored", {"app.js": sub(js, "    if (list.some(function (p) { return p.state === PEND; })) return PEND;\n    return NAO;", "    return NAO;")}),
         ("N8_null_count_is_not_zero", "null read as zero", {"app.js": sub(js, "if (obj.ok === true && ex.available === true && isNum(n) && n >= 0) return { label: label, state: n > 0 ? SIM : NAO", "if (obj.ok === true && ex.available === true) return { label: label, state: n > 0 ? SIM : NAO")}),
         ("N9_water_outside_coverage_hidden", "coverage ignored", {"app.js": sub(js, "if (w && typeof w === 'object' && !outside) {", "if (w && typeof w === 'object') {")}),
-        ("N10_ide_only_in_mg", "IDE everywhere", {"app.js": sub(js, "var applies = function (l) { return mg && l &&", "var applies = function (l) { return l &&")}),
+        ("N10_soil_national_not_state_layer", "national soil ignored", {"app.js": sub(js, "var t1 = a.terra_nacional && typeof a.terra_nacional === 'object' ? a.terra_nacional : null;", "var t1 = null;")}),
         ("N11_title_only_validated", "unvalidated name as title", {"app.js": sub(js, "p.validated_name_state === 'validated' && p.panel_name_eligible === true ?", "p.validated_name ?")}),
         ("N13_ptbr_numbers", "en-US numbers", {"app.js": sub(js, "return n.toLocaleString('pt-BR', { minimumFractionDigits: digits, maximumFractionDigits: digits });", "return n.toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits });")}),
         ("N16_merge_keeps_answers", "later pending replaces answer", {"app.js": sub(js, "if (r.seal === PEND && n && n.seal !== PEND) { changed = true; return n; }", "if (n) { changed = true; return n; }")}),

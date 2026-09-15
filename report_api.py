@@ -23,6 +23,7 @@ from climate_nasa import query_climate_nasa
 from ide_catalog import benchmark_targets, search_catalog
 from ide_layer_probe import probe_benchmark
 from critical_minerals import query_critical_minerals
+from solo_nacional_t1 import query_solo_nacional, compact_for_screen as _solo_screen
 from live_report_adapter_v8 import generate_live_report
 from sicar_lookup_http import lookup_http_error
 
@@ -65,6 +66,7 @@ def _report_summary(result: dict):
         'sgb_hit_layers':[{'layer':x.get('layer'),'title':x.get('title'),'minerals':x.get('minerals'),'hit_count':x.get('hit_count')} for x in (msgb.get('hit_layers') or [])[:20]],
         'detail':msgb.get('detail')
     }
+    base['terra_nacional']=_solo_screen(result.get('terra_nacional'))
     base['cache']={'ttl_seconds':CACHE_TTL_SECONDS,'max_items':CACHE_MAX_ITEMS,'deepcopy':False}
     return base
 
@@ -178,9 +180,11 @@ async def _analyze_uncached(car_code:str):
         _safe_thread('pivots_ana',query_pivots_ana,geometry,bbox,5.0,source='ANA / SNIRH - Pivôs Centrais'),
         _safe_thread('climate_nasa',query_climate_nasa,geometry,30,source='NASA POWER - Daily API'),
         _safe_async('critical_minerals',query_critical_minerals(geometry,result.get('anm')),'ANM/SIGMINE + SGB/GeoSGB'),
+        # T1: solo, aptidão e erodibilidade pela base nacional (IBGE + Embrapa), prazo próprio por camada.
+        _safe_thread('terra_nacional',query_solo_nacional,geometry,source='IBGE BDiA + Embrapa GeoInfo'),
     ]
     vals=await asyncio.gather(*jobs)
-    result['autos_ibama'],result['fire_live'],result['territorial_constraints'],result['water_mg'],result['pivots_ana'],result['climate_nasa'],result['critical_minerals']=vals
+    result['autos_ibama'],result['fire_live'],result['territorial_constraints'],result['water_mg'],result['pivots_ana'],result['climate_nasa'],result['critical_minerals'],result['terra_nacional']=vals
     result['ide_layers']=await _safe_thread('ide_layers',probe_benchmark,geometry,bbox,source='IDE-Sisema - Solo/Aptidão/Relevo/Uso')
     return result
 

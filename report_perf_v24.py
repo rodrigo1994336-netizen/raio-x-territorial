@@ -50,6 +50,7 @@ for attr,label in (
     ('query_climate_nasa','climate_recent'),
     ('query_critical_minerals','critical_minerals'),
     ('probe_benchmark','ide_useful_layers'),
+    ('query_solo_nacional','solo_nacional_t1'),
 ):
     _patch_attr(attr,label)
 

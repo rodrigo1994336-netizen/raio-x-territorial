@@ -11,7 +11,7 @@ from typing import Any
 import numpy as np
 import rasterio
 from rasterio.features import geometry_mask
-from rasterio.windows import from_bounds
+from rasterio.windows import Window, from_bounds
 from shapely.geometry import mapping, shape
 
 BASE='https://s3.amazonaws.com/elevation-tiles-prod/skadi'
@@ -48,31 +48,43 @@ def _download(lat:int,lon:int,cache:Path)->Path:
     return raw
 
 
+# T1 (terra-verdade): as classes de relevo da Embrapa (SiBCS) são em PORCENTAGEM de inclinação,
+# não em graus. 3° = 5,2 %; 8° = 14 %. Graus só aparecem no marco legal da Lei 12.651/2012
+# (uso restrito de 25° a 45°, art. 11). Não existe "máximo": o antigo slope_max_deg era o percentil 99,5.
+RELIEF_CLASSES_PCT=(
+    ('plano','0–3%',0.0,3.0),('suave ondulado','3–8%',3.0,8.0),('ondulado','8–20%',8.0,20.0),
+    ('forte ondulado','20–45%',20.0,45.0),('montanhoso','45–75%',45.0,75.0),('escarpado','acima de 75%',75.0,float('inf')),
+)
+LEGAL_RESTRICTED_DEG=25.0
+LEGAL_RESTRICTED_PCT=math.tan(math.radians(LEGAL_RESTRICTED_DEG))*100.0  # ≈ 46,63 %
+WINDOW_PAD_PX=3
+
+
 def _slope_stats(elev:np.ndarray,mask:np.ndarray,lat:float,res_deg:float):
     # SRTM grid is geographic. Convert angular cell spacing to metres locally.
     dy=max(abs(res_deg)*111_132.0,1.0)
     dx=max(abs(res_deg)*111_320.0*math.cos(math.radians(lat)),1.0)
-    work=elev.astype('float32')
-    valid=mask & np.isfinite(work) & (work>-32000)
+    work=elev.astype('float64')
+    dem_ok=np.isfinite(work) & (work>-32000)
+    valid=mask & dem_ok
     if int(valid.sum())<9:return None
-    # Fill outside/nodata with local median only for derivative continuity; statistics remain masked.
-    med=float(np.median(work[valid]));work[~valid]=med
+    # Neighbours outside the CAR keep their real elevation (the window is padded); only DEM
+    # nodata is filled, so the gradient on the border is terrain and not an artificial step.
+    med=float(np.median(work[dem_ok]));work[~dem_ok]=med
     gy,gx=np.gradient(work,dy,dx)
-    slope=np.degrees(np.arctan(np.hypot(gx,gy)))
-    vals=slope[valid]
-    classes=[
-        ('0–3°',0,3),('3–8°',3,8),('8–20°',8,20),('20–45°',20,45),('>45°',45,1e9)
-    ]
+    slope_pct=np.hypot(gx,gy)*100.0
+    vals=slope_pct[valid]
     rows=[]
-    for label,a,b in classes:
+    for label,range_label,a,b in RELIEF_CLASSES_PCT:
         pct=float(np.mean((vals>=a)&(vals<b))*100.0)
-        rows.append({'class':label,'share_pct':round(pct,2)})
+        rows.append({'class':label,'range':range_label,'share_pct':round(pct,2)})
     return {
-        'slope_mean_deg':round(float(np.mean(vals)),2),
-        'slope_median_deg':round(float(np.median(vals)),2),
-        'slope_p90_deg':round(float(np.percentile(vals,90)),2),
-        'slope_max_deg':round(float(np.percentile(vals,99.5)),2),
+        'slope_unit':'%',
+        'slope_mean_pct':round(float(np.mean(vals)),2),
+        'slope_median_pct':round(float(np.median(vals)),2),
+        'slope_p90_pct':round(float(np.percentile(vals,90)),2),
         'slope_classes':rows,
+        'slope_ge_25deg_share_pct':round(float(np.mean(vals>=LEGAL_RESTRICTED_PCT)*100.0),2),
         'slope_sample_pixels':int(vals.size),
     }
 
@@ -94,8 +106,8 @@ def query_terrain_srtm(car_geometry:dict[str,Any]):
                 left=max(minx,lon);right=min(maxx,lon+1);bottom=max(miny,lat);top=min(maxy,lat+1)
                 if right<=left or top<=bottom:continue
                 win=from_bounds(left,bottom,right,top,src.transform).round_offsets().round_lengths()
-                # pad by one pixel for gradients
-                win=win.round_offsets().round_lengths()
+                # pad the window so border pixels of the CAR have real neighbours for the gradient
+                win=Window(win.col_off-WINDOW_PAD_PX,win.row_off-WINDOW_PAD_PX,win.width+2*WINDOW_PAD_PX,win.height+2*WINDOW_PAD_PX)
                 arr=src.read(1,window=win,boundless=True,fill_value=-32768).astype('float32')
                 tr=src.window_transform(win)
                 inside=geometry_mask([mapping(car)],out_shape=arr.shape,transform=tr,invert=True,all_touched=False)
@@ -114,13 +126,17 @@ def query_terrain_srtm(car_geometry:dict[str,Any]):
     slope={}
     if slope_parts:
         total=sum(x['slope_sample_pixels'] for x in slope_parts)
-        for k in ('slope_mean_deg','slope_median_deg','slope_p90_deg','slope_max_deg'):
+        # Mean and class shares combine exactly by pixel weight. Median and P90 of a property split
+        # across SRTM tiles are pixel-weighted approximations of the per-tile values.
+        for k in ('slope_mean_pct','slope_median_pct','slope_p90_pct','slope_ge_25deg_share_pct'):
             slope[k]=round(sum(x[k]*x['slope_sample_pixels'] for x in slope_parts)/max(total,1),2)
-        classes={r['class']:0.0 for x in slope_parts for r in x['slope_classes']}
+        ranges={label:range_label for label,range_label,_a,_b in RELIEF_CLASSES_PCT}
+        classes={label:0.0 for label,_r,_a,_b in RELIEF_CLASSES_PCT}
         for x in slope_parts:
             w=x['slope_sample_pixels']/max(total,1)
             for r in x['slope_classes']:classes[r['class']]+=r['share_pct']*w
-        slope['slope_classes']=[{'class':k,'share_pct':round(v,2)} for k,v in classes.items()]
+        slope['slope_classes']=[{'class':k,'range':ranges[k],'share_pct':round(v,2)} for k,v in classes.items()]
+        slope['slope_unit']='%'
         slope['slope_sample_pixels']=total
     return {
         'ok':True,'source':'SRTM 1 arc-second (~30 m) via Mapzen/Tilezen Terrain Tiles — AWS Open Data',
@@ -128,8 +144,8 @@ def query_terrain_srtm(car_geometry:dict[str,Any]):
         'elevation_min_m':round(float(np.min(vals)),1),'elevation_mean_m':round(float(np.mean(vals)),1),
         'elevation_median_m':round(float(np.median(vals)),1),'elevation_max_m':round(float(np.max(vals)),1),
         'elevation_sample_pixels':int(vals.size),**slope,
-        'note':'Modelo digital de elevação SRTM (~30 m). Altitude e declividade são triagem topográfica raster; não substituem levantamento topográfico/geodésico de campo.'
+        'note':'Modelo digital de elevação SRTM (~30 m). Inclinação em porcentagem, classes de relevo da Embrapa. Altitude e inclinação são triagem topográfica; não substituem levantamento topográfico de campo.'
     }
 
 
-print('RX_TERRAIN_SRTM=elevation_slope_30m',flush=True)
+print('RX_TERRAIN_SRTM=elevation_slope_pct_embrapa_classes_30m',flush=True)

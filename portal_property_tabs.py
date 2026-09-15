@@ -11,6 +11,7 @@ from sicar_lookup_http import lookup_http_error
 from climate_nasa import query_climate_nasa, query_climatology_nasa, build_drought_screening
 from groundwater_siagas import query_groundwater
 from safras_ibge import query_safras
+from terra_verdade_t1 import withhold_rain_comparison
 
 app=portal_v8.app
 
@@ -26,7 +27,8 @@ async def _car(code:str):
 async def climate_detail(car_code:str,days:int=30):
     car=await _car(car_code);geom=car.get('geometry');days=max(7,min(int(days),365))
     recent,clim=await asyncio.gather(asyncio.to_thread(query_climate_nasa,geom,days),asyncio.to_thread(query_climatology_nasa,geom))
-    return {'ok':bool(recent.get('ok')),'car_code':car_code.upper(),'recent':recent,'climatology':clim,'drought':build_drought_screening(recent,clim)}
+    # T1: chuva recente da POWER (~50 km) não vira adjetivo contra o normal; os milímetros continuam em 'recent'.
+    return {'ok':bool(recent.get('ok')),'car_code':car_code.upper(),'recent':recent,'climatology':clim,'drought':withhold_rain_comparison(build_drought_screening(recent,clim))}
 
 
 @app.get('/v1/live/groundwater/{car_code}')

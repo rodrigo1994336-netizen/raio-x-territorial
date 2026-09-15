@@ -1,0 +1,57 @@
+{
+ "_origem": "Propriedades reais das camadas nacionais chamadas ao vivo em 13/09/2026 (estudo F1, amostras p1_*), unidades que cruzam o CAR de Curvelo/MG; geometrias sintéticas no gate.",
+ "pedo": {
+  "CXbd69": {
+   "nom_unidad": "CXbd69",
+   "legenda": "CXbd - Cambissolo Háplico Tb Distrófico",
+   "ordem": "CAMBISSOLO",
+   "subordem": "HÁPLICO",
+   "grande_gru": "Tb Distrófico",
+   "textura": "argilosa, média e argilosa cascalhenta, média cascalhenta",
+   "relevo": "suave \nondulado e ondulado"
+  },
+  "PVe34": {
+   "nom_unidad": "PVe34",
+   "legenda": "PVe - Argissolo Vermelho Eutrófico",
+   "ordem": "ARGISSOLO",
+   "subordem": "VERMELHO",
+   "grande_gru": "Eutrófico",
+   "textura": "média/argilosa cascalhenta, argilosa/argilosa cascalhenta e média/argilosa, argilosa",
+   "relevo": "forte \nondulado e montanhoso"
+  }
+ },
+ "apt": {
+  "PVe34": {
+   "nom_unidad": "PVe34",
+   "legenda": "PVe - Argissolo Vermelho Eutrófico",
+   "simb_apt": "4(p)",
+   "legenda_ap": "4(p)  Aptidão RESTRITA para pastagem plantada e INAPTA para lavouras."
+  },
+  "CXbd69": {
+   "nom_unidad": "CXbd69",
+   "legenda": "CXbd - Cambissolo Háplico Tb Distrófico",
+   "simb_apt": "6",
+   "legenda_ap": "6  Terras INAPTAS para uso agrícola, indicadas para a preservação de flora e fauna."
+  },
+  "Naodesm": {
+   "nom_unidad": "Naodesm",
+   "legenda": "Área não desmatada",
+   "simb_apt": "Naodesm",
+   "legenda_ap": "Área não desmatada"
+  }
+ },
+ "erod": {
+  "CXbd69": {
+   "nom_unidad": "CXbd69",
+   "legenda": "CXbd - Cambissolo Háplico Tb Distrófico",
+   "erod_um": "Alta",
+   "fator_k_um": "0.0435"
+  },
+  "PVe34": {
+   "nom_unidad": "PVe34",
+   "legenda": "PVe - Argissolo Vermelho Eutrófico",
+   "erod_um": "Média",
+   "fator_k_um": "0.0285"
+  }
+ }
+}

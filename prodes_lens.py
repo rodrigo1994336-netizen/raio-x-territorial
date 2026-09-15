@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any
 
+import mcr_regra_t1
+
 try:
     from shapely.geometry import shape
     from shapely.ops import unary_union
@@ -168,7 +170,7 @@ def derive_prodes_lens(
                 if post else
                 'Nenhuma detecção PRODES posterior a 31/07/2019 foi identificada entre as ocorrências retornadas nesta consulta. Isso não substitui a verificação da instituição financeira nem outras bases ambientais.'
             ),
-            'regulatory_basis':'MCR 2-9: verificação de supressão de vegetação nativa após 31/07/2019.',
+            'regulatory_basis':mcr_regra_t1.basis_text(fiscal_modules),
         },
         'calculation_method':method,
         'explanation':'O Raio-X mantém o histórico PRODES completo e, separadamente, destaca o recorte pós-31/07/2019. Em ambas as lentes, a área é a união das geometrias resultantes da interseção exata com o CAR, evitando dupla contagem.'
