@@ -54,6 +54,14 @@ Regras
   cenario_importa_sozinho    todo módulo que os cenários importam tem que importar sozinho, em processo
                              limpo: remendo de HTML que depende de outro módulo ter vindo antes derruba o
                              arranque do portal e faz o cenário reprovar pelo motivo errado.
+  remendo_importa_sozinho    REGRA DE FORMA, enumerada pela PROPRIEDADE do defeito e não por lista: todo
+                             módulo da raiz do repositório (onde vivem os módulos do servidor) que remenda
+                             texto por string no import e LEVANTA quando a âncora não casa importa sozinho,
+                             em processo limpo, e declara de quem herdou a âncora
+                             (`import X  # noqa: F401 - dono d...`). Duas guardas: o predicado não
+                             pode encolher (quem declara dono tem de estar no conjunto) e CADA linha de
+                             dependência declarada tem de ter o seu controle positivo por mutação — um
+                             exemplar com controle deixaria os outros consertados e desprotegidos.
   escopo_no_pool             ThreadPoolExecutor não copia o contexto: o sondador de camadas IDE embrulha cada
                              trabalho em in_current_scope, e o curl do trabalhador cai no prazo do escopo.
   copia_de_escopo_no_pool    REGRA DE FORMA: todo submit/map/run_in_executor dos módulos do servidor embrulha
@@ -1019,6 +1027,141 @@ def r_cenario_importa_sozinho():
     if ruins:
         fail("módulo do cenário não importa sozinho (o remendo depende da ordem do arranque): " + "; ".join(ruins))
     return f"{len(modulos)} módulos do cenário importam sozinhos: {', '.join(modulos)}"
+
+
+# ---------------------------------------------------------------- remendo por string: a família inteira
+# A regra acima varre a lista dos cenários, e lista não é propriedade: o conserto de 16/09 tocou três módulos
+# com o mesmo defeito e só UM estava nessa lista — os outros dois ficaram consertados e desprotegidos, e a
+# varredura achou mais cinco com a mesma fragilidade (portal_map_v46, portal_map_v46_anchor_state,
+# portal_map_polish_v43, portal_map_stability_v43, portal_release_v43). Daqui em diante a enumeração sai do
+# PREDICADO do defeito: todo módulo do repositório que remenda texto por string no import e LEVANTA quando a
+# âncora não casa. Quem entra no conjunto por escrever código novo entra sozinho, sem ninguém lembrar de
+# acrescentá-lo a lista nenhuma.
+MARCAS_REMENDO = (".count(", ".replace(", ".find(", ".index(")
+# A dependência declarada tem uma forma só, para o portão poder contá-la: `import X  # noqa: F401 - dono d...`
+DECLARA_ANCORA = re.compile(r"^[ \t]*import[ \t]+([A-Za-z_][A-Za-z_0-9]*)[ \t]*#[ \t]*noqa:[ \t]*F401[ \t]*[-–][ \t]*dono\b",
+                            re.M)
+
+
+def _levanta_no_import(arvore: ast.Module) -> bool:
+    """Tem `raise` alcançável no import: no corpo do módulo, ou numa função chamada de lá (o `once()`)."""
+    com_raise = {n.name for n in ast.walk(arvore)
+                 if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+                 and any(isinstance(x, ast.Raise) for x in ast.walk(n))}
+    pilha = list(arvore.body)
+    while pilha:
+        no = pilha.pop()
+        if isinstance(no, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue  # corpo de função/classe não roda no import
+        if isinstance(no, ast.Raise):
+            return True
+        for filho in ast.iter_child_nodes(no):
+            if isinstance(filho, ast.Call) and isinstance(filho.func, ast.Name) and filho.func.id in com_raise:
+                return True
+            pilha.append(filho)
+    return False
+
+
+def _le_estado_de_outro(arvore: ast.Module, eu: str, repo: set[str]) -> bool:
+    """Lê estado compartilhado escrito por OUTRO módulo do repositório (portal_v8.PORTAL_HTML e afins)."""
+    for no in ast.walk(arvore):
+        if isinstance(no, ast.Attribute) and isinstance(no.value, ast.Name):
+            if no.value.id in repo and no.value.id != eu and no.attr.isupper():
+                return True
+        if isinstance(no, ast.ImportFrom) and no.module in repo and no.module != eu:
+            if any(a.name.isupper() for a in no.names):
+                return True
+    return False
+
+
+def modulos_de_remendo() -> dict[str, list[str]]:
+    """Enumeração POR PROPRIEDADE (nunca por lista): módulo -> donos de âncora que ele declara."""
+    repo = {p.stem for p in ROOT.glob("*.py")}
+    achados: dict[str, list[str]] = {}
+    for caminho in sorted(ROOT.glob("*.py")):
+        if caminho.stem == "sitecustomize":
+            continue  # é o carregador, não um remendo
+        fonte = caminho.read_text(encoding="utf-8", errors="ignore")
+        if not any(marca in fonte for marca in MARCAS_REMENDO):
+            continue
+        try:
+            arvore = ast.parse(fonte)
+        except SyntaxError:
+            continue
+        if not _levanta_no_import(arvore) or not _le_estado_de_outro(arvore, caminho.stem, repo):
+            continue
+        achados[caminho.stem] = DECLARA_ANCORA.findall(fonte)
+    return achados
+
+
+def declaracoes_de_ancora() -> dict[str, list[str]]:
+    """Linhas `import X  # noqa: F401 - dono d...` de TODO o repositório, módulo -> linhas inteiras."""
+    saida: dict[str, list[str]] = {}
+    for caminho in sorted(ROOT.glob("*.py")):
+        fonte = caminho.read_text(encoding="utf-8", errors="ignore")
+        linhas = [linha for linha in fonte.splitlines() if DECLARA_ANCORA.match(linha)]
+        if linhas:
+            saida[caminho.stem] = linhas
+    return saida
+
+
+@regra("remendo_importa_sozinho")
+def r_remendo_importa_sozinho():
+    """Todo módulo que remenda por string e levanta quando a âncora não casa importa sozinho, em processo
+    limpo, e declara de quem herdou a âncora. Ordem de carregamento não é declaração de dependência: o que
+    só funciona porque o sitecustomize importou na sequência certa quebra no primeiro consumidor que não
+    seja o arranque (portão, teste, script) — e o erro aparece longe da causa."""
+    remendos = modulos_de_remendo()
+    if not remendos:
+        fail("instrumento quebrado: o predicado do remendo não casou com NENHUM módulo do repositório")
+    declaram = declaracoes_de_ancora()
+
+    # Guarda 1: o predicado não pode ficar curto. Quem declara dependência de âncora é, por definição, um
+    # remendo — se sumir do conjunto, o predicado foi quebrado e a regra passaria sem provar nada.
+    fora = sorted(set(declaram) - set(remendos))
+    if fora:
+        fail("instrumento quebrado: módulo que declara dono de âncora ficou FORA do conjunto do predicado "
+             f"(o predicado encolheu): {', '.join(fora)}")
+
+    # Guarda 2: controle positivo por mutação para CADA módulo coberto, não só para um. Cada linha de
+    # dependência declarada tem de ter a mutação que a apaga; senão o conserto fica sem prova e tirá-lo
+    # mantém o portão verde.
+    controles = {(rel, old.strip()) for rule, rel, old, _new, _exp in (m[:5] for m in MUTATIONS)
+                 if rule in ("remendo_importa_sozinho", "cenario_importa_sozinho")}
+    sem_controle = [f"{mod}: {linha.strip()[:90]}" for mod, linhas in sorted(declaram.items())
+                    for linha in linhas if (f"{mod}.py", linha.strip()) not in controles]
+    if sem_controle:
+        fail("dependência de âncora declarada SEM controle positivo por mutação (tirar o import manteria o "
+             "portão verde): " + "; ".join(sem_controle))
+
+    alvos = sorted(remendos)
+    # Só o controle por mutação usa esta restrição: ela deixa o controle custar UM import em vez de todos.
+    # Não reduz a regra no CI (o main() nunca a define) e não pode esconder enumeração curta, porque o
+    # módulo pedido tem de estar no conjunto derivado do predicado.
+    so = os.environ.get("RX_M1_SOZINHO_SO", "").strip()
+    if so:
+        if so not in remendos:
+            fail(f"instrumento quebrado: {so} não está no conjunto do predicado ({len(remendos)} módulos)")
+        alvos = [so]
+
+    env = dict(os.environ, PYTHONIOENCODING="utf-8", RX_RELEASE="OFF", RX_RASTERIO_RUNTIME_INSTALL="off")
+    env.pop("RX_M1_MUTANT_DIR", None)
+    env.pop("RX_M1_SOZINHO_SO", None)
+    # sys.path[0] do -c é o cwd (a árvore original): a cópia mutada precisa entrar antes dele, à mão.
+    prefixo = f"import sys;sys.path.insert(0,{MUTANT_DIR!r});" if MUTANT_DIR else ""
+    ruins: list[str] = []
+    for nome in alvos:
+        proc = subprocess.run([sys.executable, "-c", prefixo + f"import {nome}"], cwd=str(ROOT), env=env,
+                              capture_output=True, timeout=600)
+        if proc.returncode:
+            linhas = [x for x in (proc.stdout + proc.stderr).decode("utf-8", "ignore").splitlines() if x.strip()]
+            ruins.append(f"{nome} -> {linhas[-1][:200] if linhas else 'sem saída'}")
+    if ruins:
+        fail("remendo não importa sozinho (a âncora depende da ordem do arranque, não declarada): "
+             + "; ".join(ruins))
+    declarados = sum(len(v) for v in declaram.values())
+    return (f"{len(alvos)} de {len(remendos)} remendos importam sozinhos; {declarados} dependências de âncora "
+            f"declaradas em {len(declaram)} módulos, todas com controle: {', '.join(sorted(declaram))}")
 
 
 @regra("escopo_no_pool", linux=True)
@@ -2025,12 +2168,52 @@ MUTATIONS = [
     ("cenario_importa_sozinho", "portal_mining_resilience_v34.py",
      "import portal_property_tabs  # noqa: F401 - dono das âncoras kpi-servico-geologico e kpi-terras-raras\n",
      "", "não importa sozinho"),
+    # ---- um controle por LINHA de dependência declarada, não um controle exemplar: apagar qualquer uma
+    # delas tem de reprovar. A regra confere que esta lista cobre todas (guarda 2 de remendo_importa_sozinho),
+    # então esquecer um controle reprova o portão em vez de passar despercebido. RX_M1_SOZINHO_SO faz cada
+    # controle custar um import em vez de todos.
+    ("remendo_importa_sozinho", "portal_live_fix_v18.py",
+     "import portal_property_tabs  # noqa: F401 - dono da âncora pastagem-mapbiomas\n",
+     "", "não importa sozinho", {"RX_M1_SOZINHO_SO": "portal_live_fix_v18"}),
+    ("remendo_importa_sozinho", "portal_report_wake_f1b.py",
+     "import portal_share_link_w1a  # noqa: F401 - dono da marca <!-- RX_SHARE_LINK_W1A -->\n",
+     "", "não importa sozinho", {"RX_M1_SOZINHO_SO": "portal_report_wake_f1b"}),
+    ("remendo_importa_sozinho", "portal_release_v43.py",
+     "import portal_nationwide_v21  # noqa: F401 - dono da âncora loadVisibleParcels (V21)\n",
+     "", "não importa sozinho", {"RX_M1_SOZINHO_SO": "portal_release_v43"}),
+    ("remendo_importa_sozinho", "portal_map_stability_v43.py",
+     "import portal_release_v43  # noqa: F401 - dono da âncora window.rxVisibleCarCountV43\n",
+     "", "não importa sozinho", {"RX_M1_SOZINHO_SO": "portal_map_stability_v43"}),
+    ("remendo_importa_sozinho", "portal_map_stability_v43.py",
+     "import portal_map_context_symbols  # noqa: F401 - dono da âncora refresh() do contexto regional\n",
+     "", "não importa sozinho", {"RX_M1_SOZINHO_SO": "portal_map_stability_v43"}),
+    ("remendo_importa_sozinho", "portal_map_stability_v43.py",
+     "import portal_rare_earth_symbols  # noqa: F401 - dono da âncora refresh() das terras raras\n",
+     "", "não importa sozinho", {"RX_M1_SOZINHO_SO": "portal_map_stability_v43"}),
+    ("remendo_importa_sozinho", "portal_map_stability_v43.py",
+     "import portal_intelligence_filters  # noqa: F401 - dono da âncora da troca de camadas ANM\n",
+     "", "não importa sozinho", {"RX_M1_SOZINHO_SO": "portal_map_stability_v43"}),
+    ("remendo_importa_sozinho", "portal_map_polish_v43.py",
+     "import portal_map_stability_v43  # noqa: F401 - dono da âncora refresh() do contexto regional (V43.5)\n",
+     "", "não importa sozinho", {"RX_M1_SOZINHO_SO": "portal_map_polish_v43"}),
+    ("remendo_importa_sozinho", "portal_map_v46.py",
+     "import portal_map_stability_v43  # noqa: F401 - dono da âncora da região loadVisibleParcels (V43.5)\n",
+     "", "não importa sozinho", {"RX_M1_SOZINHO_SO": "portal_map_v46"}),
+    ("remendo_importa_sozinho", "portal_map_v46.py",
+     "import portal_field_mode_v31  # noqa: F401 - dono da âncora do fetch do modo campo\n",
+     "", "não importa sozinho", {"RX_M1_SOZINHO_SO": "portal_map_v46"}),
+    ("remendo_importa_sozinho", "portal_map_v46_anchor_state.py",
+     "import portal_map_panel_v45  # noqa: F401 - dono da âncora do renderizador do painel rápido (V45)\n",
+     "", "não importa sozinho", {"RX_M1_SOZINHO_SO": "portal_map_v46_anchor_state"}),
+    ("remendo_importa_sozinho", "portal_map_v46_anchor_state.py",
+     "import portal_map_v46  # noqa: F401 - dono da âncora do botão de leitura completa (V46)\n",
+     "", "não importa sozinho", {"RX_M1_SOZINHO_SO": "portal_map_v46_anchor_state"}),
     ("ci_roda_o_gate", ".github/workflows/quality-gate.yml", "python scripts/m1_processos_gate.py --exigir-linux",
      "python scripts/m1_processos_gate.py", "não exige Linux"),
 ]
 
 
-def run_mutant(rule: str, rel: str, old: str, new: str, expect: str) -> tuple[bool, str]:
+def run_mutant(rule: str, rel: str, old: str, new: str, expect: str, extra_env: dict | None = None) -> tuple[bool, str]:
     src = (ROOT / rel).read_text(encoding="utf-8")
     if src.count(old) != 1:
         return False, f"âncora da mutação não casa 1x em {rel}: {old[:80]!r} ({src.count(old)}x)"
@@ -2038,7 +2221,7 @@ def run_mutant(rule: str, rel: str, old: str, new: str, expect: str) -> tuple[bo
         target = Path(td) / rel
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(src.replace(old, new), encoding="utf-8", newline="\n")
-        env = dict(os.environ, PYTHONIOENCODING="utf-8")
+        env = dict(os.environ, PYTHONIOENCODING="utf-8", **(extra_env or {}))
         if rel.endswith(".yml"):
             env["RX_M1_WORKFLOW"] = str(target)
         else:
@@ -2095,8 +2278,9 @@ def main() -> int:
             failures.append(name)
     controls = 0
     if LINUX and "--sem-controles" not in args:
-        for rule, rel, old, new, expect in MUTATIONS:
-            ok, why = run_mutant(rule, rel, old, new, expect)
+        for entrada in MUTATIONS:
+            rule, rel, old, new, expect = entrada[:5]
+            ok, why = run_mutant(rule, rel, old, new, expect, entrada[5] if len(entrada) > 5 else None)
             controls += 1
             print(f"{'CONTROLE_OK' if ok else 'CONTROLE_FALHOU'} {rule} <- {rel}: {why}", flush=True)
             if not ok:
