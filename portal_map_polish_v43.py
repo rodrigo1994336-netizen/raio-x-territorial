@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import portal_v8
+# O refresh() do contexto regional remendado aqui já vem reescrito por portal_map_stability_v43 (recorte
+# de celular). Sem declarar a dependência, o remendo depende da ordem de importação e o arranque cai com
+# v43_6_context_default_disable_point_missing. Importar é idempotente.
+import portal_map_stability_v43  # noqa: F401 - dono da âncora refresh() do contexto regional (V43.5)
 
 html = portal_v8.PORTAL_HTML
 

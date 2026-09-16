@@ -1,6 +1,17 @@
 from __future__ import annotations
 
 import portal_v8
+# As âncoras remendadas aqui são escritas por outros módulos, não por este. Sem declarar a dependência,
+# o remendo só casa na ordem do arranque e o import fora dela derruba o arranque:
+#   portal_release_v43          -> window.rxVisibleCarCountV43 no laço de viewport
+#   portal_map_context_symbols  -> refresh() do contexto regional
+#   portal_rare_earth_symbols   -> refresh() do painel de terras raras
+#   portal_intelligence_filters -> troca das camadas ANM
+# Importar é idempotente e no arranque real nada muda de ordem (todos vêm antes no sitecustomize).
+import portal_release_v43  # noqa: F401 - dono da âncora window.rxVisibleCarCountV43
+import portal_map_context_symbols  # noqa: F401 - dono da âncora refresh() do contexto regional
+import portal_rare_earth_symbols  # noqa: F401 - dono da âncora refresh() das terras raras
+import portal_intelligence_filters  # noqa: F401 - dono da âncora da troca de camadas ANM
 
 html = portal_v8.PORTAL_HTML
 

@@ -13,6 +13,13 @@ from fastapi.responses import Response
 
 import portal_v8
 import portal_sicar_resilient
+# A região do laço de viewport remendada no fim deste arquivo já chega reescrita por outros módulos:
+# portal_map_stability_v43 (reconciliação das parcelas, clique e ramo de zoom baixo) e
+# portal_field_mode_v31 (o fetch do modo campo). Sem declarar a dependência, o remendo depende da ordem
+# de importação e o arranque cai com w1a_viewport_loader_region_missing /
+# v46_viewport_fetch_patch_missing. Importar é idempotente.
+import portal_map_stability_v43  # noqa: F401 - dono da âncora da região loadVisibleParcels (V43.5)
+import portal_field_mode_v31  # noqa: F401 - dono da âncora do fetch do modo campo
 
 app = portal_v8.app
 

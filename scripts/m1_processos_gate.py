@@ -54,6 +54,18 @@ Regras
   cenario_importa_sozinho    todo módulo que os cenários importam tem que importar sozinho, em processo
                              limpo: remendo de HTML que depende de outro módulo ter vindo antes derruba o
                              arranque do portal e faz o cenário reprovar pelo motivo errado.
+  remendo_importa_sozinho    REGRA DE FORMA, enumerada pela PROPRIEDADE do defeito e não por lista: todo
+                             módulo da raiz do repositório (onde vivem os módulos do servidor) que remenda
+                             texto por string no import e LEVANTA quando a âncora não casa importa sozinho,
+                             em processo limpo, e declara de quem herdou a âncora
+                             (`import X  # noqa: F401 - dono d...`). Quatro guardas, cada uma com o seu
+                             controle positivo: (0) o predicado captura a propriedade em TODAS as
+                             grafias e alcances, provado por módulos sintéticos; (1) o predicado não
+                             pode encolher (quem declara dono tem de estar no conjunto); (2) CADA linha
+                             de dependência declarada tem de ter o seu controle positivo por mutação —
+                             um exemplar com controle deixaria os outros consertados e desprotegidos;
+                             (3) o atalho de custo RX_M1_SOZINHO_SO só vale dentro do controle por
+                             mutação — fora dele REPROVA, em vez de encolher o portão e passar verde.
   escopo_no_pool             ThreadPoolExecutor não copia o contexto: o sondador de camadas IDE embrulha cada
                              trabalho em in_current_scope, e o curl do trabalhador cai no prazo do escopo.
   copia_de_escopo_no_pool    REGRA DE FORMA: todo submit/map/run_in_executor dos módulos do servidor embrulha
@@ -118,7 +130,9 @@ import traceback
 import types
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+# RX_M1_ROOT: só o controle por mutação do PRÓPRIO portão usa (o arquivo mutado vive num diretório
+# temporário, mas tem de medir o repositório de verdade). Sem a variável, a raiz sai do arquivo.
+ROOT = Path(os.environ.get("RX_M1_ROOT") or Path(__file__).resolve().parents[1])
 MUTANT_DIR = os.environ.get("RX_M1_MUTANT_DIR")
 for entry in ([str(ROOT)] + ([MUTANT_DIR] if MUTANT_DIR else [])):
     if entry in sys.path:
@@ -1031,6 +1045,283 @@ def r_cenario_importa_sozinho():
     if ruins:
         fail("módulo do cenário não importa sozinho (o remendo depende da ordem do arranque): " + "; ".join(ruins))
     return f"{len(modulos)} módulos do cenário importam sozinhos: {', '.join(modulos)}"
+
+
+# ---------------------------------------------------------------- remendo por string: a família inteira
+# A regra acima varre a lista dos cenários, e lista não é propriedade: o conserto de 16/09 tocou três módulos
+# com o mesmo defeito e só UM estava nessa lista — os outros dois ficaram consertados e desprotegidos, e a
+# varredura achou mais cinco com a mesma fragilidade (portal_map_v46, portal_map_v46_anchor_state,
+# portal_map_polish_v43, portal_map_stability_v43, portal_release_v43). Daqui em diante a enumeração sai do
+# PREDICADO do defeito: todo módulo do repositório que remenda texto por string no import e LEVANTA quando a
+# âncora não casa. Quem entra no conjunto por escrever código novo entra sozinho, sem ninguém lembrar de
+# acrescentá-lo a lista nenhuma.
+# Marcas de remendo por string. Eram quatro grafias, e a propriedade prometia "remenda texto por string":
+# módulo que remendasse por re.sub(), .partition() ou .format() ficava FORA em silêncio — o mesmo defeito que
+# a lista tinha, um nível acima. Ampliada e MEDIDA em 16/09: com as grafias abaixo e o alcance transitivo, o
+# conjunto continua nos mesmos 15 módulos (ninguém entrou, ninguém saiu). Quem usa a marca sem a propriedade
+# (não levanta no import, não lê estado alheio) continua de fora pelas outras duas cláusulas.
+MARCAS_REMENDO = (".count(", ".replace(", ".find(", ".index(", ".partition(", ".rpartition(",
+                  ".split(", ".rsplit(", "re.sub(", "re.subn(", ".format(")
+# A dependência declarada tem uma forma só, para o portão poder contá-la: `import X  # noqa: F401 - dono d...`
+# Aceita também `from X import Y`, `import X as y`, o `noqa:` ausente e os três traços (-, –, —): o projeto
+# escreve travessão longo na prosa, e a grafia que não casa some da contabilidade da guarda 2 sem avisar.
+DECLARA_ANCORA = re.compile(
+    r"^[ \t]*(?:import[ \t]+([A-Za-z_][A-Za-z_0-9]*)(?:[ \t]+as[ \t]+[A-Za-z_][A-Za-z_0-9]*)?"
+    r"|from[ \t]+([A-Za-z_][A-Za-z_0-9]*)[ \t]+import[ \t]+[^#\n]+?)"
+    r"[ \t]*#[ \t]*(?:noqa:[ \t]*F401[ \t]*)?[-–—][ \t]*dono\b", re.M)
+
+
+def _donos_declarados(fonte: str) -> list[str]:
+    """Nomes dos módulos donos de âncora declarados na fonte, em qualquer das formas aceitas."""
+    return [por_import or por_from for por_import, por_from in DECLARA_ANCORA.findall(fonte)]
+
+
+def _levanta_no_import(arvore: ast.Module) -> bool:
+    """Tem `raise` alcançável no import: no corpo do módulo, ou no FECHO TRANSITIVO das chamadas feitas de lá.
+
+    Um salto só, e só por ast.Name, deixava escapar o caso comum `def _aplica(): _estoura()` chamado no nível
+    do módulo, e também a chamada por atributo (`_mod.aplica()`, `helpers.once()`). O fecho fecha os dois.
+    """
+    funcoes: dict[str, ast.AST] = {}
+    for no in ast.walk(arvore):
+        if isinstance(no, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            funcoes.setdefault(no.name, no)
+
+    def chamada_para(no: ast.Call) -> str | None:
+        alvo = no.func
+        if isinstance(alvo, ast.Name):
+            return alvo.id
+        if isinstance(alvo, ast.Attribute):
+            return alvo.attr          # `_mod.aplica()` e `helpers.once()` resolvem pelo nome final
+        return None
+
+    memoria: dict[str, bool] = {}
+
+    def funcao_levanta(nome: str | None, visitados: frozenset) -> bool:
+        if nome is None or nome not in funcoes or nome in visitados:
+            return False
+        if nome in memoria:
+            return memoria[nome]
+        corpo = funcoes[nome]
+        adiante = visitados | {nome}
+        achou = any(isinstance(x, ast.Raise) for x in ast.walk(corpo)) or any(
+            funcao_levanta(chamada_para(c), adiante)
+            for c in ast.walk(corpo) if isinstance(c, ast.Call))
+        memoria[nome] = achou
+        return achou
+
+    pilha = list(arvore.body)
+    while pilha:
+        no = pilha.pop()
+        if isinstance(no, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue  # corpo de função/classe não roda no import
+        if isinstance(no, ast.Raise):
+            return True
+        for filho in ast.iter_child_nodes(no):
+            if isinstance(filho, ast.Call) and funcao_levanta(chamada_para(filho), frozenset()):
+                return True
+            pilha.append(filho)
+    return False
+
+
+def _le_estado_de_outro(arvore: ast.Module, eu: str, repo: set[str]) -> bool:
+    """Lê estado compartilhado escrito por OUTRO módulo do repositório (portal_v8.PORTAL_HTML e afins)."""
+    for no in ast.walk(arvore):
+        if isinstance(no, ast.Attribute) and isinstance(no.value, ast.Name):
+            if no.value.id in repo and no.value.id != eu and no.attr.isupper():
+                return True
+        if isinstance(no, ast.ImportFrom) and no.module in repo and no.module != eu:
+            if any(a.name.isupper() for a in no.names):
+                return True
+    return False
+
+
+def modulos_de_remendo(raiz: Path | None = None) -> dict[str, list[str]]:
+    """Enumeração POR PROPRIEDADE (nunca por lista): módulo -> donos de âncora que ele declara."""
+    raiz = raiz or ROOT
+    repo = {p.stem for p in raiz.glob("*.py")}
+    achados: dict[str, list[str]] = {}
+    for caminho in sorted(raiz.glob("*.py")):
+        if caminho.stem == "sitecustomize":
+            continue  # é o carregador, não um remendo
+        fonte = caminho.read_text(encoding="utf-8", errors="ignore")
+        if not any(marca in fonte for marca in MARCAS_REMENDO):
+            continue
+        try:
+            arvore = ast.parse(fonte)
+        except SyntaxError:
+            continue
+        if not _levanta_no_import(arvore) or not _le_estado_de_outro(arvore, caminho.stem, repo):
+            continue
+        achados[caminho.stem] = _donos_declarados(fonte)
+    return achados
+
+
+def declaracoes_de_ancora() -> dict[str, list[str]]:
+    """Linhas `import X  # noqa: F401 - dono d...` de TODO o repositório, módulo -> linhas inteiras."""
+    saida: dict[str, list[str]] = {}
+    for caminho in sorted(ROOT.glob("*.py")):
+        fonte = caminho.read_text(encoding="utf-8", errors="ignore")
+        linhas = [linha for linha in fonte.splitlines() if DECLARA_ANCORA.match(linha)]
+        if linhas:
+            saida[caminho.stem] = linhas
+    return saida
+
+
+# Cada grafia da propriedade escrita à mão, num módulo sintético que o predicado TEM de capturar. A guarda de
+# conjunto-não-vazio só diz que o predicado casou com alguém; isto diz que ele casa com a propriedade inteira.
+_SINTETICOS = {
+    "count":       '_H.count("A") != 1',
+    "replace":     '_H.replace("A", "B") == _H',
+    "find":        '_H.find("A") < 0',
+    "index":       '_H.index("A") < 0',
+    "partition":   '_H.partition("A")[1] == ""',
+    "rpartition":  '_H.rpartition("A")[1] == ""',
+    "split":       'len(_H.split("A")) != 2',
+    "rsplit":      'len(_H.rsplit("A", 1)) != 2',
+    "re_sub":      're.sub("A", "B", _H) == _H',
+    "re_subn":     're.subn("A", "B", _H)[1] != 1',
+    "format":      '"{}".format(_H) == ""',
+}
+_ALCANCE_DOIS_SALTOS = (
+    'import outro\n_H = outro.PORTAL_HTML\n'
+    'def _estoura():\n    raise RuntimeError("âncora não casa")\n'
+    'def _aplica():\n    if _H.count("A") != 1:\n        _estoura()\n_aplica()\n')
+_ALCANCE_POR_ATRIBUTO = (
+    'import sys\nimport outro\n_H = outro.PORTAL_HTML\n'
+    'def aplica():\n    if _H.count("A") != 1:\n        raise RuntimeError("âncora não casa")\n'
+    '_mod = sys.modules[__name__]\n_mod.aplica()\n')
+
+
+def _controle_do_predicado() -> str:
+    """Controle positivo DO PREDICADO (não da regra): módulo sintético com a propriedade em cada grafia, mais
+    os dois alcances que o salto único perdia (dois saltos, e chamada por atributo). Todos têm de entrar.
+
+    A guarda de conjunto-não-vazio prova que o predicado casou com ALGUÉM; só isto prova que ele casa com a
+    propriedade que o docstring promete. Sem ele, encolher as marcas passa despercebido enquanto sobrar um.
+    """
+    with tempfile.TemporaryDirectory(prefix="rx_m1_pred_") as td:
+        raiz = Path(td)
+        (raiz / "outro.py").write_text('PORTAL_HTML = "xAx"\n', encoding="utf-8", newline="\n")
+        esperados = set()
+        for nome, teste in _SINTETICOS.items():
+            esperados.add(f"grafia_{nome}")
+            (raiz / f"grafia_{nome}.py").write_text(
+                'import re\nimport outro\n_H = outro.PORTAL_HTML\n'
+                f'if {teste}:\n    raise RuntimeError("âncora não casa")\n',
+                encoding="utf-8", newline="\n")
+        for nome, fonte in (("alcance_dois_saltos", _ALCANCE_DOIS_SALTOS),
+                            ("alcance_por_atributo", _ALCANCE_POR_ATRIBUTO)):
+            esperados.add(nome)
+            (raiz / f"{nome}.py").write_text(fonte, encoding="utf-8", newline="\n")
+        # negativo: usa a marca, mas não levanta e não lê estado alheio -> tem de ficar de FORA
+        (raiz / "so_a_marca.py").write_text('TEXTO = "xAx".replace("A", "B")\n', encoding="utf-8", newline="\n")
+
+        pego = set(modulos_de_remendo(raiz))
+        faltou = sorted(esperados - pego)
+        if faltou:
+            fail("instrumento quebrado: o predicado NÃO captura a propriedade escrita nestas grafias ou "
+                 "alcances: " + ", ".join(faltou))
+        if "so_a_marca" in pego:
+            fail("instrumento quebrado: o predicado capturou módulo que só tem a marca, sem a propriedade")
+    return f"{len(esperados)} grafias e alcances sintéticos capturados, 1 negativo fora"
+
+
+def _controle_do_atalho(remendos: dict[str, list[str]]) -> str:
+    """Controle positivo da guarda 3: RX_M1_SOZINHO_SO fora do controle por mutação tem de REPROVAR.
+
+    Sem isto a variável é uma chave de desligar que mantém o portão VERDE verificando 1 remendo de 15, e o
+    único sinal seria um número dentro da linha de detalhe de uma regra que PASSOU — que ninguém lê.
+    """
+    env = dict(os.environ, PYTHONIOENCODING="utf-8", RX_M1_SOZINHO_SO=sorted(remendos)[0])
+    env.pop("RX_M1_CONTROLE", None)
+    proc = subprocess.run([sys.executable, str(Path(__file__).resolve()), "--regra", "remendo_importa_sozinho"],
+                          cwd=str(ROOT), env=env, capture_output=True, timeout=300)
+    saida = (proc.stdout + proc.stderr).decode("utf-8", "ignore")
+    if proc.returncode == 0 or "RX_M1_SOZINHO_SO" not in saida:
+        fail("guarda do atalho ausente: RX_M1_SOZINHO_SO encolheu o portão SEM reprovar "
+             f"(código={proc.returncode}, saída={saida[-300:]!r})")
+    return "RX_M1_SOZINHO_SO fora do controle reprova"
+
+
+@regra("remendo_importa_sozinho")
+def r_remendo_importa_sozinho():
+    """Todo módulo que remenda por string e levanta quando a âncora não casa importa sozinho, em processo
+    limpo, e declara de quem herdou a âncora. Ordem de carregamento não é declaração de dependência: o que
+    só funciona porque o sitecustomize importou na sequência certa quebra no primeiro consumidor que não
+    seja o arranque (portão, teste, script) — e o erro aparece longe da causa.
+
+    LIMITE DECLARADO: a mutação prova a NECESSIDADE de cada linha declarada, nunca a SUFICIÊNCIA da lista.
+    Dependência herdada por transitividade (A declara B, e B declara C de que A também precisa) NÃO está
+    escrita em A e não aparece em lista nenhuma — se B soltar C amanhã, A volta a quebrar à distância. A regra
+    de importar sozinho pega isso no ato; a lista, não. Não ler a lista de um módulo como fechada.
+    """
+    _controle_do_predicado()
+    remendos = modulos_de_remendo()
+    if not remendos:
+        fail("instrumento quebrado: o predicado do remendo não casou com NENHUM módulo do repositório")
+    declaram = declaracoes_de_ancora()
+
+    # Guarda 1: o predicado não pode ficar curto. Quem declara dependência de âncora é, por definição, um
+    # remendo — se sumir do conjunto, o predicado foi quebrado e a regra passaria sem provar nada.
+    fora = sorted(set(declaram) - set(remendos))
+    if fora:
+        fail("instrumento quebrado: módulo que declara dono de âncora ficou FORA do conjunto do predicado "
+             f"(o predicado encolheu): {', '.join(fora)}")
+
+    # Guarda 2: controle positivo por mutação para CADA módulo coberto, não só para um. Cada linha de
+    # dependência declarada tem de ter a mutação que a apaga; senão o conserto fica sem prova e tirá-lo
+    # mantém o portão verde.
+    controles = {(rel, old.strip()) for rule, rel, old, _new, _exp in (m[:5] for m in MUTATIONS)
+                 if rule in ("remendo_importa_sozinho", "cenario_importa_sozinho")}
+    sem_controle = [f"{mod}: {linha.strip()[:90]}" for mod, linhas in sorted(declaram.items())
+                    for linha in linhas if (f"{mod}.py", linha.strip()) not in controles]
+    if sem_controle:
+        fail("dependência de âncora declarada SEM controle positivo por mutação (tirar o import manteria o "
+             "portão verde): " + "; ".join(sem_controle))
+
+    alvos = sorted(remendos)
+    # Atalho de custo: faz cada controle por mutação custar UM import em vez de todos. Guarda 3 — só vale
+    # quando vem do run_mutant, o único a definir RX_M1_CONTROLE=1. Pedir MENOS sem esse segundo sinal
+    # REPROVA: a guarda antiga só cobria "pediu um módulo FORA do conjunto", nunca "pediu MENOS", e um portão
+    # que passa verde verificando 1 de 15 é chave de desligar. Bastava a variável vazar no ambiente do CI.
+    so = os.environ.get("RX_M1_SOZINHO_SO", "").strip()
+    if so:
+        if os.environ.get("RX_M1_CONTROLE", "").strip() != "1":
+            fail(f"RX_M1_SOZINHO_SO={so} fora do controle por mutação: o atalho encolheria o portão de "
+                 f"{len(remendos)} remendos para 1 e ele passaria verde. Só o run_mutant pode usar, e ele "
+                 "manda RX_M1_CONTROLE=1 junto.")
+        if so not in remendos:
+            fail(f"instrumento quebrado: {so} não está no conjunto do predicado ({len(remendos)} módulos)")
+        alvos = [so]
+    else:
+        _controle_do_atalho(remendos)
+
+    env = dict(os.environ, PYTHONIOENCODING="utf-8", RX_RELEASE="OFF", RX_RASTERIO_RUNTIME_INSTALL="off")
+    for variavel in ("RX_M1_MUTANT_DIR", "RX_M1_SOZINHO_SO", "RX_M1_CONTROLE", "RX_M1_ROOT"):
+        env.pop(variavel, None)
+    # sys.path[0] do -c é o cwd (a árvore original): a cópia mutada precisa entrar antes dele, à mão.
+    prefixo = f"import sys;sys.path.insert(0,{MUTANT_DIR!r});" if MUTANT_DIR else ""
+    ruins: list[str] = []
+    tempos: list[tuple[float, str]] = []
+    for nome in alvos:
+        t0 = time.monotonic()
+        proc = subprocess.run([sys.executable, "-c", prefixo + f"import {nome}"], cwd=str(ROOT), env=env,
+                              capture_output=True, timeout=600)
+        tempos.append((time.monotonic() - t0, nome))
+        if proc.returncode:
+            linhas = [x for x in (proc.stdout + proc.stderr).decode("utf-8", "ignore").splitlines() if x.strip()]
+            ruins.append(f"{nome} -> {linhas[-1][:200] if linhas else 'sem saída'}")
+    if ruins:
+        fail("remendo não importa sozinho (a âncora depende da ordem do arranque, não declarada): "
+             + "; ".join(ruins))
+    declarados = sum(len(v) for v in declaram.values())
+    # O tempo por módulo entra na mensagem: sem número, uma degradação de 10x se esconde atrás do teto folgado
+    # de 600 s por import e o portão apenas "demora mais", sem reprovar e sem deixar rastro.
+    pior_s, pior = max(tempos)
+    return (f"{len(alvos)} de {len(remendos)} remendos importam sozinhos; {declarados} dependências de âncora "
+            f"declaradas em {len(declaram)} módulos, todas com controle: {', '.join(sorted(declaram))} "
+            f"[{sum(t for t, _ in tempos):.1f}s no total, pior {pior} {pior_s:.1f}s, teto 600s por import]")
 
 
 @regra("escopo_no_pool", linux=True)
@@ -2450,6 +2741,67 @@ MUTATIONS = [
     ("cenario_importa_sozinho", "portal_mining_resilience_v34.py",
      "import portal_property_tabs  # noqa: F401 - dono das âncoras kpi-servico-geologico e kpi-terras-raras\n",
      "", "não importa sozinho"),
+    # ---- um controle por LINHA de dependência declarada, não um controle exemplar: apagar qualquer uma
+    # delas tem de reprovar. A regra confere que esta lista cobre todas (guarda 2 de remendo_importa_sozinho),
+    # então esquecer um controle reprova o portão em vez de passar despercebido. RX_M1_SOZINHO_SO faz cada
+    # controle custar um import em vez de todos.
+    ("remendo_importa_sozinho", "portal_live_fix_v18.py",
+     "import portal_property_tabs  # noqa: F401 - dono da âncora pastagem-mapbiomas\n",
+     "", "não importa sozinho", {"RX_M1_SOZINHO_SO": "portal_live_fix_v18"}),
+    ("remendo_importa_sozinho", "portal_report_wake_f1b.py",
+     "import portal_share_link_w1a  # noqa: F401 - dono da marca <!-- RX_SHARE_LINK_W1A -->\n",
+     "", "não importa sozinho", {"RX_M1_SOZINHO_SO": "portal_report_wake_f1b"}),
+    ("remendo_importa_sozinho", "portal_release_v43.py",
+     "import portal_nationwide_v21  # noqa: F401 - dono da âncora loadVisibleParcels (V21)\n",
+     "", "não importa sozinho", {"RX_M1_SOZINHO_SO": "portal_release_v43"}),
+    ("remendo_importa_sozinho", "portal_map_stability_v43.py",
+     "import portal_release_v43  # noqa: F401 - dono da âncora window.rxVisibleCarCountV43\n",
+     "", "não importa sozinho", {"RX_M1_SOZINHO_SO": "portal_map_stability_v43"}),
+    ("remendo_importa_sozinho", "portal_map_stability_v43.py",
+     "import portal_map_context_symbols  # noqa: F401 - dono da âncora refresh() do contexto regional\n",
+     "", "não importa sozinho", {"RX_M1_SOZINHO_SO": "portal_map_stability_v43"}),
+    ("remendo_importa_sozinho", "portal_map_stability_v43.py",
+     "import portal_rare_earth_symbols  # noqa: F401 - dono da âncora refresh() das terras raras\n",
+     "", "não importa sozinho", {"RX_M1_SOZINHO_SO": "portal_map_stability_v43"}),
+    ("remendo_importa_sozinho", "portal_map_stability_v43.py",
+     "import portal_intelligence_filters  # noqa: F401 - dono da âncora da troca de camadas ANM\n",
+     "", "não importa sozinho", {"RX_M1_SOZINHO_SO": "portal_map_stability_v43"}),
+    ("remendo_importa_sozinho", "portal_map_polish_v43.py",
+     "import portal_map_stability_v43  # noqa: F401 - dono da âncora refresh() do contexto regional (V43.5)\n",
+     "", "não importa sozinho", {"RX_M1_SOZINHO_SO": "portal_map_polish_v43"}),
+    ("remendo_importa_sozinho", "portal_map_v46.py",
+     "import portal_map_stability_v43  # noqa: F401 - dono da âncora da região loadVisibleParcels (V43.5)\n",
+     "", "não importa sozinho", {"RX_M1_SOZINHO_SO": "portal_map_v46"}),
+    ("remendo_importa_sozinho", "portal_map_v46.py",
+     "import portal_field_mode_v31  # noqa: F401 - dono da âncora do fetch do modo campo\n",
+     "", "não importa sozinho", {"RX_M1_SOZINHO_SO": "portal_map_v46"}),
+    ("remendo_importa_sozinho", "portal_map_v46_anchor_state.py",
+     "import portal_map_panel_v45  # noqa: F401 - dono da âncora do renderizador do painel rápido (V45)\n",
+     "", "não importa sozinho", {"RX_M1_SOZINHO_SO": "portal_map_v46_anchor_state"}),
+    ("remendo_importa_sozinho", "portal_map_v46_anchor_state.py",
+     "import portal_map_v46  # noqa: F401 - dono da âncora do botão de leitura completa (V46)\n",
+     "", "não importa sozinho", {"RX_M1_SOZINHO_SO": "portal_map_v46_anchor_state"}),
+    # ---- controles do PRÓPRIO portão: as guardas que sustentam a promessa central não tinham controle
+    # nenhum — apagá-las amanhã manteria o verde E a mensagem continuaria dizendo "todas com controle".
+    # O run_mutant executa o ARQUIVO mutado quando o alvo é este script (RX_M1_ROOT aponta a raiz real).
+    # Os textos são montados por concatenação de propósito: escritos inteiros casariam DUAS vezes no
+    # arquivo (aqui e no alvo) e o run_mutant recusaria a âncora.
+    ("remendo_importa_sozinho", "scripts/m1_processos_gate.py",          # guarda 0: marca apagada
+     'MARCAS_REMENDO = (".count(", ' + '".replace(", ',
+     'MARCAS_REMENDO = (".count(", ',
+     "NÃO captura a propriedade"),
+    ("remendo_importa_sozinho", "scripts/m1_processos_gate.py",          # guarda 1: predicado encolhido
+     '        if caminho.stem ' + '== "sitecustomize":',
+     '        if caminho.stem in ("sitecustomize", "portal_live_fix_v18"):',
+     "o predicado encolheu"),
+    ("remendo_importa_sozinho", "scripts/m1_processos_gate.py",          # guarda 2: controle faltando
+     'if rule in ("remendo_importa_sozinho", ' + '"cenario_importa_sozinho")}',
+     'if rule in ("cenario_importa_sozinho",)}',
+     "SEM controle positivo por mutação"),
+    ("remendo_importa_sozinho", "scripts/m1_processos_gate.py",          # guarda 3: atalho destravado
+     'if os.environ.get("RX_M1_CONTROLE", "").strip() ' + '!= "1":',
+     'if os.environ.get("RX_M1_CONTROLE", "").strip() == "1":',
+     "guarda do atalho ausente"),
     ("ci_roda_o_gate", ".github/workflows/quality-gate.yml", "python scripts/m1_processos_gate.py --exigir-linux",
      "python scripts/m1_processos_gate.py", "não exige Linux"),
     # ---- desistência no relatório móvel: sem o embrulho, a exceção volta a subir até o ASGI
@@ -2514,7 +2866,7 @@ MUTATIONS = [
 ]
 
 
-def run_mutant(rule: str, rel: str, old: str, new: str, expect: str) -> tuple[bool, str]:
+def run_mutant(rule: str, rel: str, old: str, new: str, expect: str, extra_env: dict | None = None) -> tuple[bool, str]:
     src = (ROOT / rel).read_text(encoding="utf-8")
     if src.count(old) != 1:
         return False, f"âncora da mutação não casa 1x em {rel}: {old[:80]!r} ({src.count(old)}x)"
@@ -2522,12 +2874,18 @@ def run_mutant(rule: str, rel: str, old: str, new: str, expect: str) -> tuple[bo
         target = Path(td) / rel
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(src.replace(old, new), encoding="utf-8", newline="\n")
-        env = dict(os.environ, PYTHONIOENCODING="utf-8")
+        # RX_M1_CONTROLE=1 é o segundo sinal do atalho de custo: só o controle por mutação o manda, e sem
+        # ele RX_M1_SOZINHO_SO reprova o portão em vez de encolhê-lo em silêncio.
+        env = dict(os.environ, PYTHONIOENCODING="utf-8", RX_M1_CONTROLE="1", **(extra_env or {}))
+        script = Path(__file__).resolve()
         if rel.endswith(".yml"):
             env["RX_M1_WORKFLOW"] = str(target)
+        elif Path(rel).as_posix() == "scripts/m1_processos_gate.py":
+            script = target                 # o alvo é o PRÓPRIO portão: roda o arquivo mutado
+            env["RX_M1_ROOT"] = str(ROOT)   # medindo o repositório de verdade, não o temporário
         else:
             env["RX_M1_MUTANT_DIR"] = td
-        proc = subprocess.run([sys.executable, str(Path(__file__).resolve()), "--regra", rule], cwd=str(ROOT), env=env,
+        proc = subprocess.run([sys.executable, str(script), "--regra", rule], cwd=str(ROOT), env=env,
                               capture_output=True, timeout=600)
     out = (proc.stdout + proc.stderr).decode("utf-8", "ignore")
     line = next((x for x in out.splitlines() if x.startswith(f"FALHA {rule}")), "")
@@ -2557,6 +2915,16 @@ def run_rule(name: str) -> tuple[bool, str]:
 
 def main() -> int:
     args = sys.argv[1:]
+    # As variáveis do controle por mutação só existem dentro dele, e ele sempre chama com --regra.
+    # Vazando no ambiente da execução inteira (export herdado, matriz de job, cache de ambiente) elas
+    # encolheriam ou desviariam o portão sem avisar; aqui reprovam em vez de passar verde.
+    if "--regra" not in args:
+        vazadas = sorted(v for v in ("RX_M1_SOZINHO_SO", "RX_M1_CONTROLE", "RX_M1_MUTANT_DIR",
+                                     "RX_M1_ROOT") if os.environ.get(v, "").strip())
+        if vazadas:
+            print("RX_M1_PROCESSOS_GATE=FALHA variáveis do controle por mutação no ambiente da execução "
+                  f"inteira (o portão rodaria encolhido sem avisar): {vazadas}", flush=True)
+            return 1
     if "--regra" in args:
         name = args[args.index("--regra") + 1]
         ok, why = run_rule(name)
@@ -2579,8 +2947,9 @@ def main() -> int:
             failures.append(name)
     controls = 0
     if LINUX and "--sem-controles" not in args:
-        for rule, rel, old, new, expect in MUTATIONS:
-            ok, why = run_mutant(rule, rel, old, new, expect)
+        for entrada in MUTATIONS:
+            rule, rel, old, new, expect = entrada[:5]
+            ok, why = run_mutant(rule, rel, old, new, expect, entrada[5] if len(entrada) > 5 else None)
             controls += 1
             print(f"{'CONTROLE_OK' if ok else 'CONTROLE_FALHOU'} {rule} <- {rel}: {why}", flush=True)
             if not ok:

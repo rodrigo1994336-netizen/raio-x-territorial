@@ -1,6 +1,12 @@
 from __future__ import annotations
 
 import portal_v8
+# O painel rápido remendado aqui é escrito por portal_map_panel_v45, e o botão de leitura completa já
+# chega reescrito por portal_map_v46. Sem declarar a dependência, o remendo depende da ordem de
+# importação e o arranque cai com v46_panel_normalization_helpers_missing / v46_cta_immediate_v45_missing.
+# Importar é idempotente.
+import portal_map_panel_v45  # noqa: F401 - dono da âncora do renderizador do painel rápido (V45)
+import portal_map_v46  # noqa: F401 - dono da âncora do botão de leitura completa (V46)
 
 html = portal_v8.PORTAL_HTML
 
