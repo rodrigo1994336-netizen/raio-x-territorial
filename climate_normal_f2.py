@@ -47,7 +47,7 @@ from datetime import date, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 import json
 import math
-import subprocess
+from external_process_lifecycle import run_managed_process
 import threading
 from typing import Any
 from urllib.parse import urlencode
@@ -266,10 +266,10 @@ def query_rain_history_nasa(car_geometry: dict[str, Any], first_year: int = 1991
         "start": f"{first_year}0101", "end": f"{last_year}1231", "format": "JSON", "time-standard": "UTC",
     }
     try:
-        proc = subprocess.run(
+        proc = run_managed_process(
             ["curl", "-sS", "--connect-timeout", str(HISTORY_CONNECT_TIMEOUT_S), "--max-time", str(HISTORY_MAX_TIME_S),
              "-A", "Raio-X-Territorial/f2-climate-normal", POWER_DAILY + "?" + urlencode(params)],
-            capture_output=True, timeout=HISTORY_MAX_TIME_S + 5,
+            timeout_seconds=HISTORY_MAX_TIME_S + 5,
         )
     except Exception as exc:
         return {"ok": False, "status": "pending", "source": "NASA POWER - Daily API", "detail": f"curl:{type(exc).__name__}"}

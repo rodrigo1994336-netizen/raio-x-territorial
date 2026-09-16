@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import math
 import subprocess
+
+from external_process_lifecycle import ManagedProcessCancelled, in_current_scope, run_managed_process
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 from urllib.parse import urlencode
@@ -37,9 +39,11 @@ STATIC_LAYERS={
 
 def _curl(url:str,expect_json=False,max_time=40):
     try:
-        p=subprocess.run(['curl','-sS','--retry','1','--retry-delay','1','--connect-timeout','10','--max-time',str(max_time),'-A','Raio-X-Territorial/0.17-water-direct',url],capture_output=True,timeout=max_time+8)
+        p=run_managed_process(['curl','-sS','--retry','1','--retry-delay','1','--connect-timeout','10','--max-time',str(max_time),'-A','Raio-X-Territorial/0.17-water-direct',url],timeout_seconds=max_time+8)
     except subprocess.TimeoutExpired as e:
         return {'ok':False,'detail':f'TimeoutExpired:{e}'}
+    except ManagedProcessCancelled:
+        return {'ok':False,'cancelled':True,'detail':'request_cancelled'}
     if p.returncode:
         return {'ok':False,'detail':p.stderr.decode('utf-8','ignore')[:300]}
     raw=p.stdout
@@ -115,7 +119,7 @@ def query_outorgas_mg(car_geometry:dict[str,Any], bbox:list[float], radius_km:fl
     xmin,ymin,xmax,ymax=bbox; qb=[xmin-dlon,ymin-dlat,xmax+dlon,ymax+dlat]
     layer_results={}
     with ThreadPoolExecutor(max_workers=2) as ex:
-        futs={ex.submit(_query_layer,layer,car,car_m,tr,qb,radius_km):key for key,layer in STATIC_LAYERS.items()}
+        futs={ex.submit(in_current_scope(_query_layer),layer,car,car_m,tr,qb,radius_km):key for key,layer in STATIC_LAYERS.items()}
         for fut in as_completed(futs):
             key=futs[fut]
             try: layer_results[key]=fut.result()

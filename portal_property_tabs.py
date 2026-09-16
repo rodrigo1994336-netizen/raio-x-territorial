@@ -4,9 +4,12 @@ import asyncio
 import time
 
 
+from fastapi import HTTPException, Request
+
 import portal_v8
 import report_api as report_base
-from external_process_lifecycle import wait_for_cancelling_processes
+from external_process_lifecycle import RequestDisconnected, wait_for_cancelling_processes
+import car_resilient
 from car_resilient import fetch_car_live_resilient
 from sicar_lookup_http import lookup_http_error
 from climate_nasa import query_climate_nasa, query_climatology_nasa, build_drought_screening
@@ -17,38 +20,55 @@ from terra_verdade_t1 import withhold_rain_comparison
 app=portal_v8.app
 
 
-async def _car(code:str):
-    car=await asyncio.to_thread(fetch_car_live_resilient,code.upper())
+def _desistiu():return HTTPException(status_code=499,detail='Consulta encerrada: o cliente desistiu.')
+
+# Prazo da busca do CAR: o teto do pior caso declarado pelo car_resilient (tentativas x prazo duro de cada uma).
+# Menor que isso cortaria resposta que hoje chega; o ganho vem do cancelamento, não do corte.
+_CAR_S=car_resilient.WORST_CASE_SECONDS
+
+
+async def _car(code:str,request=None,budget:float|None=None):
+    # Dentro do escopo: prazo e desistência do cliente derrubam os curls desta busca e impedem o próximo.
+    try:
+        car=await wait_for_cancelling_processes(asyncio.to_thread(fetch_car_live_resilient,code.upper()),
+                                                _CAR_S if budget is None else budget,request=request)
+    except asyncio.TimeoutError:
+        raise lookup_http_error({'detail':'timeout'})
+    except RequestDisconnected:
+        raise _desistiu()
     if not car.get('ok'):
         raise lookup_http_error(car)
     return car
 
 
 @app.get('/v1/live/climate-detail/{car_code}')
-async def climate_detail(car_code:str,days:int=30):
-    car=await _car(car_code);geom=car.get('geometry');days=max(7,min(int(days),365))
+async def climate_detail(car_code:str,days:int=30,request:Request=None):
+    car=await _car(car_code,request);geom=car.get('geometry');days=max(7,min(int(days),365))
     recent,clim=await asyncio.gather(asyncio.to_thread(query_climate_nasa,geom,days),asyncio.to_thread(query_climatology_nasa,geom))
     # T1: chuva recente da POWER (~50 km) não vira adjetivo contra o normal; os milímetros continuam em 'recent'.
     return {'ok':bool(recent.get('ok')),'car_code':car_code.upper(),'recent':recent,'climatology':clim,'drought':withhold_rain_comparison(build_drought_screening(recent,clim))}
 
 
 @app.get('/v1/live/groundwater/{car_code}')
-async def groundwater_detail(car_code:str,radius_km:float=20.0):
-    car=await _car(car_code)
+async def groundwater_detail(car_code:str,radius_km:float=20.0,request:Request=None):
+    car=await _car(car_code,request)
     return await query_groundwater(car.get('geometry'),max(5.0,min(float(radius_km),50.0)))
 
 
 @app.get('/v1/live/safras/{car_code}')
-async def crop_context(car_code:str):
-    await _car(car_code)
+async def crop_context(car_code:str,request:Request=None):
+    await _car(car_code,request)
     return await query_safras(car_code.upper())
 
 
 @app.get('/v1/live/embargos-detail/{car_code}')
-async def embargos_detail(car_code:str):
+async def embargos_detail(car_code:str,request:Request=None):
     code=car_code.upper()
-    try:result=await wait_for_cancelling_processes(report_base.analyze_car(code),18)
-    except asyncio.TimeoutError:result={'car':await _car(code)}
+    # O caminho de reserva corre DENTRO do escopo: prazo próprio e desistência do cliente derrubam os curls
+    # dele também. Antes ele saía sem prazo e fora do cancelamento (até ~132 s de SICAR depois da desistência).
+    try:result=await wait_for_cancelling_processes(report_base.analyze_car(code),18,request=request)
+    except asyncio.TimeoutError:result={'car':await _car(code,request)}
+    except RequestDisconnected:raise _desistiu()
     car=result.get('car') or {}
     # 404 only when SICAR answered without the property; a lookup that failed is a pending consultation.
     if not car.get('ok'):raise lookup_http_error(car)

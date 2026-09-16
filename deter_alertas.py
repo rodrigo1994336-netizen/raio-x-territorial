@@ -70,6 +70,8 @@ import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+
+from external_process_lifecycle import in_current_scope
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Callable, Iterable
@@ -557,7 +559,7 @@ def query_deter_live(geometria_car: Any, *, http_get: HttpGet | None = None, ago
             return None
 
     with ThreadPoolExecutor(max_workers=6) as pool:
-        cob = {k: pool.submit(guarda, k, "cobertura", lambda k=k: query_coverage(k, geom, get, base_dir=base_dir, agora=agora,
+        cob = {k: pool.submit(in_current_scope(guarda), k, "cobertura", lambda k=k: query_coverage(k, geom, get, base_dir=base_dir, agora=agora,
                                                                           detalhe=respostas[k]["cobertura_detalhe"]))
                for k in SISTEMAS}
         for k in SISTEMAS:
@@ -566,9 +568,9 @@ def query_deter_live(geometria_car: Any, *, http_get: HttpGet | None = None, ago
         for k in SISTEMAS:
             if respostas[k]["cobertura"] == "nenhuma":
                 continue
-            tarefas[(k, "alertas")] = pool.submit(guarda, k, "alertas", lambda k=k: query_alerts(k, geom, get))
-            tarefas[(k, "corte")] = pool.submit(guarda, k, "corte", lambda k=k: query_cutoff(k, get, agora))
-            tarefas[(k, "ultima")] = pool.submit(guarda, k, "ultima_imagem", lambda k=k: query_latest_image(k, get, agora))
+            tarefas[(k, "alertas")] = pool.submit(in_current_scope(guarda), k, "alertas", lambda k=k: query_alerts(k, geom, get))
+            tarefas[(k, "corte")] = pool.submit(in_current_scope(guarda), k, "corte", lambda k=k: query_cutoff(k, get, agora))
+            tarefas[(k, "ultima")] = pool.submit(in_current_scope(guarda), k, "ultima_imagem", lambda k=k: query_latest_image(k, get, agora))
         for (k, etapa), fut in tarefas.items():
             valor = fut.result()
             if etapa == "alertas" and valor is not None:

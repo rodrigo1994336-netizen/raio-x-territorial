@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-import subprocess
+from external_process_lifecycle import in_current_scope, run_managed_process
 import time
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -32,7 +32,7 @@ def _curl(url:str,expect_json=True):
         p=br_bridge.run_curl([
             'curl','-k','-sS','--fail','--retry','0',
             '--connect-timeout','6','--max-time','13','-A','Raio-X-Territorial/SICAR-v41',url
-        ],timeout_seconds=17,runner=br_bridge.subprocess_runner)
+        ],timeout_seconds=17,runner=run_managed_process)
     except Exception as e:return {'ok':False,'detail':f'{type(e).__name__}:{str(e)[:220]}'}
     if p.returncode:return {'ok':False,'detail':p.stderr.decode('utf-8','ignore')[:260]}
     raw=p.stdout
@@ -120,7 +120,7 @@ def query_sicar_details_v2(car_geometry:dict[str,Any],bbox:list[float],max_layer
     results_by_name={};geoms_by_name={}
     workers=max(1,min(4,len(layers)))
     with ThreadPoolExecutor(max_workers=workers,thread_name_prefix='sicar-v41') as ex:
-        futures={ex.submit(_query_layer,t,c,car,bbox,car_code):(t,c) for t,c in layers}
+        futures={ex.submit(in_current_scope(_query_layer),t,c,car,bbox,car_code):(t,c) for t,c in layers}
         for fut in as_completed(futures):
             t,c=futures[fut]
             try:item,geoms=fut.result()

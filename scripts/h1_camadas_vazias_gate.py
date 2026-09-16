@@ -411,15 +411,16 @@ def s8_sync_sources():
 
     reset_routes()
     route(lambda u, p: "SIGMINE" in u and IS_COUNT(p), json_response({"count": 0}))
-    # Só o nome dentro do anm_fast_v29: trocar subprocess.run no módulo global atingia a thread de arranque do
-    # sitecustomize (platform.win32_ver recebia bytes e o gate caía de vez em quando com TypeError).
-    fake_subprocess = types.SimpleNamespace(**{k: getattr(subprocess, k) for k in dir(subprocess) if not k.startswith("__")})
-    fake_subprocess.run = lambda *a, **k: subprocess.CompletedProcess(a, 0, stdout=b'{"type":"FeatureCollection","features":[]}', stderr=b"")
-    anm_fast_v29.subprocess = fake_subprocess
+    # Só o nome dentro do anm_fast_v29 (desde 15/09 o executor é o run_managed_process): trocar o executor no
+    # módulo global atingia a thread de arranque do sitecustomize (platform.win32_ver recebia bytes e o gate
+    # caía de vez em quando com TypeError).
+    runner_real = anm_fast_v29.run_managed_process
+    anm_fast_v29.run_managed_process = lambda *a, **k: subprocess.CompletedProcess(
+        a, 0, stdout=b'{"type":"FeatureCollection","features":[]}', stderr=b"")
     try:
         r = anm_fast_v29._curl_anm_bbox(CURVELO["bbox"])
     finally:
-        anm_fast_v29.subprocess = subprocess
+        anm_fast_v29.run_managed_process = runner_real
     check("ANM com camada vazia = pendente", r.get("ok") is False and (r.get("layer_guard") or {}).get("reason") == "layer_empty", str(r.get("layer_guard")))
 
     def wfs_curl(features):

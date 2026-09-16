@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-import subprocess
+from external_process_lifecycle import run_managed_process
 import time
 from urllib.parse import urlencode
 
@@ -25,11 +25,11 @@ def _curl_anm_bbox(bbox):
         # ANM is valuable, but a slow provider must not block the whole dossier.
         # One bounded attempt is enough in the synchronous report path. The mining
         # tab can refresh independently later when the provider recovers.
-        p=subprocess.run([
+        p=run_managed_process([
             'curl','-sS','--retry','0',
             '--connect-timeout','3','--max-time','7',
             '-A','Raio-X-Territorial/0.30-ANM-bounded',url
-        ],capture_output=True,timeout=9)
+        ],timeout_seconds=9)
         ms=round((time.monotonic()-t0)*1000)
         if p.returncode:
             return {'ok':False,'source':'ANM/SIGMINE','error':'timeout_or_transport','detail':p.stderr.decode('utf-8','ignore')[:240],'elapsed_ms':ms,'state':'temporarily_unavailable'}

@@ -5,6 +5,7 @@ import re
 from urllib.parse import urlencode
 
 import deploy_app
+import external_process_lifecycle as epl
 from sicar_lookup_http import PENDING_DETAIL
 
 CAR_RE=re.compile(r'^[A-Z]{2}-\d{7}-[A-F0-9]{32}$',re.I)
@@ -47,8 +48,26 @@ def _build_result(raw, code, strategy):
     }
 
 
+ATTEMPT_HARD_TIMEOUT_S=11
+# Tentativas no pior caso: 5 estratégias + 5 páginas da varredura do município + 2 rebuscas pelo id do feature.
+MAX_ATTEMPTS=5+5+2
+# Cada tentativa custa MAIS que o prazo de rede:
+#  (a) a carência de parada do processo gerenciado (terminate+espera, kill+espera) e o passo do laço; e
+#  (b) o trabalho em Python DEPOIS que o curl volta — json.loads da página e a varredura de coordenadas do
+#      _bbox — que corre na mesma thread e fora de qualquer prazo.
+# (b) medido em 15/09 nesta máquina: json.loads de uma página de 13 MB (7.500 feições, o tamanho das páginas
+# da varredura do município) leva 0,38 s; o _bbox de uma geometria, 0,01 s. A folga de 2,0 s por tentativa
+# cobre ~5x isso, para a CPU do plano grátis do Render.
+PAGE_PROCESSING_S=2.0
+ATTEMPT_WORST_CASE_S=ATTEMPT_HARD_TIMEOUT_S+epl.STOP_OVERHEAD_SECONDS+PAGE_PROCESSING_S
+# Teto do pior caso desta busca (~166 s). Quem põe prazo em cima dela usa este número: um prazo menor
+# cortaria resposta que hoje chega. Derivado, não escrito à mão, para não envelhecer quando as tentativas,
+# a carência de parada ou o prazo de cada tentativa mudarem.
+WORST_CASE_SECONDS=round(MAX_ATTEMPTS*ATTEMPT_WORST_CASE_S,1)
+
+
 def _req(params, cancel_event=None):
-    return deploy_app._curl(deploy_app.SICAR+'?'+urlencode(params),True,cancel_event=cancel_event,connect_timeout=5,max_time=10,hard_timeout=11)
+    return deploy_app._curl(deploy_app.SICAR+'?'+urlencode(params),True,cancel_event=cancel_event,connect_timeout=5,max_time=10,hard_timeout=ATTEMPT_HARD_TIMEOUT_S)
 
 
 def _cancelled(cancel_event):

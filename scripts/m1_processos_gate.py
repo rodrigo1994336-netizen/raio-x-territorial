@@ -41,12 +41,41 @@ Regras
                              quick_analysis, embargos_detail, critical_minerals_v34) com curl falso travado e
                              prazo controlado: o curl do prazo some; sem fallback, nenhum outro nasce.
   cadeia_slots_relatorio     _timed do relatório (extras) e _bounded (nova tentativa) com curl travado.
+  desistencia_apos_prazo     depois do prazo estourado, o caminho de reserva abre UMA consulta nova (é o
+                             produto: o CAR sozinho ainda serve). Se o cliente desistir aí, o curl do caminho
+                             de reserva some e nenhuma consulta nova nasce — e o handler responde 499.
+                             Medido em 15/09: uvicorn NÃO cancela a tarefa de uma rota `async def` sem o
+                             parâmetro `request` quando o cliente fecha a conexão; por isso a desistência só
+                             chega à cadeia pela vigia do wait_for_cancelling_processes(request=...).
+  desistencia_sem_reserva    os cinco handlers SEM caminho de reserva (quick_analysis_v24,
+                             critical_minerals_v34, climate_detail, groundwater_detail, crop_context): o
+                             cliente desiste com o curl da primeira consulta vivo -> nada sobra, nada nasce
+                             depois, resposta 499.
+  escopo_no_pool             ThreadPoolExecutor não copia o contexto: o sondador de camadas IDE embrulha cada
+                             trabalho em in_current_scope, e o curl do trabalhador cai no prazo do escopo.
+  copia_de_escopo_no_pool    REGRA DE FORMA: todo submit/map/run_in_executor dos módulos do servidor embrulha
+                             o trabalho em in_current_scope. Exemplar consertado não é prova — quem chega ao
+                             processo por parâmetro (get=, http_get=) é invisível para o fecho por nome, e foi
+                             assim que três módulos ficaram convertidos e inertes.
+  vigia_do_cliente_em_todo_handler
+                             REGRA DE FORMA: função que abre escopo recebe `request` e o repassa em TODAS as
+                             chamadas; rota que chega a um escopo declara e usa `request`; e todo handler de
+                             PRAZO_HANDLERS aparece numa cobertura de desistência (ou declarado COM MOTIVO).
+  busca_car_no_escopo        nenhum asyncio.to_thread(fetch_car_live*) solto: a cadeia do CAR é a longa
+                             (car_resilient.WORST_CASE_SECONDS). O que ainda corre fora do escopo está
+                             declarado com motivo, e as OUTRAS fontes fora do escopo são um número medido —
+                             se mudar, o portão obriga a decidir de novo.
+  nome_do_car_resolve_em_execucao
+                             sonda em execução: imprime para que função os nomes fetch_car_live resolvem
+                             DEPOIS do arranque (o car_resilient troca o nome) e confere que todo prazo posto
+                             em cima deles é >= o pior caso declarado pelo módulo que os implementa.
   inventario_processos       todo subprocess.run/call/check_* dos módulos do servidor tem timeout; Popen só
                              no módulo de ciclo de vida; sem os.system/os.popen/fork/exec/spawn/posix_spawn/
                              getoutput/subprocess_exec/multiprocessing; lista declarada dos módulos com
-                             chamada direta (inclusive quem passa br_bridge.subprocess_runner); nenhum
-                             asyncio.wait_for puro sobre função que chega a run_managed_process (fecho
-                             transitivo por nome, não lista à mão); os pontos com escopo contados.
+                             chamada direta (inclusive quem passa br_bridge.subprocess_runner), CADA UM COM O
+                             MOTIVO de não ter sido convertido; nenhum asyncio.wait_for puro sobre função que
+                             chega a run_managed_process (fecho transitivo por nome, não lista à mão); os
+                             pontos com escopo contados.
   medicao_indisponivel       sem /proc do próprio processo, todo número do sistema é "indisponivel", nunca 0;
                              idade negativa, descendente vivo sem memória legível e entrada ilegível do /proc
                              viram "indisponivel"; sem descendentes, memória deles é null.
@@ -324,6 +353,34 @@ def gated_wait_for(pred, extra_modules=()):
         # o wait_for real começa a corrotina na hora; esperar o filho antes de começá-la seria esperar para sempre
         # (é o caso de um site revertido para asyncio.wait_for, que recebe a corrotina ainda não iniciada)
         task = asyncio.ensure_future(aw)
+        assert await await_until(pred, 15.0), "o filho não nasceu em 15 s (instrumento, não o prazo)"
+        return await real(task, 0)
+
+    fake = types.SimpleNamespace(**{k: getattr(asyncio, k) for k in dir(asyncio) if not k.startswith("__")})
+    fake.wait_for = gated
+    for module in modules:
+        module.asyncio = fake
+    try:
+        yield
+    finally:
+        for module in modules:
+            module.asyncio = asyncio
+
+
+@contextlib.contextmanager
+def gated_first_wait_for(pred, extra_modules=()):
+    """Como o gated_wait_for, mas só o PRIMEIRO asyncio.wait_for é estourado (prazo 0, depois de pred()).
+    Os seguintes correm com o prazo de verdade: é assim que o caminho de reserva chega a nascer e pode ser
+    observado. Sem isso o segundo prazo estouraria na hora (pred já é verdade) e o gate mediria outra coisa."""
+    modules = (epl(), *extra_modules)
+    real = asyncio.wait_for
+    fired: list[bool] = []
+
+    async def gated(aw, timeout):
+        task = asyncio.ensure_future(aw)
+        if fired:
+            return await real(task, timeout)
+        fired.append(True)
         assert await await_until(pred, 15.0), "o filho não nasceu em 15 s (instrumento, não o prazo)"
         return await real(task, 0)
 
@@ -706,19 +763,27 @@ def r_cadeia_prazo():
             task = asyncio.create_task(handler(CAR))
             if not await await_until(lambda: "pid" in first or task.done(), 20.0):
                 fail(f"{name}: o curl falso não nasceu em 20 s", children_now() - before)
+            # Com o caminho de reserva TAMBÉM dentro do escopo, o instrumento estoura o prazo dele junto:
+            # o handler pode terminar em "consulta pendente" antes de o gate olhar. Isso é resposta honesta;
+            # o que não pode é sobrar curl (conferido logo abaixo).
             if task.done() and not task.cancelled() and task.exception() is not None \
-                    and getattr(task.exception(), "status_code", None) != 504:
+                    and getattr(task.exception(), "status_code", None) not in (502, 503, 504):
                 fail(f"{name}: falhou antes de o curl do prazo cair: {task.exception()!r}"[:300], children_now() - before)
             if "pid" not in first:
                 fail(f"{name}: terminou sem consultar o SICAR ({task.result() if task.done() else 'em curso'!r})"[:300])
             pid = first["pid"]
             took = await asyncio.to_thread(assert_gone, pid, f"{name}: curl do prazo")
         if fallback:
-            # o fallback consulta de novo, fora do prazo (fora do escopo desta regra): encerra e limpa
-            task.cancel()
-            with contextlib.suppress(BaseException):
-                await task
-            mod.terminate_active_processes()
+            # o caminho de reserva consulta de novo (o CAR sozinho ainda serve) e corre dentro do escopo: com o
+            # prazo dele também estourado pelo instrumento, o handler termina em "consulta pendente" e NÃO
+            # deixa curl vivo — sem o desligamento de emergência que antes escondia a sobra.
+            try:
+                outcome = await asyncio.wait_for(asyncio.shield(task), 20)
+            except BaseException as exc:  # noqa: BLE001
+                outcome = exc
+            if not (isinstance(outcome, dict) or getattr(outcome, "status_code", None) in (502, 503, 504)):
+                fail(f"{name}: resposta inesperada do caminho de reserva: {outcome!r}"[:300], children_now() - before)
+            await assert_none_left(before, f"{name}: curl do caminho de reserva")
             return f"{name} {took}s"
         try:
             outcome = await asyncio.wait_for(task, 10)
@@ -763,28 +828,225 @@ def r_slots():
     return "slot estourado não deixa curl vivo (extras e nova tentativa)"
 
 
+DESISTENCIA_HANDLERS = (
+    ("report_v9_patch", "quick_analysis"),
+    ("portal_property_tabs", "embargos_detail"),
+)
+
+
+@regra("desistencia_apos_prazo", linux=True)
+def r_desistencia():
+    """Prazo estourado + cliente desistiu: nenhum filho continua vivo e nenhuma consulta nova é aberta.
+
+    O curl falso trava. O primeiro prazo é estourado de propósito (relógio controlado) com o curl vivo; o
+    caminho de reserva nasce e abre o curl dele; aí o cliente desiste. Daí em diante nada pode sobrar."""
+    import importlib
+    mod = epl()
+    import car_resilient  # noqa: F401 - instala a busca resiliente do SICAR em deploy_app/report_api
+    notes: list[str] = []
+
+    async def scenario(module, name: str) -> str:
+        try:
+            return await _scenario(module, name)
+        except BaseException:
+            # o mutante deixa thread viva com curl travado; parar tudo aqui DENTRO do laco evita que o
+            # asyncio.run fique 300 s juntando a thread na saida (e o gate travar em vez de reprovar)
+            await asyncio.to_thread(mod.terminate_active_processes)
+            raise
+
+    async def _scenario(module, name: str) -> str:
+        handler = getattr(module, name)
+        before = children_now()
+        first: dict[str, int] = {}
+        # Nascimentos de curl contados no Popen: "abriu consulta nova" é um evento, não um pid adivinhado
+        # (o pid de um curl que morreu pode ser reaproveitado, e a cadeia tem mais de um curl).
+        births: list[float] = []
+
+        def counting(real):
+            def popen(*a, **kw):
+                args = a[0] if a else kw.get("args") or []
+                if args and "curl" in str(args[0]):
+                    births.append(time.monotonic())
+                return real(*a, **kw)
+            return popen
+
+        def first_curl() -> bool:
+            if "pid" not in first:
+                pid = born_registered(before, "sleep")
+                if pid is None:
+                    return False
+                first["pid"] = pid
+            return True
+
+        request = Request()
+        with patched_popen(counting), gated_first_wait_for(first_curl, extra_modules=(module,)):
+            task = asyncio.create_task(handler(CAR, request=request))
+            if not await await_until(lambda: "pid" in first or task.done(), 20.0):
+                fail(f"{name}: o curl falso não nasceu em 20 s", children_now() - before)
+            if "pid" not in first:
+                fail(f"{name}: terminou sem consultar o SICAR")
+            await asyncio.to_thread(assert_gone, first["pid"], f"{name}: curl do prazo")
+            marca = len(births)
+            # o caminho de reserva TEM de abrir consulta nova e ter filho vivo: sem isso o cliente receberia
+            # menos do que hoje, e o cenário da desistência não estaria sendo medido
+            if not await await_until(lambda: len(births) > marca and bool(children_now() - before), 25.0):
+                fail(f"{name}: o caminho de reserva não consultou o SICAR depois do prazo "
+                     f"(nascimentos={len(births)})", children_now() - before)
+            request.disconnected = True          # o cliente desiste AGORA
+            na_desistencia = len(births)
+            t0 = time.monotonic()
+            await assert_none_left(before, f"{name}: curl do caminho de reserva")
+            took = round(time.monotonic() - t0, 3)
+            try:
+                outcome = await asyncio.wait_for(asyncio.shield(task), 15)
+            except BaseException as exc:  # noqa: BLE001 - CancelledError tambem e resposta errada, e nao e Exception
+                outcome = exc
+            await asyncio.sleep(1.0)
+            novas = len(births) - na_desistencia
+            if novas:
+                fail(f"{name}: {novas} consulta(s) nova(s) abertas depois da desistência", children_now() - before)
+        if getattr(outcome, "status_code", None) != 499:
+            fail(f"{name}: resposta inesperada depois da desistência: {outcome!r}"[:300], children_now() - before)
+        await assert_none_left(before, f"{name}: filho vivo depois da desistência")
+        return f"{name} {took}s ({len(births)} curls no total)"
+
+    with fake_curl():
+        for module_name, name in DESISTENCIA_HANDLERS:
+            module = importlib.import_module(module_name)
+            try:
+                notes.append(asyncio.run(scenario(module, name)))
+            finally:
+                mod._SERVER_STOPPING.clear()
+            assert_no_children(f"depois de {name}")
+    return "prazo + desistência não deixam filho nem abrem consulta nova: " + ", ".join(notes)
+
+
+# Handlers sem caminho de reserva: a desistência é medida na PRIMEIRA consulta (o cenário acima exige uma
+# segunda consulta depois do prazo, que estes não têm). Sem esta regra, apagar ",request=request" deles
+# passava em silêncio: a regra de prazo só exercita o prazo.
+DESISTENCIA_SEM_RESERVA = (
+    ("report_quick_v22", "quick_analysis_v24"),
+    ("portal_mining_resilience_v34", "critical_minerals_v34"),
+    ("portal_property_tabs", "climate_detail"),
+    ("portal_property_tabs", "groundwater_detail"),
+    ("portal_property_tabs", "crop_context"),
+)
+
+
+@regra("desistencia_sem_reserva", linux=True)
+def r_desistencia_simples():
+    """O cliente desiste com o curl da primeira consulta vivo: nada pode sobrar e nada pode nascer depois."""
+    import importlib
+    mod = epl()
+    import car_resilient  # noqa: F401 - instala a busca resiliente do SICAR em deploy_app/report_api
+    notes: list[str] = []
+
+    async def scenario(module, name: str) -> str:
+        handler = getattr(module, name)
+        before = children_now()
+        births: list[float] = []
+
+        def counting(real):
+            def popen(*a, **kw):
+                args = a[0] if a else kw.get("args") or []
+                if args and "curl" in str(args[0]):
+                    births.append(time.monotonic())
+                return real(*a, **kw)
+            return popen
+
+        request = Request()
+        with patched_popen(counting):
+            task = asyncio.create_task(handler(CAR, request=request))
+            if not await await_until(lambda: born_registered(before, "sleep") is not None or task.done(), 20.0):
+                fail(f"{name}: o curl falso não nasceu em 20 s", children_now() - before)
+            if born_registered(before, "sleep") is None:
+                fail(f"{name}: terminou sem consultar o SICAR ({task.result() if task.done() else 'em curso'!r})"[:300])
+            request.disconnected = True          # o cliente desiste AGORA, com o curl vivo
+            na_desistencia = len(births)
+            t0 = time.monotonic()
+            await assert_none_left(before, f"{name}: curl depois da desistência")
+            took = round(time.monotonic() - t0, 3)
+            try:
+                outcome = await asyncio.wait_for(asyncio.shield(task), 15)
+            except BaseException as exc:  # noqa: BLE001 - CancelledError também é resposta errada
+                outcome = exc
+            await asyncio.sleep(1.0)
+            novas = len(births) - na_desistencia
+            if novas:
+                fail(f"{name}: {novas} consulta(s) nova(s) abertas depois da desistência", children_now() - before)
+        if getattr(outcome, "status_code", None) != 499:
+            fail(f"{name}: resposta inesperada depois da desistência: {outcome!r}"[:300], children_now() - before)
+        await assert_none_left(before, f"{name}: filho vivo depois da desistência")
+        return f"{name} {took}s"
+
+    with fake_curl():
+        for module_name, name in DESISTENCIA_SEM_RESERVA:
+            module = importlib.import_module(module_name)
+            try:
+                notes.append(asyncio.run(scenario(module, name)))
+            finally:
+                mod._SERVER_STOPPING.clear()
+            assert_no_children(f"depois de {name}")
+    return "desistência na primeira consulta não deixa filho nem abre consulta nova: " + ", ".join(notes)
+
+
+@regra("escopo_no_pool", linux=True)
+def r_escopo_pool():
+    """ThreadPoolExecutor.submit NÃO copia o contexto: sem cópia por trabalho o curl do trabalhador nasce fora
+    do escopo e sobrevive ao prazo. Exercita o sondador real das camadas IDE."""
+    import ide_layer_probe
+    mod = epl()
+    bbox = [-44.5, -18.8, -44.4, -18.7]        # dentro de Minas: o sondador só consulta quando cruza MG
+    geom = {"type": "Polygon", "coordinates": [[[bbox[0], bbox[1]], [bbox[2], bbox[1]],
+                                                [bbox[2], bbox[3]], [bbox[0], bbox[3]], [bbox[0], bbox[1]]]]}
+
+    async def scenario():
+        before = children_now()
+        with gated_wait_for(lambda: new_child(before, "sleep") is not None):
+            with contextlib.suppress(Exception):
+                await mod.wait_for_cancelling_processes(
+                    asyncio.to_thread(ide_layer_probe.probe_benchmark, geom, bbox), 30)
+        await assert_none_left(before, "sondador IDE: curl do trabalhador do pool")
+        return "nenhum curl do pool sobra"
+
+    with fake_curl():
+        detail = asyncio.run(scenario())
+    return detail
+
+
 # ------------------------------------------------------------------ inventário estático
+# Módulo que ainda cria processo fora do run_managed_process -> MOTIVO de não ter sido convertido.
+# Os quinze que chegavam a uma requisição de cliente foram convertidos em 15/09 e saíram desta lista.
+# Um motivo vazio reprova: "sobrou" não é motivo.
 DIRECT_DECLARED = {
-    # módulo: processo criado fora do run_managed_process (subprocess.run direto ou br_bridge.subprocess_runner
-    # passado como executor), todos com timeout — sobra limitada pelo timeout, não cancelável
-    "aerodromes_anac.py", "anm_fast_v29.py", "anm_resilient.py", "br_bridge.py", "climate_nasa.py",
-    "climate_normal_f2.py", "ide_catalog.py", "ide_layer_probe.py", "incra_snci_public_v42.py",
-    "jwt_runtime_bootstrap.py", "pivots_ana.py", "postgres_runtime_bootstrap.py", "prodes_image_platform_f2.py",
-    "rasterio_runtime_bootstrap.py", "redis_runtime_bootstrap.py", "sicar_detail_sources.py",
-    "sicar_detail_sources_v2.py", "soilgrids_wcs.py", "terrain_srtm.py", "water_mg.py",
+    "br_bridge.py": "subprocess_runner é o executor legado que a ponte ainda oferece a quem chama de fora do "
+                    "servidor (conferência do guia no Cloud Shell); nenhum módulo do servidor o passa mais",
+    "jwt_runtime_bootstrap.py": "pip no arranque do processo, antes de existir requisição; nada a cancelar",
+    "postgres_runtime_bootstrap.py": "pip no arranque do processo, antes de existir requisição; nada a cancelar",
+    "rasterio_runtime_bootstrap.py": "pip no arranque do processo, antes de existir requisição; nada a cancelar",
+    "redis_runtime_bootstrap.py": "pip no arranque do processo, antes de existir requisição; nada a cancelar",
 }
 # Quem chega a um processo gerenciado é calculado (fecho transitivo por nome a partir destas sementes), não
 # mantido à mão: por nome é conservador (duas funções com o mesmo nome contam juntas).
 PROCESS_SEEDS = {"run_managed_process"}
-# Chamadas "await wait_for_cancelling_processes(" por arquivo. A do ANM (portal_mining_resilience_v34, prazo de
-# 10 s do query_anm_curl_exact) está contada, mas SEM EFEITO até a conversão: aquela função chama
-# subprocess.run direto, fora do alcance do escopo (limitada só pelo timeout de 60 s dela).
+# Chamadas "await wait_for_cancelling_processes(" por arquivo.
 SCOPED_SITES = {
-    "portal_mining_resilience_v34.py": 2, "report_quick_v22.py": 1, "report_v9_patch.py": 1,
-    "portal_property_tabs.py": 1, "core_retry_fast_v29.py": 1, "report_extras_perf_v30.py": 1,
-    "portal_advanced_name_v40.py": 1,
+    "portal_mining_resilience_v34.py": 2, "report_quick_v22.py": 1, "report_v9_patch.py": 2,
+    "portal_property_tabs.py": 2, "core_retry_fast_v29.py": 1, "report_extras_perf_v30.py": 1,
+    "portal_advanced_name_v40.py": 1, "property_search.py": 2, "heavy_live_api_v20.py": 1,
+    "portal_live_fix_v18.py": 1, "portal_api.py": 1,
 }
-SCOPED_WITHOUT_EFFECT = 1
+# Quais escopos têm efeito NÃO é mais afirmação do autor: sai do mesmo fecho transitivo. Um sítio cujo
+# trabalho chega a run_managed_process tem efeito; um sítio que recebe a corrotina pronta por parâmetro é
+# indecidível aqui (o fecho por nome não atravessa parâmetro) e precisa ser declarado, com a regra em
+# execução que o prova; qualquer outro é decorativo e reprova.
+SCOPED_OPACO_DECLARADO = {
+    "core_retry_fast_v29.py:_bounded":
+        "recebe a corrotina pronta de quem chama; que o escopo tem efeito é provado em execução por "
+        "cadeia_slots_relatorio (o curl do slot estourado morre)",
+    "report_extras_perf_v30.py:_timed":
+        "mesmo caso, no slot do relatório; provado em execução por cadeia_slots_relatorio",
+}
 DIRECT_PROCESS_CALLS = {"os.system", "os.popen", "os.fork", "os.forkpty", "os.posix_spawn", "os.posix_spawnp",
                         "pty.fork", "pty.spawn", "subprocess.getoutput", "subprocess.getstatusoutput"}
 DIRECT_PROCESS_PREFIXES = ("os.exec", "os.spawn", "asyncio.create_subprocess")
@@ -822,6 +1084,12 @@ def src(name: str) -> Path:
 
 def runtime_modules() -> list[Path]:
     return [src(p.name) for p in sorted(ROOT.glob("*.py")) if p.is_file()]
+
+
+def sem_motivo_declarado(declared: dict[str, str]) -> list[str]:
+    """Módulo declarado sem motivo de verdade. "sobrou" não é motivo: exige uma frase."""
+    faltando = sorted(name for name, why in declared.items() if len(str(why).strip()) < 20)
+    return [f"módulo com processo direto sem motivo declarado: {faltando}"] if faltando else []
 
 
 @regra("inventario_processos")
@@ -888,13 +1156,360 @@ def r_inventario():
         got = text.count("await wait_for_cancelling_processes(")
         if got != count:
             problems.append(f"{name}: {got} chamada(s) de wait_for_cancelling_processes, esperado {count}")
-    if direct != DIRECT_DECLARED:
-        problems.append(f"lista de chamadas diretas mudou: novas {sorted(direct - DIRECT_DECLARED)} sumidas {sorted(DIRECT_DECLARED - direct)}")
+    for name in sorted(set(trees) - set(SCOPED_SITES)):
+        if "await wait_for_cancelling_processes(" in src(name).read_text(encoding="utf-8"):
+            problems.append(f"{name} abriu escopo e não está no inventário SCOPED_SITES")
+    com_efeito = opacos = 0
+    for name, tree in trees.items():
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Call) and (getattr(node.func, "id", None) == "wait_for_cancelling_processes"
+                                                    or getattr(node.func, "attr", None) == "wait_for_cancelling_processes")):
+                continue
+            arg = node.args[0] if node.args else None
+            if isinstance(arg, ast.Name):   # corrotina recebida por parâmetro: indecidível por nome
+                chave = f"{name}:{_dono(tree, node)}"
+                if chave in SCOPED_OPACO_DECLARADO:
+                    opacos += 1
+                    continue
+                problems.append(f"{name}:{node.lineno} escopo sobre corrotina recebida por parâmetro, sem "
+                                f"declaração de como se prova o efeito ({chave})")
+                continue
+            nomes = {n.id for n in ast.walk(arg) if isinstance(n, ast.Name)} |                     {n.attr for n in ast.walk(arg) if isinstance(n, ast.Attribute)} if arg is not None else set()
+            if nomes & reaching:
+                com_efeito += 1
+            else:
+                problems.append(f"{name}:{node.lineno} escopo sem efeito: o trabalho dentro dele não chega a "
+                                f"processo gerenciado (sítio decorativo)")
+    problems.extend(sem_motivo_declarado(SCOPED_OPACO_DECLARADO))
+    if direct != set(DIRECT_DECLARED):
+        problems.append(f"lista de chamadas diretas mudou: novas {sorted(direct - set(DIRECT_DECLARED))} "
+                        f"sumidas {sorted(set(DIRECT_DECLARED) - direct)}")
+    problems.extend(sem_motivo_declarado(DIRECT_DECLARED))
+    # controle positivo da própria checagem: mutar o ARQUIVO do gate não tem efeito (o gate roda do original,
+    # só os módulos vem do MUTANT_DIR), então a prova de que esta regra não é inerte fica aqui.
+    if not sem_motivo_declarado({**DIRECT_DECLARED, "br_bridge.py": " "}):
+        problems.append("a checagem de motivo declarado não pega motivo vazio (regra inerte)")
     assert not problems, "inventário: " + " | ".join(problems)
     sites = sum(SCOPED_SITES.values())
-    return (f"{len(direct)} módulos com processo direto limitado por timeout; {len(reaching)} funções chegam a processo "
-            f"gerenciado; {sites} prazos com escopo ({sites - SCOPED_WITHOUT_EFFECT} com efeito, "
-            f"{SCOPED_WITHOUT_EFFECT} sem efeito até a conversão do ANM)")
+    return (f"{len(direct)} módulos com processo direto limitado por timeout, todos com motivo declarado; "
+            f"{len(reaching)} funções chegam a processo gerenciado; {sites} prazos com escopo, "
+            f"{com_efeito} com efeito provado pelo fecho e {opacos} declarados (provados em execução)")
+
+
+# ------------------------------------------------------------------ forma (regras estáticas)
+# Regra de forma, não de exemplar: consertar um sítio e escrever o portão para esse mesmo sítio certifica
+# como pronta uma família que pode estar 1/4 consertada. Estas três regras enumeram a família inteira.
+
+# --- 1) o escopo tem de atravessar todo pool -----------------------------------------------------------
+# ThreadPoolExecutor.submit/.map e loop.run_in_executor NÃO copiam o contexto (asyncio.to_thread copia): sem
+# in_current_scope o trabalhador não enxerga o escopo e o curl dele sobrevive ao prazo e à desistência. Quem
+# chega ao processo gerenciado por PARÂMETRO (get=, http_get=, post=) é invisível para o fecho por nome, por
+# isso a exigência é da forma em TODO sítio de pool, e não só nos que o fecho consegue provar.
+POOL_WRAPPERS = ("in_current_scope",)
+POOL_DECLARADO: dict[str, str] = {}  # "arquivo.py:linha": motivo de o trabalho não precisar do escopo
+
+
+def _is_executor(node: ast.AST) -> bool:
+    if not isinstance(node, ast.Call):
+        return False
+    f = node.func
+    name = f.attr if isinstance(f, ast.Attribute) else getattr(f, "id", "")
+    return str(name).endswith("Executor")
+
+
+def _pool_names(tree: ast.AST) -> set[str]:
+    """Nomes ligados a um executor neste módulo (with ... as X, X = ThreadPoolExecutor(...))."""
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.withitem) and isinstance(node.optional_vars, ast.Name) and _is_executor(node.context_expr):
+            names.add(node.optional_vars.id)
+        elif isinstance(node, ast.Assign) and _is_executor(node.value):
+            names.update(t.id for t in node.targets if isinstance(t, ast.Name))
+    return names
+
+
+def _carrega_escopo(arg: ast.AST | None) -> bool:
+    if not isinstance(arg, ast.Call):
+        return False
+    f = arg.func
+    name = f.attr if isinstance(f, ast.Attribute) else getattr(f, "id", "")
+    return name in POOL_WRAPPERS
+
+
+@regra("copia_de_escopo_no_pool")
+def r_pool_forma():
+    problems: list[str] = []
+    sitios = 0
+    for path in runtime_modules():
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=path.name)
+        pools = _pool_names(tree)
+        usa_executor = "Executor" in path.read_text(encoding="utf-8")
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+                continue
+            attr = node.func.attr
+            if attr in ("submit", "map"):
+                dono = node.func.value.id if isinstance(node.func.value, ast.Name) else None
+                if dono not in pools:
+                    if usa_executor and attr == "submit":
+                        problems.append(f"{path.name}:{node.lineno} .submit() em objeto que não reconheci como "
+                                        f"pool ({dono}): o instrumento não sabe dizer se o escopo viaja")
+                    continue
+                alvo = node.args[0] if node.args else None
+            elif attr == "run_in_executor":
+                alvo = node.args[1] if len(node.args) > 1 else None
+            else:
+                continue
+            sitios += 1
+            chave = f"{path.name}:{node.lineno}"
+            if _carrega_escopo(alvo) or chave in POOL_DECLARADO:
+                continue
+            problems.append(f"{chave} trabalho submetido ao pool sem in_current_scope(...): o escopo de "
+                            f"cancelamento não chega ao trabalhador")
+    problems.extend(sem_motivo_declarado(POOL_DECLARADO))
+    assert not problems, "pool: " + " | ".join(problems)
+    return f"{sitios} sítios de pool, todos carregando o escopo ({len(POOL_DECLARADO)} declarados sem)"
+
+
+# --- 2) a vigia do cliente em toda a família ----------------------------------------------------------
+# Handler que chega a wait_for_cancelling_processes tem de receber `request` e repassá-lo em TODAS as
+# chamadas. Sem isto, apagar ",request=request" de um handler passa em silêncio: a regra de prazo não
+# exercita a desistência, e o inventário conta CHAMADAS por arquivo, não os argumentos delas.
+VIGIA_DECLARADA = {
+    "core_retry_fast_v29.py:_bounded":
+        "slot interno da nova tentativa: recebe a corrotina já criada por quem está num escopo com request, "
+        "então a desistência chega pelo escopo de cima; provado em execução por cadeia_slots_relatorio",
+    "report_extras_perf_v30.py:_timed":
+        "mesmo caso: slot do relatório, a corrotina é criada pelo chamador dentro do escopo dele; provado em "
+        "execução por cadeia_slots_relatorio",
+    "portal_advanced_name_v40.py:one":
+        "enriquecimento de referência dentro do gather da busca nominal; o handler que chama ainda não "
+        "repassa request (fila do próximo passo) e o prazo de 10 s já limita cada ponto",
+}
+HANDLER_SEM_VIGIA_DECLARADO: dict[str, str] = {}
+# Todo handler com prazo vigiado tem de aparecer também numa cobertura de desistência — ou aqui, COM MOTIVO.
+DESISTENCIA_DECLARADA: dict[str, str] = {}
+
+
+def _decorador_de_rota(fn: ast.AST) -> bool:
+    for dec in getattr(fn, "decorator_list", []):
+        alvo = dec.func if isinstance(dec, ast.Call) else dec
+        if isinstance(alvo, ast.Attribute) and alvo.attr in ("get", "post", "put", "delete", "patch"):
+            return True
+    return False
+
+
+def _funcoes(tree: ast.AST) -> list[ast.AST]:
+    return [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+
+
+def _nos_proprios(fn: ast.AST) -> list[ast.AST]:
+    """Nós da função SEM descer nas funções aninhadas: cada uma responde pelas chamadas dela.
+
+    Sem isto, a função de fora é acusada pela chamada da de dentro (e a declaração que isenta a de dentro
+    não a isenta), que é o mesmo erro de atribuir a um representante o que é da família."""
+    out: list[ast.AST] = []
+    pilha = [c for c in ast.iter_child_nodes(fn) if not isinstance(c, (ast.FunctionDef, ast.AsyncFunctionDef))]
+    while pilha:
+        node = pilha.pop()
+        out.append(node)
+        pilha.extend(c for c in ast.iter_child_nodes(node)
+                     if not isinstance(c, (ast.FunctionDef, ast.AsyncFunctionDef)))
+    return out
+
+
+def _nomes_usados(fn: ast.AST) -> set[str]:
+    out: set[str] = set()
+    for sub in ast.walk(fn):
+        if isinstance(sub, ast.Name):
+            out.add(sub.id)
+        elif isinstance(sub, ast.Attribute):
+            out.add(sub.attr)
+    return out
+
+
+def _tem_parametro(fn: ast.AST, nome: str) -> bool:
+    a = fn.args
+    return any(arg.arg == nome for arg in list(a.args) + list(a.kwonlyargs) + list(a.posonlyargs))
+
+
+@regra("vigia_do_cliente_em_todo_handler")
+def r_vigia_estatica():
+    problems: list[str] = []
+    handlers = 0
+    for path in runtime_modules():
+        texto = path.read_text(encoding="utf-8")
+        if "wait_for_cancelling_processes" not in texto:
+            continue
+        tree = ast.parse(texto, filename=path.name)
+        funcs = _funcoes(tree)
+        com_escopo: set[str] = set()
+        for fn in funcs:
+            chamadas = [n for n in _nos_proprios(fn) if isinstance(n, ast.Call)
+                        and (getattr(n.func, "id", None) == "wait_for_cancelling_processes"
+                             or getattr(n.func, "attr", None) == "wait_for_cancelling_processes")]
+            if not chamadas:
+                continue
+            com_escopo.add(fn.name)
+            chave = f"{path.name}:{fn.name}"
+            if chave in VIGIA_DECLARADA:
+                continue
+            if not _tem_parametro(fn, "request"):
+                problems.append(f"{chave} abre escopo sem receber request: a desistência do cliente nunca chega")
+            sem_request = [n.lineno for n in chamadas if not any(k.arg == "request" for k in n.keywords)]
+            if sem_request:
+                problems.append(f"{chave} chama wait_for_cancelling_processes sem request= nas linhas {sem_request}")
+        # quem chama (por nome, dentro do módulo) uma função com escopo também precisa carregar o request
+        alcanca = set(com_escopo)
+        mudou = True
+        while mudou:
+            mudou = False
+            for fn in funcs:
+                if fn.name not in alcanca and _nomes_usados(fn) & alcanca:
+                    alcanca.add(fn.name)
+                    mudou = True
+        for fn in funcs:
+            if not _decorador_de_rota(fn) or fn.name not in alcanca:
+                continue
+            handlers += 1
+            chave = f"{path.name}:{fn.name}"
+            if chave in HANDLER_SEM_VIGIA_DECLARADO:
+                continue
+            if not _tem_parametro(fn, "request"):
+                problems.append(f"{chave} é rota que chega a um escopo e não declara request")
+            elif "request" not in _nomes_usados(fn):
+                problems.append(f"{chave} declara request e não o usa: vigia decorativa")
+    falta_desistencia = [f"{m}.{h}" for m, h, _ in PRAZO_HANDLERS
+                         if (m, h) not in DESISTENCIA_HANDLERS and (m, h) not in DESISTENCIA_SEM_RESERVA
+                         and f"{m}.{h}" not in DESISTENCIA_DECLARADA]
+    if falta_desistencia:
+        problems.append(f"handler com prazo vigiado e sem cobertura de desistência: {falta_desistencia}")
+    problems.extend(sem_motivo_declarado(VIGIA_DECLARADA))
+    problems.extend(sem_motivo_declarado(HANDLER_SEM_VIGIA_DECLARADO))
+    problems.extend(sem_motivo_declarado(DESISTENCIA_DECLARADA))
+    assert not problems, "vigia: " + " | ".join(problems)
+    return (f"{handlers} rotas que chegam a um escopo recebem e repassam request; "
+            f"{len(VIGIA_DECLARADA)} funções internas declaradas sem vigia, com motivo")
+
+
+# --- 3) inventário de quem ainda corre fora do escopo --------------------------------------------------
+# A busca do CAR é a cadeia longa (car_resilient.WORST_CASE_SECONDS): um asyncio.to_thread(fetch_car_live*)
+# solto é rota de cliente vazando por minutos. O inventário antigo só via subprocess direto e contava
+# chamadas por arquivo, então não enxergava este caso.
+CAR_FORA_DO_ESCOPO_DECLARADO = {
+    "report_api.py:_background_ide_probe":
+        "sonda de arranque, sem cliente e sem requisição: não há desistência a ouvir, e o desligamento já "
+        "derruba os filhos pelo _SERVER_STOPPING",
+    "report_api.py:ide_probe":
+        "rota interna de diagnóstico (/v1/internal/ide/probe), não é caminho de cliente; fila do próximo passo",
+    "deploy_app.py:analyze_car":
+        "chamada sempre DENTRO de um escopo pelos handlers (asyncio.to_thread copia o contexto): o escopo de "
+        "quem chamou já alcança este curl, e é isso que cadeia_car_prazo mede",
+}
+# Fontes que NÃO são o CAR e ainda correm em to_thread fora de qualquer escopo. Número medido, não estimado:
+# enquanto for este, o inventário está honesto; se mudar, o portão obriga a decidir de novo. É a fila do
+# próximo passo, e é por isso que "prazo e cancelamento valem na cadeia inteira" ainda não pode ser dito.
+OUTRAS_FONTES_FORA_DO_ESCOPO = 43
+
+
+def _dentro_do_escopo(tree: ast.AST) -> set[int]:
+    dentro: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and (getattr(node.func, "id", None) == "wait_for_cancelling_processes"
+                                           or getattr(node.func, "attr", None) == "wait_for_cancelling_processes"):
+            dentro.update(id(sub) for sub in ast.walk(node))
+    return dentro
+
+
+def _dono(tree: ast.AST, node: ast.AST) -> str:
+    """A função mais interna que contém o nó (ast.walk devolve de fora para dentro: vale a última)."""
+    dono = "<módulo>"
+    for fn in _funcoes(tree):
+        if any(sub is node for sub in ast.walk(fn)):
+            dono = fn.name
+    return dono
+
+
+@regra("busca_car_no_escopo")
+def r_car_no_escopo():
+    problems: list[str] = []
+    trees = {path.name: ast.parse(path.read_text(encoding="utf-8"), filename=path.name) for path in runtime_modules()}
+    reaching = process_reaching(trees)
+    no_escopo = 0
+    outras = 0
+    for name, tree in trees.items():
+        dentro = _dentro_do_escopo(tree)
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "to_thread" and node.args):
+                continue
+            alvo = node.args[0]
+            nome = alvo.id if isinstance(alvo, ast.Name) else (alvo.attr if isinstance(alvo, ast.Attribute) else "")
+            if nome.startswith("fetch_car_live"):
+                if id(node) in dentro:
+                    no_escopo += 1
+                    continue
+                chave = f"{name}:{_dono(tree, node)}"
+                if chave not in CAR_FORA_DO_ESCOPO_DECLARADO:
+                    problems.append(f"{name}:{node.lineno} busca do CAR em to_thread fora de escopo "
+                                    f"({chave}): prazo e desistência não a alcançam")
+            elif nome in reaching and id(node) not in dentro:
+                outras += 1
+    if outras != OUTRAS_FONTES_FORA_DO_ESCOPO:
+        problems.append(f"fontes fora de escopo mudaram: {outras} agora, {OUTRAS_FONTES_FORA_DO_ESCOPO} declaradas "
+                        f"(some do inventário ou entra no escopo, mas não passa calado)")
+    problems.extend(sem_motivo_declarado(CAR_FORA_DO_ESCOPO_DECLARADO))
+    assert not problems, "busca do CAR: " + " | ".join(problems)
+    return (f"{no_escopo} buscas do CAR dentro do escopo, {len(CAR_FORA_DO_ESCOPO_DECLARADO)} declaradas fora "
+            f"com motivo; {outras} outras fontes ainda fora do escopo (fila do próximo passo)")
+
+
+# --- 4) o nome resolvido EM EXECUÇÃO, não o escrito no import -----------------------------------------
+# Este repositório troca implementações no arranque (car_resilient.install_global_patch). Constante de prazo
+# justificada pelo comportamento de um dependente exige sonda em execução dizendo para que função o nome
+# resolve: foi assim que um prazo de 46 s, escrito para "UM curl de 45 s", acabou cortando uma cadeia de 12
+# tentativas. Quem põe prazo sobre a busca do CAR usa o teto declarado pelo módulo que a implementa.
+PRAZOS_DO_CAR = (
+    ("report_v9_patch", "_CAR_FALLBACK_S"),
+    ("portal_property_tabs", "_CAR_S"),
+)
+
+
+@regra("nome_do_car_resolve_em_execucao", linux=True)
+def r_nome_resolve():
+    import importlib
+    import car_resilient
+    resolvido = []
+    problems: list[str] = []
+    for mod_name in ("deploy_app", "report_api", "portal_api"):
+        try:
+            module = importlib.import_module(mod_name)
+        except Exception as exc:  # noqa: BLE001
+            problems.append(f"{mod_name}: não importou ({type(exc).__name__})")
+            continue
+        fn = getattr(module, "fetch_car_live", None)
+        if fn is None:
+            continue
+        alvo = f"{getattr(fn, '__module__', '?')}.{getattr(fn, '__name__', '?')}"
+        resolvido.append(f"{mod_name}.fetch_car_live -> {alvo}")
+        if fn is not car_resilient.fetch_car_live_resilient:
+            problems.append(f"{mod_name}.fetch_car_live resolve para {alvo}, não para a busca resiliente: o "
+                            f"teto usado pelos prazos deixou de valer")
+    for mod_name, const in PRAZOS_DO_CAR:
+        module = importlib.import_module(mod_name)
+        valor = getattr(module, const)
+        resolvido.append(f"{mod_name}.{const}={valor}")
+        if valor < car_resilient.WORST_CASE_SECONDS:
+            problems.append(f"{mod_name}.{const}={valor} é menor que o pior caso da função que o nome resolve "
+                            f"({car_resilient.WORST_CASE_SECONDS} s): corta resposta que hoje chega")
+    # o pior caso não é chute: soma o prazo de rede, a carência de parada do processo e o trabalho em Python
+    minimo = car_resilient.MAX_ATTEMPTS * (car_resilient.ATTEMPT_HARD_TIMEOUT_S + epl().STOP_OVERHEAD_SECONDS)
+    if car_resilient.WORST_CASE_SECONDS < minimo:
+        problems.append(f"WORST_CASE_SECONDS={car_resilient.WORST_CASE_SECONDS} não cobre nem o tempo de rede "
+                        f"mais a carência de parada ({round(minimo, 1)} s)")
+    print("RX_M1_SONDA_NOME=" + " | ".join(resolvido), flush=True)
+    assert not problems, "nome em execução: " + " | ".join(problems)
+    return " | ".join(resolvido)
 
 
 # ------------------------------------------------------------------ medição
@@ -1281,7 +1896,8 @@ MUTATIONS = [
     ("escopo_da_rota", "external_process_lifecycle.py",
      "    return any(scope.is_set() for scope in _SCOPES.get())", "    return False", "ainda vivo"),
     ("escopo_prazo_to_thread", "external_process_lifecycle.py",
-     "    except BaseException:\n        event.set()\n        raise", "    except BaseException:\n        raise", "ainda vivo"),
+     "        event.set()\n        raise\n    finally:", "        raise\n    finally:",
+     "ainda vivo"),
     ("escopo_prazo_to_thread", "external_process_lifecycle.py", "    if asyncio.isfuture(aw):\n        raise TypeError(",
      "    if False:\n        raise TypeError(", "tarefa/Future criada antes aceita"),
     ("cancelado_antes_de_nascer", "external_process_lifecycle.py",
@@ -1293,14 +1909,14 @@ MUTATIONS = [
      "            killed.append(pid)", "voltou com o filho"),
     ("cadeia_car_desconecta", "deploy_app.py", "runner=run_managed_process)", "runner=br_bridge.subprocess_runner)", "ainda vivo"),
     ("cadeia_car_prazo", "report_quick_v22.py",
-     "car=await wait_for_cancelling_processes(asyncio.to_thread(fetch_car_live_resilient,code),6)",
+     "car=await wait_for_cancelling_processes(asyncio.to_thread(fetch_car_live_resilient,code),6,request=request)",
      "car=await asyncio.wait_for(asyncio.to_thread(fetch_car_live_resilient,code),timeout=6)", "curl do prazo: filho"),
     ("cadeia_car_prazo", "portal_property_tabs.py",
-     "try:result=await wait_for_cancelling_processes(report_base.analyze_car(code),18)",
+     "try:result=await wait_for_cancelling_processes(report_base.analyze_car(code),18,request=request)",
      "try:result=await asyncio.wait_for(report_base.analyze_car(code),timeout=18)", "curl do prazo: filho"),
     ("cadeia_car_prazo", "report_quick_v22.py",
-     "car=await wait_for_cancelling_processes(asyncio.to_thread(fetch_car_live_resilient,code),6)",
-     "job=asyncio.ensure_future(asyncio.to_thread(fetch_car_live_resilient,code));car=await wait_for_cancelling_processes(job,6)",
+     "car=await wait_for_cancelling_processes(asyncio.to_thread(fetch_car_live_resilient,code),6,request=request)",
+     "job=asyncio.ensure_future(asyncio.to_thread(fetch_car_live_resilient,code));car=await wait_for_cancelling_processes(job,6,request=request)",
      "passe a corrotina"),
     ("cadeia_slots_relatorio", "report_extras_perf_v30.py",
      "value=await wait_for_cancelling_processes(coro,timeout_s)", "value=await asyncio.wait_for(coro,timeout=timeout_s)",
@@ -1327,9 +1943,54 @@ MUTATIONS = [
      "            app.state.rx_proc_stats_task = asyncio.create_task(_periodic(interval))", "            pass", "periodico"),
     ("servicos_ligados", "report_api.py", "_proc_stats.install(app)\n", "\n", "medição não instalada"),
     ("inventario_processos", "report_quick_v22.py",
-     "car=await wait_for_cancelling_processes(asyncio.to_thread(fetch_car_live_resilient,code),6)",
+     "car=await wait_for_cancelling_processes(asyncio.to_thread(fetch_car_live_resilient,code),6,request=request)",
      "car=await asyncio.wait_for(asyncio.to_thread(fetch_car_live_resilient,code),timeout=6)", "wait_for puro"),
-    ("inventario_processos", "anm_fast_v29.py", "],capture_output=True,timeout=9)", "],capture_output=True)", "sem timeout"),
+    ("inventario_processos", "redis_runtime_bootstrap.py", "check=True,timeout=120,stdout=subprocess.DEVNULL",
+     "check=True,stdout=subprocess.DEVNULL", "sem timeout"),
+    ("inventario_processos", "sicar_detail_sources_v2.py", "runner=run_managed_process)", "runner=br_bridge.subprocess_runner)",
+     "lista de chamadas diretas mudou"),
+    # ---- prazo estourado + cliente desistiu
+    ("desistencia_apos_prazo", "report_v9_patch.py",
+     "car=await wait_for_cancelling_processes(asyncio.to_thread(base.fetch_car_live,code),_CAR_FALLBACK_S,request=request)",
+     "car=await asyncio.to_thread(base.fetch_car_live,code)", "caminho de reserva"),
+    ("desistencia_apos_prazo", "portal_property_tabs.py",
+     "        car=await wait_for_cancelling_processes(asyncio.to_thread(fetch_car_live_resilient,code.upper()),\n"
+     "                                                _CAR_S if budget is None else budget,request=request)\n",
+     "        car=await asyncio.to_thread(fetch_car_live_resilient,code.upper())\n", "caminho de reserva"),
+    ("desistencia_apos_prazo", "external_process_lifecycle.py",
+     "    watcher = None if request is None else asyncio.ensure_future(_watch_disconnect(request, task, event, seen))",
+     "    watcher = None", "caminho de reserva"),
+    ("desistencia_apos_prazo", "external_process_lifecycle.py",
+     "                seen.append(True)\n                event.set()", "                event.set()",
+     "resposta inesperada depois da desist"),
+    ("escopo_no_pool", "ide_layer_probe.py",
+     "ex.submit(in_current_scope(query_layer),layer,bbox,car_geometry)",
+     "ex.submit(query_layer,layer,bbox,car_geometry)", "curl do trabalhador do pool"),
+    # ---- as regras de forma: a família inteira, não o exemplar consertado
+    ("copia_de_escopo_no_pool", "sicar_detail_sources_v2.py",
+     "ex.submit(in_current_scope(_query_layer),t,c,car,bbox,car_code)",
+     "ex.submit(_query_layer,t,c,car,bbox,car_code)", "sem in_current_scope"),
+    ("copia_de_escopo_no_pool", "water_mg.py",
+     "ex.submit(in_current_scope(_query_layer),layer,car,car_m,tr,qb,radius_km)",
+     "ex.submit(_query_layer,layer,car,car_m,tr,qb,radius_km)", "sem in_current_scope"),
+    ("copia_de_escopo_no_pool", "soilgrids_wcs.py",
+     "ex.submit(in_current_scope(_one),p,lon,lat)", "ex.submit(_one,p,lon,lat)", "sem in_current_scope"),
+    ("vigia_do_cliente_em_todo_handler", "report_quick_v22.py",
+     "asyncio.to_thread(fetch_car_live_resilient,code),6,request=request)",
+     "asyncio.to_thread(fetch_car_live_resilient,code),6)", "sem request="),
+    ("vigia_do_cliente_em_todo_handler", "portal_property_tabs.py",
+     "async def climate_detail(car_code:str,days:int=30,request:Request=None):",
+     "async def climate_detail(car_code:str,days:int=30):", "não declara request"),
+    ("busca_car_no_escopo", "property_search.py",
+     "        try:\n            car=await wait_for_cancelling_processes(asyncio.to_thread(fetch_car_live_resilient,upper),\n"
+     "                                                    car_resilient.WORST_CASE_SECONDS,request=request)\n"
+     "        except RequestDisconnected:\n            raise _desistiu()\n",
+     "        car=await asyncio.to_thread(fetch_car_live_resilient,upper)\n", "fora de escopo"),
+    ("nome_do_car_resolve_em_execucao", "report_v9_patch.py",
+     "_CAR_FALLBACK_S=car_resilient.WORST_CASE_SECONDS", "_CAR_FALLBACK_S=46", "corta resposta que hoje chega"),
+    ("desistencia_sem_reserva", "portal_mining_resilience_v34.py",
+     "asyncio.to_thread(fetch_car_live_resilient,code),9,request=request)",
+     "asyncio.to_thread(fetch_car_live_resilient,code),9)", "curl depois da desistência"),
     ("ci_roda_o_gate", ".github/workflows/quality-gate.yml", "python scripts/m1_processos_gate.py --exigir-linux",
      "python scripts/m1_processos_gate.py", "não exige Linux"),
 ]

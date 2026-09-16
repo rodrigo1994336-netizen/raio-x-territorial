@@ -7,13 +7,33 @@ import os
 from urllib.parse import urlencode
 
 import httpx
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 from fastapi.responses import HTMLResponse, Response, JSONResponse, RedirectResponse
 from shapely.geometry import Point, shape
 
 from report_api import app
 from deploy_app import SICAR, fetch_car_live
+import car_resilient  # depois do deploy_app: o install_global_patch dele reimporta este módulo
+from external_process_lifecycle import RequestDisconnected, wait_for_cancelling_processes
 from sicar_lookup_http import lookup_http_error
+
+
+def _desistiu():
+    return HTTPException(status_code=499, detail='Consulta encerrada: o cliente desistiu.')
+
+
+async def _car_para_exportar(car_code: str, request=None):
+    # Dentro do escopo: a desistência do cliente derruba os curls desta busca e impede o próximo. O teto é o
+    # pior caso derivado pelo car_resilient (o nome fetch_car_live resolve para a busca resiliente no
+    # arranque) — maior que a cadeia real, então não corta resposta que hoje chega.
+    try:
+        car = await wait_for_cancelling_processes(asyncio.to_thread(fetch_car_live, car_code.upper()),
+                                                  car_resilient.WORST_CASE_SECONDS, request=request)
+    except RequestDisconnected:
+        raise _desistiu()
+    if not car.get('ok'):
+        raise lookup_http_error(car)
+    return car
 
 APP_PORTAL_VERSION = '0.18.0-operational-portal'
 
@@ -142,20 +162,16 @@ async def resolve_point(lat: float, lon: float):
 
 
 @app.get('/v1/exports/property/{car_code}/geojson')
-async def export_geojson(car_code: str):
-    car = await asyncio.to_thread(fetch_car_live, car_code.upper())
-    if not car.get('ok'):
-        raise lookup_http_error(car)
+async def export_geojson(car_code: str, request: Request = None):
+    car = await _car_para_exportar(car_code, request)
     feature = {'type':'Feature','geometry':car.get('geometry'),'properties':car.get('properties') or {}}
     fc = {'type':'FeatureCollection','features':[feature]}
     return Response(content=json.dumps(fc, ensure_ascii=False), media_type='application/geo+json', headers={'Content-Disposition':f'attachment; filename="raio_x_{car_code.upper()}.geojson"'})
 
 
 @app.get('/v1/exports/property/{car_code}/kml')
-async def export_kml(car_code: str):
-    car = await asyncio.to_thread(fetch_car_live, car_code.upper())
-    if not car.get('ok'):
-        raise lookup_http_error(car)
+async def export_kml(car_code: str, request: Request = None):
+    car = await _car_para_exportar(car_code, request)
     props = car.get('properties') or {}
     geom = _kml_geometry(car.get('geometry') or {})
     code = html.escape(str(props.get('cod_imovel') or car_code.upper()))

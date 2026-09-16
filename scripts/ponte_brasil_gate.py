@@ -824,17 +824,19 @@ def legacy_cases():
          ["curl", "-sS", "-L", "--fail", "--proto", "=https", "--proto-redir", "=https", "--connect-timeout", "5",
           "--max-time", "8", "--max-filesize", "30000000", "-A", "Raio-X-Territorial/f2-incra-acervo", INCRA_URL],
          {"timeout_seconds": 10, "cancel_event": None}),
-        ("incra_snci_public_v42._curl", lambda: snci._curl(INCRA_URL, 10), (subprocess, "run"),
+        # 15/09: os tres deixaram o br_bridge.subprocess_runner e passaram ao run_managed_process (cancelavel).
+        # A chamada e' a mesma; o que muda e' o executor e o nome do prazo.
+        ("incra_snci_public_v42._curl", lambda: snci._curl(INCRA_URL, 10), (snci, "run_managed_process"),
          ["curl", "-k", "-sS", "-L", "--fail", "--retry", "0", "--connect-timeout", "5", "--max-time", "10", "-A",
           "Raio-X-Territorial/INCRA-SNCI-v42", INCRA_URL],
-         {"capture_output": True, "timeout": 14}),
-        ("sicar_detail_sources._curl", lambda: sds._curl(SICAR_URL), (subprocess, "run"),
+         {"timeout_seconds": 14, "cancel_event": None}),
+        ("sicar_detail_sources._curl", lambda: sds._curl(SICAR_URL), (sds, "run_managed_process"),
          ["curl", "-k", "-sS", "--connect-timeout", "12", "--max-time", "35", "-A", "Raio-X-Territorial/0.14.10", SICAR_URL],
-         {"capture_output": True, "timeout": 40}),
-        ("sicar_detail_sources_v2._curl", lambda: sds2._curl(SICAR2_URL), (subprocess, "run"),
+         {"timeout_seconds": 40, "cancel_event": None}),
+        ("sicar_detail_sources_v2._curl", lambda: sds2._curl(SICAR2_URL), (sds2, "run_managed_process"),
          ["curl", "-k", "-sS", "--fail", "--retry", "0", "--connect-timeout", "6", "--max-time", "13", "-A",
           "Raio-X-Territorial/SICAR-v41", SICAR2_URL],
-         {"capture_output": True, "timeout": 17}),
+         {"timeout_seconds": 17, "cancel_event": None}),
     ]
 
 
@@ -899,11 +901,11 @@ def c_incra_bridge():
         args = rec.calls[0][0]
         assert "--proto" in args and "Raio-X-Territorial/f2-incra-acervo" in args
         rec = Recorder((0, 0.0, b"<xml/>", b""))
-        with mock.patch.object(subprocess, "run", rec):
+        with mock.patch.object(snci, "run_managed_process", rec):
             snci._curl(INCRA_URL, 10)
         assert len(rec.calls) == 1, rec.calls
         _bridge_call_ok(rec.calls[0], "snci", url=INCRA_URL, timeout=14, max_time=10)
-        assert rec.calls[0][1]["capture_output"] is True
+        assert rec.calls[0][1]["cancel_event"] is None
         # ponte recusou (token errado): falha, nunca dado
         rec = Recorder((22, 0.0, b"", b"curl: (22) The requested URL returned error: 401"))
         with mock.patch.object(epl, "run_managed_process", rec):
@@ -950,20 +952,20 @@ def c_sicar_budget_and_codes():
     with ponte_env(ENV_ON), mock.patch.object(br_bridge, "_now", clock):
         # sobra 2 s de 17: não chama a ponte
         rec = Recorder((28, 15.0, b"", b"curl: (28) Operation timed out"), clock=clock)
-        with mock.patch.object(subprocess, "run", rec):
+        with mock.patch.object(sds2, "run_managed_process", rec):
             out = sds2._curl(SICAR2_URL, False)
         assert out["ok"] is False and len(rec.calls) == 1, rec.calls
         # --fail com 403: ponte com o que sobra (16 s; --max-time 13 cabe)
         br_bridge.reset_state()
         rec = Recorder((22, 1.0, b"", b"curl: (22) The requested URL returned error: 403"), (0, 1.0, b"<xml/>", b""), clock=clock)
-        with mock.patch.object(subprocess, "run", rec):
+        with mock.patch.object(sds2, "run_managed_process", rec):
             out = sds2._curl(SICAR2_URL, False)
         assert out["ok"] is True and len(rec.calls) == 2, rec.calls
         _bridge_call_ok(rec.calls[1], "sicar v2 403", url=SICAR2_URL, timeout=16.0, max_time=13)
         # 404 é resposta da fonte: sem ponte
         br_bridge.reset_state()
         rec = Recorder((22, 1.0, b"", b"curl: (22) The requested URL returned error: 404"), clock=clock)
-        with mock.patch.object(subprocess, "run", rec):
+        with mock.patch.object(sds2, "run_managed_process", rec):
             sds2._curl(SICAR2_URL, False)
         assert len(rec.calls) == 1, rec.calls
 
@@ -988,14 +990,14 @@ def c_sicar_window_rule():
             br_bridge.reset_state()
             rec = Recorder((7, 1.0, b"", b""), (0, 1.0, b"<xml/>", b""), (rc, 1.0, b"", err), (0, 0.5, b"<xml/>", b""),
                            clock=clock)
-            with mock.patch.object(subprocess, "run", rec):
+            with mock.patch.object(sds2, "run_managed_process", rec):
                 sds2._curl(SICAR2_URL, False)  # direto cai, ponte resgata: janela abre
                 assert br_bridge.direct_skipped(host), (name, "janela não abriu")
                 sds2._curl(SICAR2_URL, False)  # na janela, pela ponte, falha
                 assert br_bridge.direct_skipped(host) is stays, (name, "janela devia ficar " + ("aberta" if stays else "fechada"))
                 sds2._curl(SICAR2_URL, False)
-            assert len(rec.calls) == 4 and "input" in rec.calls[2][1], (name, rec.calls)
-            assert ("input" in rec.calls[3][1]) is stays, (name, "próxima chamada", rec.calls[3])
+            assert len(rec.calls) == 4 and "input_bytes" in rec.calls[2][1], (name, rec.calls)
+            assert ("input_bytes" in rec.calls[3][1]) is stays, (name, "próxima chamada", rec.calls[3])
 
 
 def c_no_bridge_url_leak():
@@ -1498,7 +1500,7 @@ def i_incra_identity():
         assert _id_header(rec.calls[0]) == f"X-Serverless-Authorization: Bearer {endpoint.token}", _id_header(rec.calls[0])
         assert all(endpoint.token not in a and "GATE" not in a for a in rec.calls[0][0]), "token de identidade na linha de comando"
         rec = Recorder((0, 0.0, b"<xml/>", b""))
-        with mock.patch.object(subprocess, "run", rec):
+        with mock.patch.object(snci, "run_managed_process", rec):
             snci._curl(INCRA_URL, 10)
         _bridge_call_ok(rec.calls[0], "snci google", url=INCRA_URL, timeout=14, max_time=10)
         assert _id_header(rec.calls[0]) is not None

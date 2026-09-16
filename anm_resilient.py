@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-import subprocess
+from external_process_lifecycle import run_managed_process
 from urllib.parse import urlencode
 from typing import Any
 
@@ -30,7 +30,7 @@ def query_anm_curl_exact(car_geometry:dict[str,Any], bbox:list[float]):
     }
     url=ANM_QUERY+'?'+urlencode(params)
     try:
-        p=subprocess.run(['curl','-sS','--retry','2','--retry-delay','1','--connect-timeout','15','--max-time','50','-A','Raio-X-Territorial/0.15.3',url],capture_output=True,timeout=60)
+        p=run_managed_process(['curl','-sS','--retry','2','--retry-delay','1','--connect-timeout','15','--max-time','50','-A','Raio-X-Territorial/0.15.3',url],timeout_seconds=60)
         if p.returncode:
             return {'ok':False,'source':'ANM/SIGMINE','error':'curl','detail':p.stderr.decode('utf-8','ignore')[:300]}
         data=json.loads(p.stdout.decode('utf-8'))

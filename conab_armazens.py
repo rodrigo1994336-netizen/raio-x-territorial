@@ -47,6 +47,8 @@ import threading
 import time
 import unicodedata
 from concurrent.futures import ThreadPoolExecutor
+
+from external_process_lifecycle import in_current_scope
 from functools import lru_cache
 from datetime import timedelta, timezone
 from email.utils import parsedate_to_datetime
@@ -660,7 +662,8 @@ def conab_warehouses_payload(geometria_car: Any, *, raio_km: float = RAIO_PADRAO
     malhas: dict[str, dict | None] = {}
     if codigos:
         with ThreadPoolExecutor(max_workers=min(6, len(codigos))) as pool:
-            for codigo, malha in zip(codigos, pool.map(lambda k: fetch_municipality_mesh(k, base_dir, http_get=http_get, agora=agora), codigos)):
+            for codigo, malha in zip(codigos, pool.map(in_current_scope(
+                    lambda k: fetch_municipality_mesh(k, base_dir, http_get=http_get, agora=agora)), codigos)):
                 malhas[codigo] = malha
     resultado = query_conab_warehouses(linhas, geometria_car, malhas, raio_km, candidatos=cands)
     out = build_warehouses_payload(resultado, meta)

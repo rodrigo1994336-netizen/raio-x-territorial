@@ -39,11 +39,41 @@ def _open_scope(event: threading.Event) -> contextvars.Token:
     return _SCOPES.set(_SCOPES.get() + (event,))
 
 
+def in_current_scope(fn: Callable[..., Any]) -> Callable[..., Any]:
+    """Embrulha `fn` para o trabalhador de um pool enxergar o escopo de cancelamento de quem submeteu.
+
+    `ThreadPoolExecutor.submit`, `.map` e `loop.run_in_executor` NÃO copiam o contexto (só
+    `asyncio.to_thread` e `create_task` copiam): sem isto o curl do trabalhador nasce fora do escopo e
+    sobrevive ao prazo e à desistência do cliente. O contexto é lido AQUI, na thread de quem submete; o
+    trabalhador só põe e tira o escopo no contexto da própria thread (uma cópia de Context não serve para
+    `.map`: o mesmo Context não pode ser entrado por dois trabalhadores ao mesmo tempo)."""
+    scopes = _SCOPES.get()
+
+    def runner(*args: Any, **kwargs: Any) -> Any:
+        token = _SCOPES.set(scopes)
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            _SCOPES.reset(token)
+
+    return runner
+
+
 def active_child_pids() -> list[int]:
     with _ACTIVE_LOCK:
         return sorted(pid for pid, proc in _ACTIVE.items() if proc.poll() is None)
 
-def _stop_process(proc: subprocess.Popen[bytes], grace_seconds: float = 0.35) -> None:
+# Carência de parada de um filho: terminate + espera, e se não morrer, kill + espera. Quem deriva teto de
+# tempo (car_resilient.WORST_CASE_SECONDS) soma isto, porque o filho ainda custa depois de o prazo estourar.
+STOP_GRACE_SECONDS = 0.35
+STOP_GRACE_TOTAL_SECONDS = STOP_GRACE_SECONDS * 2
+# Passo do laço de communicate(): o prazo e o cancelamento são vistos com esta granularidade.
+PROCESS_POLL_SECONDS = 0.10
+# O que cada processo gerenciado pode custar ALÉM do prazo pedido, no pior caso.
+STOP_OVERHEAD_SECONDS = STOP_GRACE_TOTAL_SECONDS + PROCESS_POLL_SECONDS
+
+
+def _stop_process(proc: subprocess.Popen[bytes], grace_seconds: float = STOP_GRACE_SECONDS) -> None:
     if proc.poll() is not None:
         return
     try:
@@ -115,7 +145,8 @@ def run_managed_process(
             if remaining is not None and remaining <= 0:
                 raise subprocess.TimeoutExpired(list(args), timeout_seconds)
             try:
-                stdout, stderr = proc.communicate(timeout=0.10 if remaining is None else min(0.10, remaining))
+                stdout, stderr = proc.communicate(
+                    timeout=PROCESS_POLL_SECONDS if remaining is None else min(PROCESS_POLL_SECONDS, remaining))
                 return subprocess.CompletedProcess(list(args), proc.returncode, stdout, stderr)
             except subprocess.TimeoutExpired:
                 continue
@@ -178,9 +209,59 @@ async def run_sync_with_request_lifecycle(
         raise
 
 
-async def wait_for_cancelling_processes(aw: Awaitable[Any], timeout: float | None) -> Any:
+DISCONNECT_POLL_S = 0.10
+WATCH_FAILURES: dict[str, int] = {}
+
+
+async def _watch_disconnect(request: Any, task: "asyncio.Future[Any]", event: threading.Event,
+                            seen: list[bool]) -> None:
+    """Vigia a desistência do cliente enquanto a consulta corre.
+
+    Medido em 15/09 com uvicorn: uma rota `async def` SEM o parâmetro `request` roda até o fim depois de o
+    cliente fechar a conexão (o servidor não cancela a tarefa do handler sozinho); com `request.is_disconnected()`
+    a desistência aparece em ~0,1 s. Sem esta vigia, "o cliente desistiu" nunca chegava à cadeia.
+
+    ⚠️ SÓ EM ROTA QUE NÃO VAI LER O CORPO DA REQUISIÇÃO DEPOIS. `is_disconnected()` faz um `receive()` no
+    canal ASGI e CONSOME a mensagem que estiver esperando: numa rota que ainda fosse ler o corpo (POST com
+    leitura dentro do handler), um pedaço de `http.request` seria descartado em silêncio. Nas rotas GET de
+    hoje, e em rota cujo corpo o FastAPI já leu por inteiro antes do handler, só resta `http.disconnect`."""
+    try:
+        while not task.done():
+            if await request.is_disconnected():
+                seen.append(True)
+                event.set()          # derruba os processos gerenciados já nascidos
+                task.cancel()        # e impede que a cadeia abra a consulta seguinte
+                return
+            await asyncio.sleep(DISCONNECT_POLL_S)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        # A vigia nunca pode derrubar a consulta: sem ela o comportamento volta a ser o de antes (só prazo).
+        # Mas morrer calada esconde a degradação de quem opera: conta e registra (só o tipo, nada do cliente).
+        name = type(exc).__name__
+        WATCH_FAILURES[name] = WATCH_FAILURES.get(name, 0) + 1
+        print(f"RX_DISCONNECT_WATCH_FAILED={name}:{WATCH_FAILURES[name]}", flush=True)
+        return
+
+
+def _outer_cancel_requested() -> bool:
+    """O cancelamento veio DE FORA (o servidor cancelou este handler), e não da vigia?
+
+    `Task.cancelling()` (3.11+) conta os cancelamentos pedidos à tarefa atual e ainda não desfeitos. O
+    `wait_for` desfaz o dele antes de levantar TimeoutError, então aqui só resta cancelamento de terceiros."""
+    try:
+        task = asyncio.current_task()
+        return bool(task is not None and task.cancelling())
+    except Exception:  # noqa: BLE001 - Python sem cancelling(): trata como cancelamento da vigia, como antes
+        return False
+
+
+async def wait_for_cancelling_processes(aw: Awaitable[Any], timeout: float | None, *, request: Any = None) -> Any:
     """asyncio.wait_for que, ao estourar o prazo, ser cancelado ou falhar, cancela os processos externos
     gerenciados nascidos dentro dele.
+
+    Com `request`, a desistência do cliente entra no mesmo escopo: os filhos vivos caem e a cadeia não abre
+    consulta nova (levanta RequestDisconnected). Sem `request`, o comportamento é exatamente o de antes.
 
     O wait_for sozinho abandona viva a thread de asyncio.to_thread, e com ela a cadeia inteira de curl que
     ela ainda roda: no fetch_car_live_resilient com o SICAR travado são 10 curls de até 11 s em sequência
@@ -192,9 +273,10 @@ async def wait_for_cancelling_processes(aw: Awaitable[Any], timeout: float | Non
     o escopo e passaria sem proteção, em silêncio — por isso é recusada com TypeError.
 
     O escopo viaja pelo contexto (asyncio.to_thread e create_task o copiam). Não atravessa
-    ThreadPoolExecutor.submit, loop.run_in_executor nem threading.Thread: quem usa pool ou thread própria
-    precisa repassar cancel_event até o run_managed_process. Processo criado fora do run_managed_process
-    (subprocess.run direto) não é alcançado: fica limitado só pelo timeout dele."""
+    ThreadPoolExecutor.submit/.map, loop.run_in_executor nem threading.Thread: quem usa pool embrulha cada
+    trabalho em `in_current_scope(...)` (conferido pela regra estática `copia_de_escopo_no_pool`), e quem
+    abre thread própria repassa cancel_event até o run_managed_process. Processo criado fora do
+    run_managed_process (subprocess.run direto) não é alcançado: fica limitado só pelo timeout dele."""
     if asyncio.isfuture(aw):
         raise TypeError("wait_for_cancelling_processes: passe a corrotina, não tarefa/Future já criada (ela não herda o escopo)")
     event = threading.Event()
@@ -203,11 +285,27 @@ async def wait_for_cancelling_processes(aw: Awaitable[Any], timeout: float | Non
         task = asyncio.ensure_future(aw)
     finally:
         _SCOPES.reset(token)
+    seen: list[bool] = []
+    watcher = None if request is None else asyncio.ensure_future(_watch_disconnect(request, task, event, seen))
     try:
         return await asyncio.wait_for(task, timeout)
+    except asyncio.CancelledError as exc:
+        event.set()
+        # A vigia cancela a tarefa quando o cliente desiste: aí este cancelamento É a desistência.
+        # Cancelamento pedido de fora (desligamento do servidor) continua sendo cancelamento — convertê-lo
+        # deixaria o handler vivo levantando HTTPException em vez de morrer. E a original viaja junto
+        # ("from exc"), para o log guardar a causa.
+        if seen and not _outer_cancel_requested():
+            raise RequestDisconnected("client_disconnected") from exc
+        raise
     except BaseException:
+        # Erro de verdade continua sendo o erro de verdade, mesmo que o cliente tenha desistido no mesmo
+        # instante: convertê-lo em 499 apagaria a causa do log.
         event.set()
         raise
+    finally:
+        if watcher is not None and not watcher.done():
+            watcher.cancel()
 
 
 def install_shutdown_cleanup(app: Any) -> None:

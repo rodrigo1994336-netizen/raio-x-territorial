@@ -35,6 +35,8 @@ import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, wait
+
+from external_process_lifecycle import in_current_scope
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
@@ -316,7 +318,7 @@ def query_solo_nacional(car_geometry: Any, get=None, deadline_s: float | None = 
     ex = ThreadPoolExecutor(max_workers=len(LAYERS), thread_name_prefix="rx-t1-solo")
     layers: dict[str, dict[str, Any]] = {}
     try:
-        futures = {k: ex.submit(_layer, k, car_geometry, get, deadline) for k in LAYERS}
+        futures = {k: ex.submit(in_current_scope(_layer), k, car_geometry, get, deadline) for k in LAYERS}
         wait(list(futures.values()), timeout=max(0.0, deadline - time.monotonic()))
         for k, f in futures.items():
             if not f.done():

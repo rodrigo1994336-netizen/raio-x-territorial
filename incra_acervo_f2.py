@@ -47,6 +47,8 @@ import time
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor
 
+from external_process_lifecycle import in_current_scope
+
 try:  # defusedxml when installed; otherwise any DTD/entity is refused before parsing (see parse_wfs_gml)
     from defusedxml.ElementTree import fromstring as _xml_fromstring
 except ImportError:  # pragma: no cover - depends on the environment
@@ -478,7 +480,7 @@ def query_incra_acervo(car_geometry: dict[str, Any] | None, uf: str | None, *, f
 
     if parallel:
         with ThreadPoolExecutor(max_workers=len(LAYERS)) as pool:
-            answers = list(pool.map(one, LAYERS))
+            answers = list(pool.map(in_current_scope(one), LAYERS))
     else:
         answers = [one(layer) for layer in LAYERS]
     if cancel_event is not None and cancel_event.is_set():

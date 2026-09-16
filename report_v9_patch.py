@@ -6,7 +6,9 @@ from collections import OrderedDict
 from datetime import datetime, timezone
 
 import report_api as base
-from external_process_lifecycle import wait_for_cancelling_processes
+import car_resilient  # instala a busca resiliente; importado DEPOIS do report_api (evita ciclo)
+from fastapi import Request
+from external_process_lifecycle import RequestDisconnected, wait_for_cancelling_processes
 from live_report_adapter_v9 import generate_live_report as generate_live_report_v9
 
 app=base.app
@@ -18,6 +20,13 @@ _PROGRESS_TASKS:dict[str,asyncio.Task]={}
 _QUICK:OrderedDict[str,tuple[float,dict]]=OrderedDict()
 _QUICK_TTL=120
 _QUICK_MAX=16
+# Prazo do caminho de reserva (CAR sozinho). O nome `base.fetch_car_live` é resolvido NA HORA DA CHAMADA, e
+# no arranque o car_resilient.install_global_patch() o troca pela busca resiliente: sondado em 15/09 nesta
+# máquina, ele resolve para car_resilient.fetch_car_live_resilient — uma cadeia de até 12 tentativas, não um
+# curl só. Por isso o prazo daqui é o teto do pior caso declarado pelo car_resilient (o mesmo que o
+# portal_property_tabs usa), que também é maior que o teto do curl único caso a troca não esteja instalada:
+# de um jeito ou do outro, não corta resposta que hoje chega. O ganho vem do cancelamento, não do corte.
+_CAR_FALLBACK_S=car_resilient.WORST_CASE_SECONDS
 
 
 def _prune_quick():
@@ -106,7 +115,7 @@ def _ensure_deep(code:str):
 
 
 @app.get('/v1/live/quick/{car_code}')
-async def quick_analysis(car_code:str):
+async def quick_analysis(car_code:str,request:Request=None):
     code=car_code.upper(); t0=time.monotonic()
     cached=_quick_get(code)
     if cached is None:
@@ -114,13 +123,21 @@ async def quick_analysis(car_code:str):
             # Core sources are CAR/SIGEF/IBAMA/ANM/PRODES. The deep state (fire,
             # territorial constraints, water, pivots, climate, SGB and IDE layers)
             # is deliberately not awaited here.
-            result=await wait_for_cancelling_processes(base.analyze_car(code),15)
+            result=await wait_for_cancelling_processes(base.analyze_car(code),15,request=request)
         except asyncio.TimeoutError:
-            # CAR alone is still useful for an immediate acknowledgement.
-            car=await asyncio.to_thread(base.fetch_car_live,code)
+            # CAR alone is still useful for an immediate acknowledgement. O caminho de reserva corre DENTRO do
+            # mesmo escopo: prazo próprio e desistência do cliente derrubam o curl dele também.
+            try:
+                car=await wait_for_cancelling_processes(asyncio.to_thread(base.fetch_car_live,code),_CAR_FALLBACK_S,request=request)
+            except asyncio.TimeoutError:
+                raise base.HTTPException(status_code=504,detail='Consulta ao SICAR pendente: as fontes não responderam a tempo. Tente de novo em instantes.')
+            except RequestDisconnected:
+                raise base.HTTPException(status_code=499,detail='Consulta encerrada: o cliente desistiu.')
             if not car.get('ok'):
                 raise base.HTTPException(status_code=502,detail='As fontes principais estão lentas e o CAR não pôde ser confirmado agora.')
             result={'car':car}
+        except RequestDisconnected:
+            raise base.HTTPException(status_code=499,detail='Consulta encerrada: o cliente desistiu.')
         car=result.get('car') or {}
         if not car.get('ok'):
             raise base.HTTPException(status_code=404 if car.get('not_found') else 502,detail=base._safe_summary(result))
