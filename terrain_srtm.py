@@ -3,7 +3,7 @@ from __future__ import annotations
 import gzip
 import math
 import os
-import subprocess
+from external_process_lifecycle import run_managed_process
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -30,7 +30,7 @@ def _download(lat:int,lon:int,cache:Path)->Path:
     if raw.exists() and raw.stat().st_size>20_000_000:return raw
     cache.mkdir(parents=True,exist_ok=True)
     url=f'{BASE}/{folder}/{tid}.hgt.gz'
-    p=subprocess.run(['curl','-sS','--fail','--retry','2','--retry-delay','1','--connect-timeout','10','--max-time','70','-A','Raio-X-Territorial/terrain-srtm',url,'-o',str(gz)],capture_output=True,timeout=80)
+    p=run_managed_process(['curl','-sS','--fail','--retry','2','--retry-delay','1','--connect-timeout','10','--max-time','70','-A','Raio-X-Territorial/terrain-srtm',url,'-o',str(gz)],timeout_seconds=80)
     if p.returncode:raise RuntimeError(f'download {tid}: '+p.stderr.decode('utf-8','ignore')[:180])
     with gzip.open(gz,'rb') as src,open(raw,'wb') as dst:
         while True:

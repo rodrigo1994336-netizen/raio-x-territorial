@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-import subprocess
+from external_process_lifecycle import ManagedProcessCancelled, run_managed_process
 import xml.etree.ElementTree as ET
 from urllib.parse import urlencode
 from typing import Any
@@ -17,7 +17,10 @@ GEOD=Geod(ellps='GRS80')
 
 
 def _curl(url: str, expect_json=True):
-    p=br_bridge.run_curl(['curl','-k','-sS','--connect-timeout','12','--max-time','35','-A','Raio-X-Territorial/0.14.10',url],timeout_seconds=40,runner=br_bridge.subprocess_runner)
+    try:
+        p=br_bridge.run_curl(['curl','-k','-sS','--connect-timeout','12','--max-time','35','-A','Raio-X-Territorial/0.14.10',url],timeout_seconds=40,runner=run_managed_process)
+    except ManagedProcessCancelled:
+        return {'ok':False,'cancelled':True,'detail':'request_cancelled'}
     if p.returncode:
         return {'ok':False,'detail':p.stderr.decode('utf-8','ignore')[:240]}
     raw=p.stdout

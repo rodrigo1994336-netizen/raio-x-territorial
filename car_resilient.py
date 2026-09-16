@@ -47,8 +47,16 @@ def _build_result(raw, code, strategy):
     }
 
 
+ATTEMPT_HARD_TIMEOUT_S=11
+# Tentativas no pior caso: 5 estratégias + 5 páginas da varredura do município + 2 rebuscas pelo id do feature.
+MAX_ATTEMPTS=5+5+2
+# Teto do pior caso desta busca (132 s). Quem põe prazo em cima dela usa este número: um prazo menor cortaria
+# resposta que hoje chega. Derivado, não escrito à mão, para não envelhecer quando as tentativas mudarem.
+WORST_CASE_SECONDS=ATTEMPT_HARD_TIMEOUT_S*MAX_ATTEMPTS
+
+
 def _req(params, cancel_event=None):
-    return deploy_app._curl(deploy_app.SICAR+'?'+urlencode(params),True,cancel_event=cancel_event,connect_timeout=5,max_time=10,hard_timeout=11)
+    return deploy_app._curl(deploy_app.SICAR+'?'+urlencode(params),True,cancel_event=cancel_event,connect_timeout=5,max_time=10,hard_timeout=ATTEMPT_HARD_TIMEOUT_S)
 
 
 def _cancelled(cancel_event):
