@@ -239,7 +239,10 @@ jobs:
           assert "'method':'osm_named_farm_point_inside_car'" not in identity_src
           assert "'method':'strong_sigef_overlap'" not in identity_src
           assert "'panel_name_eligible':False" in identity_src and 'nunca são promovidas automaticamente a denominação do CAR' in identity_src
-          assert 'resolve_property_identity_sync' in pdf_proxy and 'name=await _report_name' in pdf_proxy and 'RX_PORTAL_PDF_V43_8' in pdf_proxy
+          assert 'resolve_property_identity_sync' in pdf_proxy and 'name=await _name_ou_499' in pdf_proxy and 'RX_PORTAL_PDF_V43_8' in pdf_proxy
+          # o embrulho tem de continuar resolvendo o nome PELA cadeia e converter a desistencia em 499
+          assert 'return await _report_name(' in pdf_proxy and pdf_proxy.count('await _name_ou_499(') == 4
+          assert "raise HTTPException(status_code=499,detail='client_disconnected')" in pdf_proxy
           assert "0.43.4-v43-snapshot-first" in release and 'window.rxVisibleCarCountV43' in release
           assert 'RX_GEOLOCATION_V43=explicit_user_action_only' in release and '_auto_locate' in release
           assert 'RX_VIEWPORT_GUARD_V43=dossier_and_positive_area' in release and '_viewport_loader' in release and '_viewport_bounds' in release

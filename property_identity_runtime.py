@@ -39,6 +39,10 @@ _OSM_ENDPOINTS=(
     'https://overpass.kumi.systems/api/interpreter',
 )
 _OSM_SOURCE='OpenStreetMap contributors — denominação geográfica pública (ODbL)'
+_OSM_HTTP_TIMEOUT_S=7
+# Teto do trecho OSM: cada espelho e tentado em sequencia com o mesmo prazo de rede. Quem poe prazo em cima
+# de uma funcao que chama _osm_named_farms_bbox soma este numero; menor cortaria resposta que hoje chega.
+OSM_WORST_CASE_S=round(len(_OSM_ENDPOINTS)*_OSM_HTTP_TIMEOUT_S,1)
 # C2b: minimum share of the CAR a SIGEF parcel must cover to be shown as its cadastral reference.
 SIGEF_REFERENCE_MIN_OVERLAP=0.50
 # C2b: an attempt that did not answer (SICAR or SIGEF) is remembered only briefly and never as an
@@ -141,7 +145,7 @@ def _osm_named_farms_bbox(west:float,south:float,east:float,north:float,limit:in
     for endpoint in _OSM_ENDPOINTS:
         try:
             req=URLRequest(endpoint,data=body,headers={'User-Agent':'Raio-X-Territorial/V44 (+public-name-resolution)','Content-Type':'application/x-www-form-urlencoded','Accept':'application/json'})
-            with urlopen(req,timeout=7) as response:data=json.load(response)
+            with urlopen(req,timeout=_OSM_HTTP_TIMEOUT_S) as response:data=json.load(response)
             items=[];seen=set()
             for element in data.get('elements') or []:
                 if element.get('type')!='node':continue

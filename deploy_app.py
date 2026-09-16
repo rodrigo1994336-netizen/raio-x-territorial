@@ -1,6 +1,7 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import os, httpx, asyncio, json, subprocess
+import external_process_lifecycle as epl
 from external_process_lifecycle import ManagedProcessCancelled, install_shutdown_cleanup, run_managed_process
 import xml.etree.ElementTree as ET
 from urllib.parse import urlencode
@@ -44,7 +45,17 @@ TARGETS={
  'incra_root':'https://acervofundiario.incra.gov.br/'
 }
 
-def _curl(url:str, expect_json=True, *, cancel_event=None, connect_timeout=12, max_time=40, hard_timeout=45):
+# Prazos de UMA chamada deste curl, nomeados para quem precisa derivar teto de tempo em cima dela.
+CURL_CONNECT_TIMEOUT_S=12
+CURL_MAX_TIME_S=40
+CURL_HARD_TIMEOUT_S=45
+# Teto de UMA chamada: o prazo duro do processo MAIS a carencia de parada do processo gerenciado (o filho
+# ainda custa depois de o prazo estourar). Quem poe prazo sobre uma funcao que usa este _curl soma este
+# numero por chamada; um prazo menor cortaria resposta que hoje chega.
+CURL_WORST_CASE_S=round(CURL_HARD_TIMEOUT_S+epl.STOP_OVERHEAD_SECONDS,1)
+
+def _curl(url:str, expect_json=True, *, cancel_event=None, connect_timeout=CURL_CONNECT_TIMEOUT_S,
+          max_time=CURL_MAX_TIME_S, hard_timeout=CURL_HARD_TIMEOUT_S):
     args=['curl','-k','-sS','--connect-timeout',str(connect_timeout),'--max-time',str(max_time),'-A','Raio-X-Territorial/0.14.6',url]
     try:
         # SICAR/INCRA pela Ponte no Brasil quando configurada; sem ela, a mesma chamada de antes.

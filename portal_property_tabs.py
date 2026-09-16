@@ -12,6 +12,7 @@ from external_process_lifecycle import RequestDisconnected, wait_for_cancelling_
 import car_resilient
 from car_resilient import fetch_car_live_resilient
 from sicar_lookup_http import lookup_http_error
+import climate_nasa
 from climate_nasa import query_climate_nasa, query_climatology_nasa, build_drought_screening
 from groundwater_siagas import query_groundwater
 from safras_ibge import query_safras
@@ -25,6 +26,39 @@ def _desistiu():return HTTPException(status_code=499,detail='Consulta encerrada:
 # Prazo da busca do CAR: o teto do pior caso declarado pelo car_resilient (tentativas x prazo duro de cada uma).
 # Menor que isso cortaria resposta que hoje chega; o ganho vem do cancelamento, não do corte.
 _CAR_S=car_resilient.WORST_CASE_SECONDS
+# Tetos das duas consultas do clima, declarados pelo modulo que as implementa (--max-time + folga do
+# processo + carencia de parada), mais a folga abaixo. Menor cortaria resposta que hoje chega.
+# Folga ARBITRADA (não medida) para a leitura da série, que corre na mesma thread depois que o curl volta:
+# até 365 dias de seis parâmetros da NASA POWER, trabalho de CPU sem rede. Medido em 16/09 nesta máquina,
+# no CAR de Curvelo com days=30: 1,48 s a rota inteira (rede inclusa) contra os 83,8 s do teto.
+_SERIES_S=8.0
+_CLIMA_DIARIO_S=round(climate_nasa.DAILY_WORST_CASE_S+_SERIES_S,1)
+_CLIMA_NORMAL_S=round(climate_nasa.CLIMATOLOGY_WORST_CASE_S+_SERIES_S,1)
+
+
+# Quantas vezes cada tipo de falha virou "consulta pendente" na tela, por tipo. Mesma forma do
+# external_process_lifecycle.WATCH_FAILURES: so o nome da classe, nada do cliente e nada do imovel.
+PENDENTE_FALHAS:dict[str,int]={}
+
+
+def _pendente(valor,fonte:str):
+    """Fonte que nao respondeu vira consulta pendente: nunca verde, nunca erro tecnico na tela.
+
+    Esconder a falha do CLIENTE e a regra do dono; esconder de QUEM OPERA e como um defeito permanente
+    passa por lentidao da NASA. Sem esta contagem, um TypeError dentro do query_climate_nasa, um erro de
+    leitura ou uma regressao de codigo viravam a mesma "consulta pendente" discreta, para sempre, sem
+    rastro nenhum no servidor — antes do escopo uma excecao dessas subia pelo gather e aparecia como 500.
+    O tipo fica no log; a tela nao muda.
+
+    CancelledError nao e fonte pendente, e o proprio cancelamento: sobe, para nao ser engolido aqui."""
+    if isinstance(valor,asyncio.CancelledError):
+        raise valor
+    if isinstance(valor,BaseException):
+        nome=type(valor).__name__
+        PENDENTE_FALHAS[nome]=PENDENTE_FALHAS.get(nome,0)+1
+        print(f'RX_CONSULTA_PENDENTE={fonte}:{nome}:{PENDENTE_FALHAS[nome]}',flush=True)
+        return {'ok':False,'source':fonte,'detail':'consulta_pendente'}
+    return valor
 
 
 async def _car(code:str,request=None,budget:float|None=None):
@@ -44,7 +78,14 @@ async def _car(code:str,request=None,budget:float|None=None):
 @app.get('/v1/live/climate-detail/{car_code}')
 async def climate_detail(car_code:str,days:int=30,request:Request=None):
     car=await _car(car_code,request);geom=car.get('geometry');days=max(7,min(int(days),365))
-    recent,clim=await asyncio.gather(asyncio.to_thread(query_climate_nasa,geom,days),asyncio.to_thread(query_climatology_nasa,geom))
+    # Cada consulta dentro do proprio escopo: prazo e desistencia do cliente derrubam o curl da NASA POWER.
+    # Antes elas corriam soltas — o cliente fechava a aba e os dois curls seguiam ate o fim.
+    recent,clim=await asyncio.gather(
+        wait_for_cancelling_processes(asyncio.to_thread(query_climate_nasa,geom,days),_CLIMA_DIARIO_S,request=request),
+        wait_for_cancelling_processes(asyncio.to_thread(query_climatology_nasa,geom),_CLIMA_NORMAL_S,request=request),
+        return_exceptions=True)
+    if isinstance(recent,RequestDisconnected) or isinstance(clim,RequestDisconnected):raise _desistiu()
+    recent=_pendente(recent,'NASA POWER - Daily API');clim=_pendente(clim,'NASA POWER - Climatology API')
     # T1: chuva recente da POWER (~50 km) não vira adjetivo contra o normal; os milímetros continuam em 'recent'.
     return {'ok':bool(recent.get('ok')),'car_code':car_code.upper(),'recent':recent,'climatology':clim,'drought':withhold_rain_comparison(build_drought_screening(recent,clim))}
 

@@ -2,13 +2,22 @@ from __future__ import annotations
 
 import asyncio
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 import portal_v8
 import portal_search_resilient_v43 as resilient
 import cafir_name_search_v44 as cafir
+from external_process_lifecycle import RequestDisconnected, wait_for_cancelling_processes
 
 app=portal_v8.app
+# Teto declarado pelo modulo que implementa a consulta (cafir_name_search_v44), mais a folga abaixo.
+# Folga ARBITRADA (não medida) para a leitura das geometrias dos dois espelhos SIGEF, que corre na mesma
+# thread depois que o curl volta. Medido em 16/09 nesta máquina, com código INCRA de verdade tirado da
+# própria busca por nome (A/B no mesmo processo e no mesmo minuto, 6 sem escopo e 6 com escopo, todas
+# ok:true): mediana 1540 ms sem escopo contra 1641 ms com escopo, pior caso 2,1 s — contra os 106,6 s do
+# teto. O teto não corta resposta que hoje chega.
+_GEOMETRY_S=15.0
+_LOCATE_S=round(cafir.LOCATE_WORST_CASE_S+_GEOMETRY_S,1)
 
 
 @app.get('/v1/live/search/cafir-name')
@@ -17,8 +26,13 @@ async def cafir_name_search(q:str,uf:str='MG',municipality:str|None=None,limit:i
 
 
 @app.get('/v1/live/search/cafir-name/locate')
-async def cafir_name_locate(incra_code:str):
-    out=await asyncio.to_thread(cafir.locate_incra_sync,incra_code)
+async def cafir_name_locate(incra_code:str,request:Request):
+    # Dentro do escopo: prazo e desistencia do cliente derrubam os curls dos dois espelhos SIGEF.
+    try:
+        out=await wait_for_cancelling_processes(
+            asyncio.to_thread(cafir.locate_incra_sync,incra_code),_LOCATE_S,request=request)
+    except asyncio.TimeoutError:raise HTTPException(status_code=504,detail='cafir_locate_timeout')
+    except RequestDisconnected:raise HTTPException(status_code=499,detail='client_disconnected')
     if not out.get('ok') and str(out.get('detail') or '').startswith('invalid'):
         raise HTTPException(status_code=422,detail=out)
     return out

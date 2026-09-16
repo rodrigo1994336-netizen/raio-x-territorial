@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
 
+import deploy_app
 from deploy_app import _curl
 
 ROOT=Path(__file__).resolve().parent
@@ -19,6 +20,9 @@ SIGEF=(
  ('PUBLICO','https://pamgia.ibama.gov.br/server/rest/services/01_Publicacoes_Bases/lim_imovel_sigef_publico_a/FeatureServer/10/query'),
  ('PRIVADO','https://pamgia.ibama.gov.br/server/rest/services/01_Publicacoes_Bases/lim_imovel_sigef_privado_a/FeatureServer/9/query'),
 )
+# Teto do locate_incra_sync: os dois espelhos SIGEF em sequencia, cada um uma chamada do curl padrao do
+# deploy_app. Quem poe prazo em cima dele usa este numero; menor cortaria resposta que hoje chega.
+LOCATE_WORST_CASE_S=round(len(SIGEF)*deploy_app.CURL_WORST_CASE_S,1)
 
 
 def _norm(v:Any)->str:

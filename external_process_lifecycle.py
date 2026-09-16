@@ -35,6 +35,16 @@ def _is_cancelled(cancel_event: threading.Event | None) -> bool:
     return any(scope.is_set() for scope in _SCOPES.get())
 
 
+def scope_cancelled(cancel_event: threading.Event | None = None) -> bool:
+    """A consulta em curso já foi abandonada (prazo, desistência do cliente ou desligamento)?
+
+    É o mesmo teste que o run_managed_process faz antes de nascer um filho, exposto para quem NÃO abre
+    processo: a thread abandonada continua viva depois do prazo, e o que ela faz depois disso — gravar num
+    cache de processo, abrir a próxima consulta, segurar uma trava — chega ao cliente SEGUINTE. Tentativa
+    cancelada não é resposta: quem escreve em estado compartilhado pergunta isto antes de escrever."""
+    return _is_cancelled(cancel_event)
+
+
 def _open_scope(event: threading.Event) -> contextvars.Token:
     return _SCOPES.set(_SCOPES.get() + (event,))
 

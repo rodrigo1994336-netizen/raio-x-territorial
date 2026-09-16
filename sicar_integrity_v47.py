@@ -21,6 +21,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Iterable
 
+import external_process_lifecycle as epl
 from pyproj import Geod
 from shapely.geometry import GeometryCollection, mapping, shape
 from shapely.ops import unary_union
@@ -34,6 +35,9 @@ DATASET = "basedosdados.br_sfb_sicar"
 GEOD = Geod(ellps="GRS80")
 TABLE_ID_RE = re.compile(r"^[A-Za-z0-9_-]+\.[A-Za-z0-9_]+\.[A-Za-z0-9_]+$")
 CAR_RE = re.compile(r"^[A-Z]{2}-\d{7}-[A-F0-9]{32}$", re.I)
+
+# Prazo do proprio BigQuery nesta consulta, nomeado para quem precisa derivar teto de tempo em cima dela.
+QUERY_TIMEOUT_S = 45
 
 THEMES: dict[str, dict[str, Any]] = {
     "vegetacao_nativa": {"label": "Vegetação nativa", "table": "vegetacao_nativa", "declared_area": True},
@@ -122,6 +126,14 @@ def _query_parameters(params: dict[str, Any]):
 
 
 def _query(client: Any, sql: str, params: dict[str, Any]) -> list[dict[str, Any]]:
+    # Fronteira de cancelamento. O BigQuery nao e processo gerenciado: o cancel_event do escopo nao alcanca
+    # um job ja em curso. Mas uma leitura de integridade dispara CINCO consultas em sequencia, e a thread
+    # abandonada por prazo ou desistencia continua viva — antes disto ela rodava as cinco e segurava a trava
+    # por CAR do portal ate o fim, com o cliente ja fora. Aqui ela para na proxima fronteira.
+    # Fora de um escopo (servico do relatorio, conferencia local, teste) isto nunca dispara: sem escopo
+    # aberto, scope_cancelled() e falso e o comportamento e exatamente o de antes.
+    if epl.scope_cancelled():
+        raise epl.ManagedProcessCancelled("operation_cancelled")
     try:
         from google.cloud import bigquery
     except Exception as exc:
@@ -133,7 +145,7 @@ def _query(client: Any, sql: str, params: dict[str, Any]) -> list[dict[str, Any]
             cfg.maximum_bytes_billed = int(max_bytes)
         except Exception as exc:
             raise RuntimeError("invalid_bigquery_max_bytes_billed") from exc
-    rows = client.query(sql, job_config=cfg).result(timeout=45)
+    rows = client.query(sql, job_config=cfg).result(timeout=QUERY_TIMEOUT_S)
     return [dict(row.items()) for row in rows]
 
 

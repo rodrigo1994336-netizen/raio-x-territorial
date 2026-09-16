@@ -7,10 +7,11 @@ import time
 from urllib.parse import quote
 
 import httpx
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 import portal_v8
+from external_process_lifecycle import RequestDisconnected, run_sync_with_request_lifecycle
 from property_identity_runtime import resolve_property_identity_sync
 
 # RX_PORTAL_PDF_V43_8 — compatibility marker kept for the protected V43 contract.
@@ -34,14 +35,40 @@ def _provided_name(value:str|None)->str:
     return name
 
 
-async def _report_name(car_code:str,property_name:str|None)->str:
+async def _report_name(car_code:str,property_name:str|None,request=None)->str:
     supplied=_provided_name(property_name)
     if supplied:return supplied
     try:
-        identity=await asyncio.to_thread(resolve_property_identity_sync,str(car_code or '').upper())
+        # Dentro do escopo, na mesma forma da rota /v1/live/property-identity, que resolve o MESMO nome:
+        # o cancel_event chega a cada curl da cadeia (SICAR + INCRA + OSM) e a desistencia do cliente
+        # derruba todos. Sem prazo externo de propria lavra: cada trecho ja aplica o seu, e um teto escrito
+        # aqui cortaria nome que hoje chega. Sem nome o relatorio se identifica pelo codigo do CAR — a
+        # regra do dono —, entao a desistencia nunca vira nome errado.
+        identity=await run_sync_with_request_lifecycle(
+            request,resolve_property_identity_sync,str(car_code or '').upper(),timeout_seconds=None)
         return _provided_name(identity.get('name')) if identity.get('ok') else ''
+    except RequestDisconnected:
+        raise
     except Exception:
         return ''
+
+
+async def _name_ou_499(codigo:str,property_name:str|None,request)->str:
+    """O nome do relatorio, e 499 quando o cliente ja foi embora.
+
+    As quatro rotas moveis do relatorio passam por aqui: sem isto, a RequestDisconnected que o _report_name
+    levanta subia ate o ASGI em traceback (caminho de 500) no gesto mais banal do usuario — fechar a tela do
+    relatorio. Nao existe exception_handler global no projeto: traceback de desistencia enche o log de
+    producao e e exatamente o ruido que esconde falha de verdade. 499 e o mesmo codigo das outras nove
+    rotas convertidas.
+
+    Sem teto externo de propria lavra, de proposito: cada trecho da cadeia ja aplica o seu, e um prazo
+    escrito aqui cortaria nome que hoje chega — sem nome, o relatorio se identifica pelo codigo do CAR.
+    O ganho desta rota e o cancelamento, nao o corte."""
+    try:
+        return await _report_name(codigo,property_name,request)
+    except RequestDisconnected:
+        raise HTTPException(status_code=499,detail='client_disconnected')
 
 
 async def _wait_worker_ready(car_code:str,property_name:str='',max_wait:float=70.0)->bool:
@@ -98,31 +125,31 @@ async def _proxy(method:str,path:str,params=None,timeout=25,retries=0):
 
 @app.post('/v1/mobile/report/prepare/{car_code}')
 @app.get('/v1/mobile/report/prepare/{car_code}')
-async def mobile_report_prepare(car_code:str,property_name:str|None=None):
-    name=await _report_name(car_code,property_name)
+async def mobile_report_prepare(car_code:str,request:Request,property_name:str|None=None):
+    name=await _name_ou_499(car_code,property_name,request)
     if not await _wait_worker_ready(car_code,name,70):
         raise HTTPException(status_code=503,detail='Motor do relatório ainda está iniciando. A geração não foi iniciada.')
     return await _proxy('POST',f'/v1/reports/property/{quote(car_code.upper())}/prepare',{'property_name':name},12,retries=1)
 
 
 @app.get('/v1/mobile/report/status/{car_code}')
-async def mobile_report_status(car_code:str,property_name:str|None=None):
-    name=await _report_name(car_code,property_name)
+async def mobile_report_status(car_code:str,request:Request,property_name:str|None=None):
+    name=await _name_ou_499(car_code,property_name,request)
     return await _proxy('GET',f'/v1/reports/property/{quote(car_code.upper())}/status',{'property_name':name},10,retries=2)
 
 
 @app.get('/v1/mobile/report/open/{car_code}')
-async def mobile_report_open(car_code:str,property_name:str|None=None):
-    name=await _report_name(car_code,property_name)
+async def mobile_report_open(car_code:str,request:Request,property_name:str|None=None):
+    name=await _name_ou_499(car_code,property_name,request)
     url=f'{WORKER}/v1/reports/property/{quote(car_code.upper())}'
     if name:url+='?property_name='+quote(name)
     return RedirectResponse(url=url,status_code=307)
 
 
 @app.get('/v1/mobile/report/view/{car_code}',response_class=HTMLResponse)
-async def mobile_report_view(car_code:str,property_name:str|None=None):
+async def mobile_report_view(car_code:str,request:Request,property_name:str|None=None):
     code=str(car_code or '').upper()
-    name=await _report_name(code,property_name)
+    name=await _name_ou_499(code,property_name,request)
     safe_title=html_lib.escape(name or 'Relatório territorial')
     safe_code=html_lib.escape(code)
     attr_code=html_lib.escape(code,quote=True)
