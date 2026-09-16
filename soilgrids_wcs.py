@@ -3,7 +3,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from io import BytesIO
 import math
-import subprocess
+from external_process_lifecycle import run_managed_process
 from typing import Any
 from urllib.parse import urlencode
 
@@ -46,7 +46,7 @@ def _one(prop:str,lon:float,lat:float):
     }
     url=BASE+'?'+urlencode(params)
     try:
-        p=subprocess.run(['curl','-sS','--retry','1','--retry-delay','1','--connect-timeout','8','--max-time','35','-A','Raio-X-Territorial/0.25-soilgrids',url],capture_output=True,timeout=42)
+        p=run_managed_process(['curl','-sS','--retry','1','--retry-delay','1','--connect-timeout','8','--max-time','35','-A','Raio-X-Territorial/0.25-soilgrids',url],timeout_seconds=42)
     except Exception as e:
         return prop,{'ok':False,'detail':f'{type(e).__name__}:{str(e)[:180]}'}
     if p.returncode:

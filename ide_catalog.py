@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import subprocess
+from external_process_lifecycle import ManagedProcessCancelled, run_managed_process
 import xml.etree.ElementTree as ET
 from functools import lru_cache
 
@@ -12,7 +12,10 @@ def _local(tag:str)->str:
 
 
 def _curl_text(url:str,max_time:int=70):
-    p=subprocess.run(['curl','-sS','--retry','2','--retry-delay','1','--connect-timeout','15','--max-time',str(max_time),'-A','Raio-X-Territorial/0.17-ide-catalog',url],capture_output=True,timeout=max_time+10)
+    try:
+        p=run_managed_process(['curl','-sS','--retry','2','--retry-delay','1','--connect-timeout','15','--max-time',str(max_time),'-A','Raio-X-Territorial/0.17-ide-catalog',url],timeout_seconds=max_time+10)
+    except ManagedProcessCancelled:
+        return {'ok':False,'cancelled':True,'detail':'request_cancelled'}
     if p.returncode:
         return {'ok':False,'detail':p.stderr.decode('utf-8','ignore')[:400]}
     return {'ok':True,'text':p.stdout.decode('utf-8','ignore'),'bytes':len(p.stdout)}

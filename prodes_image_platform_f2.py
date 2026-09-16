@@ -26,7 +26,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 import json
 import re
-import subprocess
+from external_process_lifecycle import ManagedProcessCancelled, run_managed_process
 from typing import Any, Callable, Iterable
 
 STAC_SEARCH = "https://planetarycomputer.microsoft.com/api/stac/v1/search"
@@ -118,12 +118,15 @@ def platform_from_stac(response: dict[str, Any] | None, day: date, path_row: tup
 
 
 def _curl_post_json(url: str, body: dict[str, Any]) -> dict[str, Any] | None:
-    proc = subprocess.run(
-        ["curl", "-sS", "--connect-timeout", str(STAC_CONNECT_TIMEOUT_S), "--max-time", str(STAC_MAX_TIME_S),
-         "-A", "Raio-X-Territorial/f2-landsat-platform", "-H", "Content-Type: application/json",
-         "-X", "POST", "--data-binary", "@-", url],
-        input=json.dumps(body).encode("utf-8"), capture_output=True, timeout=STAC_MAX_TIME_S + 5,
-    )
+    try:
+        proc = run_managed_process(
+            ["curl", "-sS", "--connect-timeout", str(STAC_CONNECT_TIMEOUT_S), "--max-time", str(STAC_MAX_TIME_S),
+             "-A", "Raio-X-Territorial/f2-landsat-platform", "-H", "Content-Type: application/json",
+             "-X", "POST", "--data-binary", "@-", url],
+            input_bytes=json.dumps(body).encode("utf-8"), timeout_seconds=STAC_MAX_TIME_S + 5,
+        )
+    except ManagedProcessCancelled:
+        return None
     if proc.returncode:
         return None
     try:

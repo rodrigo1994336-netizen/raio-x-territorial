@@ -178,9 +178,37 @@ async def run_sync_with_request_lifecycle(
         raise
 
 
-async def wait_for_cancelling_processes(aw: Awaitable[Any], timeout: float | None) -> Any:
+DISCONNECT_POLL_S = 0.10
+
+
+async def _watch_disconnect(request: Any, task: "asyncio.Future[Any]", event: threading.Event,
+                            seen: list[bool]) -> None:
+    """Vigia a desistência do cliente enquanto a consulta corre.
+
+    Medido em 15/09 com uvicorn: uma rota `async def` SEM o parâmetro `request` roda até o fim depois de o
+    cliente fechar a conexão (o servidor não cancela a tarefa do handler sozinho); com `request.is_disconnected()`
+    a desistência aparece em ~0,1 s. Sem esta vigia, "o cliente desistiu" nunca chegava à cadeia."""
+    try:
+        while not task.done():
+            if await request.is_disconnected():
+                seen.append(True)
+                event.set()          # derruba os processos gerenciados já nascidos
+                task.cancel()        # e impede que a cadeia abra a consulta seguinte
+                return
+            await asyncio.sleep(DISCONNECT_POLL_S)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        # a vigia nunca pode derrubar a consulta: sem ela o comportamento é o de antes (só prazo)
+        return
+
+
+async def wait_for_cancelling_processes(aw: Awaitable[Any], timeout: float | None, *, request: Any = None) -> Any:
     """asyncio.wait_for que, ao estourar o prazo, ser cancelado ou falhar, cancela os processos externos
     gerenciados nascidos dentro dele.
+
+    Com `request`, a desistência do cliente entra no mesmo escopo: os filhos vivos caem e a cadeia não abre
+    consulta nova (levanta RequestDisconnected). Sem `request`, o comportamento é exatamente o de antes.
 
     O wait_for sozinho abandona viva a thread de asyncio.to_thread, e com ela a cadeia inteira de curl que
     ela ainda roda: no fetch_car_live_resilient com o SICAR travado são 10 curls de até 11 s em sequência
@@ -203,11 +231,19 @@ async def wait_for_cancelling_processes(aw: Awaitable[Any], timeout: float | Non
         task = asyncio.ensure_future(aw)
     finally:
         _SCOPES.reset(token)
+    seen: list[bool] = []
+    watcher = None if request is None else asyncio.ensure_future(_watch_disconnect(request, task, event, seen))
     try:
         return await asyncio.wait_for(task, timeout)
     except BaseException:
         event.set()
+        if seen:
+            # a tarefa foi cancelada pela vigia: o erro que sai é a desistência, não um cancelamento anônimo
+            raise RequestDisconnected("client_disconnected") from None
         raise
+    finally:
+        if watcher is not None and not watcher.done():
+            watcher.cancel()
 
 
 def install_shutdown_cleanup(app: Any) -> None:

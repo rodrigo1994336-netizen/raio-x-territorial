@@ -41,12 +41,21 @@ Regras
                              quick_analysis, embargos_detail, critical_minerals_v34) com curl falso travado e
                              prazo controlado: o curl do prazo some; sem fallback, nenhum outro nasce.
   cadeia_slots_relatorio     _timed do relatório (extras) e _bounded (nova tentativa) com curl travado.
+  desistencia_apos_prazo     depois do prazo estourado, o caminho de reserva abre UMA consulta nova (é o
+                             produto: o CAR sozinho ainda serve). Se o cliente desistir aí, o curl do caminho
+                             de reserva some e nenhuma consulta nova nasce — e o handler responde 499.
+                             Medido em 15/09: uvicorn NÃO cancela a tarefa de uma rota `async def` sem o
+                             parâmetro `request` quando o cliente fecha a conexão; por isso a desistência só
+                             chega à cadeia pela vigia do wait_for_cancelling_processes(request=...).
+  escopo_no_pool             ThreadPoolExecutor não copia o contexto: o sondador de camadas IDE copia por
+                             trabalho, e o curl do trabalhador cai no prazo do escopo.
   inventario_processos       todo subprocess.run/call/check_* dos módulos do servidor tem timeout; Popen só
                              no módulo de ciclo de vida; sem os.system/os.popen/fork/exec/spawn/posix_spawn/
                              getoutput/subprocess_exec/multiprocessing; lista declarada dos módulos com
-                             chamada direta (inclusive quem passa br_bridge.subprocess_runner); nenhum
-                             asyncio.wait_for puro sobre função que chega a run_managed_process (fecho
-                             transitivo por nome, não lista à mão); os pontos com escopo contados.
+                             chamada direta (inclusive quem passa br_bridge.subprocess_runner), CADA UM COM O
+                             MOTIVO de não ter sido convertido; nenhum asyncio.wait_for puro sobre função que
+                             chega a run_managed_process (fecho transitivo por nome, não lista à mão); os
+                             pontos com escopo contados.
   medicao_indisponivel       sem /proc do próprio processo, todo número do sistema é "indisponivel", nunca 0;
                              idade negativa, descendente vivo sem memória legível e entrada ilegível do /proc
                              viram "indisponivel"; sem descendentes, memória deles é null.
@@ -324,6 +333,34 @@ def gated_wait_for(pred, extra_modules=()):
         # o wait_for real começa a corrotina na hora; esperar o filho antes de começá-la seria esperar para sempre
         # (é o caso de um site revertido para asyncio.wait_for, que recebe a corrotina ainda não iniciada)
         task = asyncio.ensure_future(aw)
+        assert await await_until(pred, 15.0), "o filho não nasceu em 15 s (instrumento, não o prazo)"
+        return await real(task, 0)
+
+    fake = types.SimpleNamespace(**{k: getattr(asyncio, k) for k in dir(asyncio) if not k.startswith("__")})
+    fake.wait_for = gated
+    for module in modules:
+        module.asyncio = fake
+    try:
+        yield
+    finally:
+        for module in modules:
+            module.asyncio = asyncio
+
+
+@contextlib.contextmanager
+def gated_first_wait_for(pred, extra_modules=()):
+    """Como o gated_wait_for, mas só o PRIMEIRO asyncio.wait_for é estourado (prazo 0, depois de pred()).
+    Os seguintes correm com o prazo de verdade: é assim que o caminho de reserva chega a nascer e pode ser
+    observado. Sem isso o segundo prazo estouraria na hora (pred já é verdade) e o gate mediria outra coisa."""
+    modules = (epl(), *extra_modules)
+    real = asyncio.wait_for
+    fired: list[bool] = []
+
+    async def gated(aw, timeout):
+        task = asyncio.ensure_future(aw)
+        if fired:
+            return await real(task, timeout)
+        fired.append(True)
         assert await await_until(pred, 15.0), "o filho não nasceu em 15 s (instrumento, não o prazo)"
         return await real(task, 0)
 
@@ -714,11 +751,12 @@ def r_cadeia_prazo():
             pid = first["pid"]
             took = await asyncio.to_thread(assert_gone, pid, f"{name}: curl do prazo")
         if fallback:
-            # o fallback consulta de novo, fora do prazo (fora do escopo desta regra): encerra e limpa
+            # o caminho de reserva consulta de novo (o CAR sozinho ainda serve). Ele também corre dentro do
+            # escopo: cancelar a tarefa derruba o curl dele SEM o desligamento de emergência.
             task.cancel()
             with contextlib.suppress(BaseException):
                 await task
-            mod.terminate_active_processes()
+            await assert_none_left(before, f"{name}: curl do caminho de reserva depois do cancelamento")
             return f"{name} {took}s"
         try:
             outcome = await asyncio.wait_for(task, 10)
@@ -763,28 +801,146 @@ def r_slots():
     return "slot estourado não deixa curl vivo (extras e nova tentativa)"
 
 
+DESISTENCIA_HANDLERS = (
+    ("report_v9_patch", "quick_analysis"),
+    ("portal_property_tabs", "embargos_detail"),
+)
+
+
+@regra("desistencia_apos_prazo", linux=True)
+def r_desistencia():
+    """Prazo estourado + cliente desistiu: nenhum filho continua vivo e nenhuma consulta nova é aberta.
+
+    O curl falso trava. O primeiro prazo é estourado de propósito (relógio controlado) com o curl vivo; o
+    caminho de reserva nasce e abre o curl dele; aí o cliente desiste. Daí em diante nada pode sobrar."""
+    import importlib
+    mod = epl()
+    import car_resilient  # noqa: F401 - instala a busca resiliente do SICAR em deploy_app/report_api
+    notes: list[str] = []
+
+    async def scenario(module, name: str) -> str:
+        try:
+            return await _scenario(module, name)
+        except BaseException:
+            # o mutante deixa thread viva com curl travado; parar tudo aqui DENTRO do laco evita que o
+            # asyncio.run fique 300 s juntando a thread na saida (e o gate travar em vez de reprovar)
+            await asyncio.to_thread(mod.terminate_active_processes)
+            raise
+
+    async def _scenario(module, name: str) -> str:
+        handler = getattr(module, name)
+        before = children_now()
+        first: dict[str, int] = {}
+        # Nascimentos de curl contados no Popen: "abriu consulta nova" é um evento, não um pid adivinhado
+        # (o pid de um curl que morreu pode ser reaproveitado, e a cadeia tem mais de um curl).
+        births: list[float] = []
+
+        def counting(real):
+            def popen(*a, **kw):
+                args = a[0] if a else kw.get("args") or []
+                if args and "curl" in str(args[0]):
+                    births.append(time.monotonic())
+                return real(*a, **kw)
+            return popen
+
+        def first_curl() -> bool:
+            if "pid" not in first:
+                pid = born_registered(before, "sleep")
+                if pid is None:
+                    return False
+                first["pid"] = pid
+            return True
+
+        request = Request()
+        with patched_popen(counting), gated_first_wait_for(first_curl, extra_modules=(module,)):
+            task = asyncio.create_task(handler(CAR, request=request))
+            if not await await_until(lambda: "pid" in first or task.done(), 20.0):
+                fail(f"{name}: o curl falso não nasceu em 20 s", children_now() - before)
+            if "pid" not in first:
+                fail(f"{name}: terminou sem consultar o SICAR")
+            await asyncio.to_thread(assert_gone, first["pid"], f"{name}: curl do prazo")
+            marca = len(births)
+            # o caminho de reserva TEM de abrir consulta nova e ter filho vivo: sem isso o cliente receberia
+            # menos do que hoje, e o cenário da desistência não estaria sendo medido
+            if not await await_until(lambda: len(births) > marca and bool(children_now() - before), 25.0):
+                fail(f"{name}: o caminho de reserva não consultou o SICAR depois do prazo "
+                     f"(nascimentos={len(births)})", children_now() - before)
+            request.disconnected = True          # o cliente desiste AGORA
+            na_desistencia = len(births)
+            t0 = time.monotonic()
+            await assert_none_left(before, f"{name}: curl do caminho de reserva")
+            took = round(time.monotonic() - t0, 3)
+            try:
+                outcome = await asyncio.wait_for(asyncio.shield(task), 15)
+            except BaseException as exc:  # noqa: BLE001 - CancelledError tambem e resposta errada, e nao e Exception
+                outcome = exc
+            await asyncio.sleep(1.0)
+            novas = len(births) - na_desistencia
+            if novas:
+                fail(f"{name}: {novas} consulta(s) nova(s) abertas depois da desistência", children_now() - before)
+        if getattr(outcome, "status_code", None) != 499:
+            fail(f"{name}: resposta inesperada depois da desistência: {outcome!r}"[:300], children_now() - before)
+        await assert_none_left(before, f"{name}: filho vivo depois da desistência")
+        return f"{name} {took}s ({len(births)} curls no total)"
+
+    with fake_curl():
+        for module_name, name in DESISTENCIA_HANDLERS:
+            module = importlib.import_module(module_name)
+            try:
+                notes.append(asyncio.run(scenario(module, name)))
+            finally:
+                mod._SERVER_STOPPING.clear()
+            assert_no_children(f"depois de {name}")
+    return "prazo + desistência não deixam filho nem abrem consulta nova: " + ", ".join(notes)
+
+
+@regra("escopo_no_pool", linux=True)
+def r_escopo_pool():
+    """ThreadPoolExecutor.submit NÃO copia o contexto: sem cópia por trabalho o curl do trabalhador nasce fora
+    do escopo e sobrevive ao prazo. Exercita o sondador real das camadas IDE."""
+    import ide_layer_probe
+    mod = epl()
+    bbox = [-44.5, -18.8, -44.4, -18.7]        # dentro de Minas: o sondador só consulta quando cruza MG
+    geom = {"type": "Polygon", "coordinates": [[[bbox[0], bbox[1]], [bbox[2], bbox[1]],
+                                                [bbox[2], bbox[3]], [bbox[0], bbox[3]], [bbox[0], bbox[1]]]]}
+
+    async def scenario():
+        before = children_now()
+        with gated_wait_for(lambda: new_child(before, "sleep") is not None):
+            with contextlib.suppress(Exception):
+                await mod.wait_for_cancelling_processes(
+                    asyncio.to_thread(ide_layer_probe.probe_benchmark, geom, bbox), 30)
+        await assert_none_left(before, "sondador IDE: curl do trabalhador do pool")
+        return "nenhum curl do pool sobra"
+
+    with fake_curl():
+        detail = asyncio.run(scenario())
+    return detail
+
+
 # ------------------------------------------------------------------ inventário estático
+# Módulo que ainda cria processo fora do run_managed_process -> MOTIVO de não ter sido convertido.
+# Os quinze que chegavam a uma requisição de cliente foram convertidos em 15/09 e saíram desta lista.
+# Um motivo vazio reprova: "sobrou" não é motivo.
 DIRECT_DECLARED = {
-    # módulo: processo criado fora do run_managed_process (subprocess.run direto ou br_bridge.subprocess_runner
-    # passado como executor), todos com timeout — sobra limitada pelo timeout, não cancelável
-    "aerodromes_anac.py", "anm_fast_v29.py", "anm_resilient.py", "br_bridge.py", "climate_nasa.py",
-    "climate_normal_f2.py", "ide_catalog.py", "ide_layer_probe.py", "incra_snci_public_v42.py",
-    "jwt_runtime_bootstrap.py", "pivots_ana.py", "postgres_runtime_bootstrap.py", "prodes_image_platform_f2.py",
-    "rasterio_runtime_bootstrap.py", "redis_runtime_bootstrap.py", "sicar_detail_sources.py",
-    "sicar_detail_sources_v2.py", "soilgrids_wcs.py", "terrain_srtm.py", "water_mg.py",
+    "br_bridge.py": "subprocess_runner é o executor legado que a ponte ainda oferece a quem chama de fora do "
+                    "servidor (conferência do guia no Cloud Shell); nenhum módulo do servidor o passa mais",
+    "jwt_runtime_bootstrap.py": "pip no arranque do processo, antes de existir requisição; nada a cancelar",
+    "postgres_runtime_bootstrap.py": "pip no arranque do processo, antes de existir requisição; nada a cancelar",
+    "rasterio_runtime_bootstrap.py": "pip no arranque do processo, antes de existir requisição; nada a cancelar",
+    "redis_runtime_bootstrap.py": "pip no arranque do processo, antes de existir requisição; nada a cancelar",
 }
 # Quem chega a um processo gerenciado é calculado (fecho transitivo por nome a partir destas sementes), não
 # mantido à mão: por nome é conservador (duas funções com o mesmo nome contam juntas).
 PROCESS_SEEDS = {"run_managed_process"}
-# Chamadas "await wait_for_cancelling_processes(" por arquivo. A do ANM (portal_mining_resilience_v34, prazo de
-# 10 s do query_anm_curl_exact) está contada, mas SEM EFEITO até a conversão: aquela função chama
-# subprocess.run direto, fora do alcance do escopo (limitada só pelo timeout de 60 s dela).
+# Chamadas "await wait_for_cancelling_processes(" por arquivo. Desde a conversão do ANM (15/09) todas têm
+# efeito: não há mais função de fonte criando processo fora do alcance do escopo.
 SCOPED_SITES = {
-    "portal_mining_resilience_v34.py": 2, "report_quick_v22.py": 1, "report_v9_patch.py": 1,
-    "portal_property_tabs.py": 1, "core_retry_fast_v29.py": 1, "report_extras_perf_v30.py": 1,
+    "portal_mining_resilience_v34.py": 2, "report_quick_v22.py": 1, "report_v9_patch.py": 2,
+    "portal_property_tabs.py": 2, "core_retry_fast_v29.py": 1, "report_extras_perf_v30.py": 1,
     "portal_advanced_name_v40.py": 1,
 }
-SCOPED_WITHOUT_EFFECT = 1
+SCOPED_WITHOUT_EFFECT = 0
 DIRECT_PROCESS_CALLS = {"os.system", "os.popen", "os.fork", "os.forkpty", "os.posix_spawn", "os.posix_spawnp",
                         "pty.fork", "pty.spawn", "subprocess.getoutput", "subprocess.getstatusoutput"}
 DIRECT_PROCESS_PREFIXES = ("os.exec", "os.spawn", "asyncio.create_subprocess")
@@ -888,13 +1044,17 @@ def r_inventario():
         got = text.count("await wait_for_cancelling_processes(")
         if got != count:
             problems.append(f"{name}: {got} chamada(s) de wait_for_cancelling_processes, esperado {count}")
-    if direct != DIRECT_DECLARED:
-        problems.append(f"lista de chamadas diretas mudou: novas {sorted(direct - DIRECT_DECLARED)} sumidas {sorted(DIRECT_DECLARED - direct)}")
+    if direct != set(DIRECT_DECLARED):
+        problems.append(f"lista de chamadas diretas mudou: novas {sorted(direct - set(DIRECT_DECLARED))} "
+                        f"sumidas {sorted(set(DIRECT_DECLARED) - direct)}")
+    sem_motivo = sorted(name for name, why in DIRECT_DECLARED.items() if len(str(why).strip()) < 20)
+    if sem_motivo:
+        problems.append(f"módulo com processo direto sem motivo declarado: {sem_motivo}")
     assert not problems, "inventário: " + " | ".join(problems)
     sites = sum(SCOPED_SITES.values())
-    return (f"{len(direct)} módulos com processo direto limitado por timeout; {len(reaching)} funções chegam a processo "
-            f"gerenciado; {sites} prazos com escopo ({sites - SCOPED_WITHOUT_EFFECT} com efeito, "
-            f"{SCOPED_WITHOUT_EFFECT} sem efeito até a conversão do ANM)")
+    return (f"{len(direct)} módulos com processo direto limitado por timeout, todos com motivo declarado; "
+            f"{len(reaching)} funções chegam a processo gerenciado; {sites} prazos com escopo, "
+            f"{sites - SCOPED_WITHOUT_EFFECT} com efeito")
 
 
 # ------------------------------------------------------------------ medição
@@ -1293,14 +1453,14 @@ MUTATIONS = [
      "            killed.append(pid)", "voltou com o filho"),
     ("cadeia_car_desconecta", "deploy_app.py", "runner=run_managed_process)", "runner=br_bridge.subprocess_runner)", "ainda vivo"),
     ("cadeia_car_prazo", "report_quick_v22.py",
-     "car=await wait_for_cancelling_processes(asyncio.to_thread(fetch_car_live_resilient,code),6)",
+     "car=await wait_for_cancelling_processes(asyncio.to_thread(fetch_car_live_resilient,code),6,request=request)",
      "car=await asyncio.wait_for(asyncio.to_thread(fetch_car_live_resilient,code),timeout=6)", "curl do prazo: filho"),
     ("cadeia_car_prazo", "portal_property_tabs.py",
-     "try:result=await wait_for_cancelling_processes(report_base.analyze_car(code),18)",
+     "try:result=await wait_for_cancelling_processes(report_base.analyze_car(code),18,request=request)",
      "try:result=await asyncio.wait_for(report_base.analyze_car(code),timeout=18)", "curl do prazo: filho"),
     ("cadeia_car_prazo", "report_quick_v22.py",
-     "car=await wait_for_cancelling_processes(asyncio.to_thread(fetch_car_live_resilient,code),6)",
-     "job=asyncio.ensure_future(asyncio.to_thread(fetch_car_live_resilient,code));car=await wait_for_cancelling_processes(job,6)",
+     "car=await wait_for_cancelling_processes(asyncio.to_thread(fetch_car_live_resilient,code),6,request=request)",
+     "job=asyncio.ensure_future(asyncio.to_thread(fetch_car_live_resilient,code));car=await wait_for_cancelling_processes(job,6,request=request)",
      "passe a corrotina"),
     ("cadeia_slots_relatorio", "report_extras_perf_v30.py",
      "value=await wait_for_cancelling_processes(coro,timeout_s)", "value=await asyncio.wait_for(coro,timeout=timeout_s)",
@@ -1327,9 +1487,32 @@ MUTATIONS = [
      "            app.state.rx_proc_stats_task = asyncio.create_task(_periodic(interval))", "            pass", "periodico"),
     ("servicos_ligados", "report_api.py", "_proc_stats.install(app)\n", "\n", "medição não instalada"),
     ("inventario_processos", "report_quick_v22.py",
-     "car=await wait_for_cancelling_processes(asyncio.to_thread(fetch_car_live_resilient,code),6)",
+     "car=await wait_for_cancelling_processes(asyncio.to_thread(fetch_car_live_resilient,code),6,request=request)",
      "car=await asyncio.wait_for(asyncio.to_thread(fetch_car_live_resilient,code),timeout=6)", "wait_for puro"),
-    ("inventario_processos", "anm_fast_v29.py", "],capture_output=True,timeout=9)", "],capture_output=True)", "sem timeout"),
+    ("inventario_processos", "redis_runtime_bootstrap.py", "check=True,timeout=120,stdout=subprocess.DEVNULL",
+     "check=True,stdout=subprocess.DEVNULL", "sem timeout"),
+    ("inventario_processos", "sicar_detail_sources_v2.py", "runner=run_managed_process)", "runner=br_bridge.subprocess_runner)",
+     "lista de chamadas diretas mudou"),
+    ("inventario_processos", "scripts/m1_processos_gate.py",
+     '"jwt_runtime_bootstrap.py": "pip no arranque do processo, antes de existir requisi\u00e7\u00e3o; nada a cancelar"',
+     '"jwt_runtime_bootstrap.py": ""', "sem motivo declarado"),
+    # ---- prazo estourado + cliente desistiu
+    ("desistencia_apos_prazo", "report_v9_patch.py",
+     "car=await wait_for_cancelling_processes(asyncio.to_thread(base.fetch_car_live,code),_CAR_FALLBACK_S,request=request)",
+     "car=await asyncio.to_thread(base.fetch_car_live,code)", "caminho de reserva"),
+    ("desistencia_apos_prazo", "portal_property_tabs.py",
+     "        car=await wait_for_cancelling_processes(asyncio.to_thread(fetch_car_live_resilient,code.upper()),\n"
+     "                                                _CAR_S if budget is None else budget,request=request)\n",
+     "        car=await asyncio.to_thread(fetch_car_live_resilient,code.upper())\n", "caminho de reserva"),
+    ("desistencia_apos_prazo", "external_process_lifecycle.py",
+     "    watcher = None if request is None else asyncio.ensure_future(_watch_disconnect(request, task, event, seen))",
+     "    watcher = None", "caminho de reserva"),
+    ("desistencia_apos_prazo", "external_process_lifecycle.py",
+     "                seen.append(True)\n                event.set()", "                event.set()",
+     "resposta inesperada depois da desist"),
+    ("escopo_no_pool", "ide_layer_probe.py",
+     "ex.submit(contextvars.copy_context().run,query_layer,layer,bbox,car_geometry)",
+     "ex.submit(query_layer,layer,bbox,car_geometry)", "curl do trabalhador do pool"),
     ("ci_roda_o_gate", ".github/workflows/quality-gate.yml", "python scripts/m1_processos_gate.py --exigir-linux",
      "python scripts/m1_processos_gate.py", "não exige Linux"),
 ]

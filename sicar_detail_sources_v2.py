@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-import subprocess
+from external_process_lifecycle import run_managed_process
 import time
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -32,7 +32,7 @@ def _curl(url:str,expect_json=True):
         p=br_bridge.run_curl([
             'curl','-k','-sS','--fail','--retry','0',
             '--connect-timeout','6','--max-time','13','-A','Raio-X-Territorial/SICAR-v41',url
-        ],timeout_seconds=17,runner=br_bridge.subprocess_runner)
+        ],timeout_seconds=17,runner=run_managed_process)
     except Exception as e:return {'ok':False,'detail':f'{type(e).__name__}:{str(e)[:220]}'}
     if p.returncode:return {'ok':False,'detail':p.stderr.decode('utf-8','ignore')[:260]}
     raw=p.stdout
