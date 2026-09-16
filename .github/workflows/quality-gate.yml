@@ -256,7 +256,8 @@ jobs:
           assert "x?.type==='cafir'" in inverse and 'CAR não vinculado automaticamente' in inverse
           assert "'panel_name_eligible':False" in inverse_runtime and "'car_code':None" in inverse_runtime
           assert 'REFERENCE_ONLY_CENTROID' in legacy_name and 'd.property.name=x.name' not in legacy_name
-          assert 'Fontes pesadas não foram disparadas' in html
+          # T2: o resumo passou a dizer a mesma coisa sem anunciar maquinaria ("fontes pesadas", "disparadas").
+          assert 'As consultas mais demoradas só começam quando você pedir a análise completa.' in html
           assert 'Imóvel rural —' in html
           assert 'z<11' in html
           assert all(uf in html for uf in ('AC','AM','BA','DF','GO','MG','MT','PA','PR','RS','SC','SP','TO'))
