@@ -9,8 +9,12 @@ from external_process_lifecycle import RequestDisconnected, wait_for_cancelling_
 from incra_snci_public_v42 import viewport, capabilities, background_probe
 
 app=portal_v8.app
-# Tetos declarados pelo modulo que implementa cada consulta (prazo de rede + folga do processo + carencia de
-# parada). Mais folga para a leitura do XML/GeoJSON, que corre na mesma thread depois que o curl volta.
+# Tetos declarados pelo modulo que implementa cada consulta (prazo de rede + folga do processo + carencia
+# de parada), mais a folga abaixo.
+# Folga ARBITRADA (não medida) para a leitura do XML/GeoJSON, que corre na mesma thread depois que o
+# curl volta — trabalho de CPU, sem rede, sobre no máximo 80 feições (maxFeatures). Medido em 16/09 nesta
+# máquina: a rota inteira responde em 3-4 ms com o cache quente e a fonte devolvendo erro; o caminho com
+# XML de verdade não foi exercitado porque o WFS do INCRA vem com XML inválido hoje.
 _PARSE_S=6.0
 _STATUS_S=round(snci.CAPABILITIES_WORST_CASE_S+_PARSE_S,1)
 _VIEWPORT_S=round(snci.VIEWPORT_WORST_CASE_S+_PARSE_S,1)

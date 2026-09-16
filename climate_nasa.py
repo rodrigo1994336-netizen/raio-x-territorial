@@ -14,7 +14,10 @@ CLIM_BASE='https://power.larc.nasa.gov/api/temporal/climatology/point'
 PARAMS=('PRECTOTCORR','T2M','T2M_MAX','T2M_MIN','RH2M','ALLSKY_SFC_SW_DWN')
 
 
-# Folga entre o --max-time do curl e o prazo do processo gerenciado.
+# Folga ARBITRADA (não medida) entre o --max-time do curl e o prazo do processo gerenciado. Cobre o
+# nascimento do filho e a saída dele depois do próprio --max-time; aqui é maior que a do INCRA porque o
+# curl da NASA carrega --retry 2 --retry-delay 1, que estica a saída. Folga grande só adia o 504; folga
+# pequena mata um curl que ia responder.
 CURL_SLACK_S=10
 DAILY_MAX_TIME_S=65
 CLIMATOLOGY_MAX_TIME_S=60

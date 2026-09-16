@@ -14,8 +14,12 @@ from critical_minerals import MINERAL_TERMS, _capabilities, _classify_text
 from deploy_app import _curl
 from external_process_lifecycle import RequestDisconnected, wait_for_cancelling_processes
 
-# Teto desta camada: uma chamada do curl padrao do deploy_app, mais folga para a simplificacao das
-# geometrias e a classificacao dos processos, que correm na mesma thread depois que o curl volta.
+# Teto desta camada: uma chamada do curl padrao do deploy_app (prazo declarado por ele), mais a folga
+# abaixo.
+# Folga ARBITRADA (não medida) para a simplificação das geometrias e a classificação dos processos, que
+# correm na mesma thread depois que o curl volta: até 300 feições da ANM, trabalho de CPU sem rede.
+# Medido em 16/09 nesta máquina, num bbox de 1 grau com limit=300: 0,64 s a rota inteira (rede inclusa)
+# contra os 65,8 s do teto. É a folga que domina o teto, e é assim de propósito: grande só adia o 504.
 _GEOMETRY_S=20.0
 _ANM_VIEWPORT_S=round(deploy_app.CURL_WORST_CASE_S+_GEOMETRY_S,1)
 

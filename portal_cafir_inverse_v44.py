@@ -10,8 +10,12 @@ import cafir_name_search_v44 as cafir
 from external_process_lifecycle import RequestDisconnected, wait_for_cancelling_processes
 
 app=portal_v8.app
-# Teto declarado pelo modulo que implementa a consulta, mais folga para a leitura das geometrias, que corre
-# na mesma thread depois que o curl volta.
+# Teto declarado pelo modulo que implementa a consulta (cafir_name_search_v44), mais a folga abaixo.
+# Folga ARBITRADA (não medida) para a leitura das geometrias dos dois espelhos SIGEF, que corre na mesma
+# thread depois que o curl volta. Medido em 16/09 nesta máquina, com código INCRA de verdade tirado da
+# própria busca por nome (A/B no mesmo processo e no mesmo minuto, 6 sem escopo e 6 com escopo, todas
+# ok:true): mediana 1540 ms sem escopo contra 1641 ms com escopo, pior caso 2,1 s — contra os 106,6 s do
+# teto. O teto não corta resposta que hoje chega.
 _GEOMETRY_S=15.0
 _LOCATE_S=round(cafir.LOCATE_WORST_CASE_S+_GEOMETRY_S,1)
 

@@ -58,6 +58,9 @@ RELEASE = "V8_OPERATIONAL_ZERO_COST"
 INTERNAL = ("PREPARADO — OFF", "BACKEND DE ALERTAS INDISPONÍVEL", "RISCO NÃO CLASSIFICADO", "fontes responderam",
             "PENDENTE DE IMPLEMENTAÇÃO", "integra o contador")
 FAILURES: list[str] = []
+# 1B.9: as duas âncoras que o portal_mining_resilience_v34 aplica, escritas aqui como o remendo as deixa.
+MINING_KPI_SG = "['Serviço Geológico',d.state==='unavailable'?'CONSULTA PENDENTE'"
+MINING_KPI_TR = "['Terras raras',d.state==='unavailable'?'CONSULTA PENDENTE'"
 
 
 def check(ok: bool, label: str) -> bool:
@@ -377,6 +380,33 @@ def judge_harness(r: dict) -> list[str]:
     return p
 
 
+def rule_mining_anchors(html: str) -> list[str]:
+    """1B.9 os dois KPI da mineração: remendo aplicado, e o bloco que os desenha declarado desligado.
+
+    As duas âncoras do portal_mining_resilience_v34 vivem dentro de mineracao(), que só é chamada por
+    load() <- activate() <- os botões que o install() das abas antigas cria — e o portal_experience_v43
+    desliga o install(). Nenhum cliente vê estes dois KPI hoje: por isso aquele módulo deixou de DERRUBAR
+    O ARRANQUE quando a âncora some (um texto que ninguém vê apagava o portal inteiro). Quem cobra é este
+    portão, no CI, onde dá para consertar antes de publicar.
+
+    A segunda metade da regra é o que sustenta a primeira: se o instalador das abas voltar, o bloco deixa
+    de ser código morto e a decisão (levar mineração e terras raras para a leitura completa F1B, com as
+    âncoras junto) tem de ser tomada de novo — então o portão reprova até alguém decidir.
+    """
+    problems: list[str] = []
+    for nome, marca in (("Serviço Geológico", MINING_KPI_SG), ("Terras raras", MINING_KPI_TR)):
+        if marca not in html:
+            problems.append(f"âncora da mineração perdida ({nome}): o remendo T2 não casou e o KPI volta a mostrar "
+                            "estado técnico ao cliente no dia em que as abas voltarem")
+    if "window.rxLegacyTabsDisabledV43=true" not in html:
+        problems.append("instalador das abas antigas sem o desligamento do V43: as duas âncoras deixaram de ser "
+                        "código morto e a trava de arranque precisa voltar ao lugar certo")
+    if "setInterval(install,500)" in html:
+        problems.append("instalador das abas antigas de volta (setInterval(install,500)): o bloco #rxPropertyTabs "
+                        "passa a chegar ao cliente e a decisão sobre mineração/terras raras tem de ser refeita")
+    return problems
+
+
 def scripts_for_harness(html: str) -> tuple[str, str, str, str]:
     return (enclosing_script(html, "window.rxFullReadingF1b={"), enclosing_script(html, "if(window.rxPanelSourcesF2)return;"),
             enclosing_script(html, "window.rxV47IntegrityInstalled=true"), enclosing_script(html, "const MTE_ID='mte_slave_labor'"))
@@ -396,6 +426,7 @@ def main() -> int:
         "1B.2 no internal wording in panel scripts": rule_no_internal_text,
         "1B.3 one request per source (static)": rule_dedup_static,
         "1B.3 action bar on screen, 44 px": rule_actions_on_screen,
+        "1B.9 mining anchors applied, legacy tabs off": rule_mining_anchors,
     }
     for label, rule in rules.items():
         try:
@@ -430,6 +461,10 @@ def main() -> int:
         ("1B.3 not sticky", rule_actions_on_screen, mutate(html, ".rx45-actions{position:sticky;bottom:0;", ".rx45-actions{", "sticky")),
         ("1B.3 100vh cap", rule_actions_on_screen, mutate(html, "max-height:calc(100% - 28px)!important", "max-height:calc(100vh - 28px)!important", "vh")),
         ("1B.3 small PDF link", rule_actions_on_screen, mutate(html, '<button class="rx45-pdf" id="rx45Pdf" type="button">GERAR PDF</button>', '<button class="rx45-pdf-link" id="rx45Pdf" type="button">gerar PDF</button>', "pdf")),
+        ("1B.9 mining anchor lost", rule_mining_anchors, mutate(html, MINING_KPI_SG, "['Serviço Geológico',fmt((s.hit_layers||[]).length,0)", "mining_anchor")),
+        ("1B.9 legacy tabs back", rule_mining_anchors,
+         mutate(html, "window.rxLegacyTabsDisabledV43=true;\n   window.showProperty",
+                "setInterval(install,500);\n   window.showProperty", "legacy_tabs")),
     ]
     # Each mutant must fail for ITS reason (the expected problem text), not for any problem at all.
     reason = {
@@ -457,6 +492,8 @@ def main() -> int:
         "engine ok:false waited for": "ok:false treated as a run",
         "audit lists unasked sources": "audit lists sources nobody asked",
         "audit ignores the full analysis": "audit contradicts the full analysis",
+        "1B.9 mining anchor lost": "âncora da mineração perdida",
+        "1B.9 legacy tabs back": "instalador das abas antigas de volta",
     }
     for label, rule, mutant in html_mutants:
         got = rule(mutant)

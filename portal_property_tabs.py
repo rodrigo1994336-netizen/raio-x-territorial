@@ -27,16 +27,36 @@ def _desistiu():return HTTPException(status_code=499,detail='Consulta encerrada:
 # Menor que isso cortaria resposta que hoje chega; o ganho vem do cancelamento, não do corte.
 _CAR_S=car_resilient.WORST_CASE_SECONDS
 # Tetos das duas consultas do clima, declarados pelo modulo que as implementa (--max-time + folga do
-# processo + carencia de parada). Mais folga para a leitura da serie, que corre na mesma thread depois que
-# o curl volta. Menor cortaria resposta que hoje chega.
+# processo + carencia de parada), mais a folga abaixo. Menor cortaria resposta que hoje chega.
+# Folga ARBITRADA (não medida) para a leitura da série, que corre na mesma thread depois que o curl volta:
+# até 365 dias de seis parâmetros da NASA POWER, trabalho de CPU sem rede. Medido em 16/09 nesta máquina,
+# no CAR de Curvelo com days=30: 1,48 s a rota inteira (rede inclusa) contra os 83,8 s do teto.
 _SERIES_S=8.0
 _CLIMA_DIARIO_S=round(climate_nasa.DAILY_WORST_CASE_S+_SERIES_S,1)
 _CLIMA_NORMAL_S=round(climate_nasa.CLIMATOLOGY_WORST_CASE_S+_SERIES_S,1)
 
 
+# Quantas vezes cada tipo de falha virou "consulta pendente" na tela, por tipo. Mesma forma do
+# external_process_lifecycle.WATCH_FAILURES: so o nome da classe, nada do cliente e nada do imovel.
+PENDENTE_FALHAS:dict[str,int]={}
+
+
 def _pendente(valor,fonte:str):
-    """Fonte que nao respondeu vira consulta pendente: nunca verde, nunca erro tecnico na tela."""
+    """Fonte que nao respondeu vira consulta pendente: nunca verde, nunca erro tecnico na tela.
+
+    Esconder a falha do CLIENTE e a regra do dono; esconder de QUEM OPERA e como um defeito permanente
+    passa por lentidao da NASA. Sem esta contagem, um TypeError dentro do query_climate_nasa, um erro de
+    leitura ou uma regressao de codigo viravam a mesma "consulta pendente" discreta, para sempre, sem
+    rastro nenhum no servidor — antes do escopo uma excecao dessas subia pelo gather e aparecia como 500.
+    O tipo fica no log; a tela nao muda.
+
+    CancelledError nao e fonte pendente, e o proprio cancelamento: sobe, para nao ser engolido aqui."""
+    if isinstance(valor,asyncio.CancelledError):
+        raise valor
     if isinstance(valor,BaseException):
+        nome=type(valor).__name__
+        PENDENTE_FALHAS[nome]=PENDENTE_FALHAS.get(nome,0)+1
+        print(f'RX_CONSULTA_PENDENTE={fonte}:{nome}:{PENDENTE_FALHAS[nome]}',flush=True)
         return {'ok':False,'source':fonte,'detail':'consulta_pendente'}
     return valor
 

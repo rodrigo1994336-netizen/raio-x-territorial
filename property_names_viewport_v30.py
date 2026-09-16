@@ -14,13 +14,18 @@ import deploy_app
 import property_identity_runtime
 import public_property_name_seed_v43 as seed
 from deploy_app import SIGEF_MIRROR, _curl
+import external_process_lifecycle as epl
 from external_process_lifecycle import RequestDisconnected, wait_for_cancelling_processes
 from property_identity_runtime import _clean_name, _osm_named_farms_bbox
 
 app = portal_v8.app
 # Teto desta consulta: o espelho SIGEF (uma chamada do curl padrao do deploy_app) e, quando o SIGEF nao
-# devolve nome nenhum, o OSM ao vivo (os dois espelhos em sequencia). Mais folga para a leitura das
-# geometrias, que corre na mesma thread. Derivado dos modulos que implementam cada trecho.
+# devolve nome nenhum, o OSM ao vivo (os dois espelhos em sequencia) — os dois derivados dos modulos que
+# os implementam —, mais a folga abaixo.
+# Folga ARBITRADA (não medida) para a leitura das geometrias, que corre na mesma thread depois que o curl
+# volta: até 220 feições do SIGEF pelo shapely, trabalho de CPU sem rede. Medido em 16/09 nesta máquina,
+# no bbox de Curvelo: 5,1 s a rota inteira (rede inclusa) contra os 79,8 s do teto. Folga grande só adia
+# o 504; folga pequena corta nome que hoje chega.
 _GEOMETRY_S = 20.0
 _NAMES_S = round(deploy_app.CURL_WORST_CASE_S + property_identity_runtime.OSM_WORST_CASE_S + _GEOMETRY_S, 1)
 TTL_SECONDS = 900
@@ -38,7 +43,14 @@ def _query_names_sync(west: float, south: float, east: float, north: float, limi
         out=dict(cached[1]);out['coverage']=dict(out.get('coverage') or {});out['cached']=True;return out
     env=','.join(str(float(x)) for x in (west,south,east,north))
     params={'f':'geojson','where':'1=1','geometry':env,'geometryType':'esriGeometryEnvelope','inSR':'4326','spatialRel':'esriSpatialRelIntersects','outFields':'parcela_co,codigo_imo,nome_area,registro_m,registro_d,municipio_,uf_id,status,situacao_i','returnGeometry':'true','outSR':'4326','resultRecordCount':str(min(220,max(cap*3,cap)))}
-    raw=_curl(SIGEF_MIRROR+'?'+urlencode(params),True);sigef_available=bool(raw.get('ok'));data=(raw.get('json') or {}) if sigef_available else {};features=data.get('features') or []
+    raw=_curl(SIGEF_MIRROR+'?'+urlencode(params),True)
+    # Tentativa cancelada não é resposta. Sem esta saída, a thread abandonada seguia sem o SIGEF, montava a
+    # resposta e GRAVAVA no cache: o cliente seguinte recebia 'consultei e não há nome nenhum nesta área'
+    # por 15 minutos, sobre uma fonte que ninguém perguntou (regra 3 do dono, 'zero não é ausência').
+    if raw.get('cancelled'):
+        return {'ok':False,'items':[],'count':0,'cancelled':True,'detail':'request_cancelled',
+                'source':'SIGEF + OpenStreetMap','coverage':{'elapsed_ms':round((time.monotonic()-started)*1000,1)}}
+    sigef_available=bool(raw.get('ok'));data=(raw.get('json') or {}) if sigef_available else {};features=data.get('features') or []
     items=[];seen=set();valid_name_count=0;named_geometry_count=0;duplicate_count=0;sigef_reference_count=0
     for feature in features:
         props=feature.get('properties') or {};name=_clean_name(props.get('nome_area'));geom=feature.get('geometry')
@@ -123,10 +135,25 @@ def _query_names_sync(west: float, south: float, east: float, north: float, limi
         'reference_names_returned':reference_count,
         'deduplicated':duplicate_count,'names_returned':len(items),'limit':cap,
         'elapsed_ms':round((time.monotonic()-started)*1000,1),
+        # source_available dizia sim com o OSM sozinho e mascarava a ausência do SIGEF: ficava 'consultei'
+        # sobre quem não foi consultado. Agora a fonte principal responde por si, e quem não respondeu é
+        # nomeado em pending_sources.
+        'sigef_available':sigef_available,
         'source_available':bool(sigef_available or seed_added or osm.get('ok'))
     }
+    pending=[] if sigef_available else ['SIGEF/INCRA — espelho público']
+    if not items and not osm.get('ok') and str(osm.get('detail') or '')!='not_needed':
+        pending.append('OpenStreetMap ao vivo')
+    coverage['pending_sources']=pending
     if not sigef_available and not seed_added and not osm.get('ok'):
         return {'ok':False,'items':[],'count':0,'source':'SIGEF + OpenStreetMap','detail':raw.get('detail') or raw.get('preview') or osm.get('detail') or 'fontes_indisponiveis','coverage':coverage}
+    # ok:true significa "as fontes desta área responderam". Com o SIGEF fora, o que chega é o que as outras
+    # trouxeram — nunca a área inteira: entrega o que veio, com a pendência declarada, e NUNCA grava no
+    # cache (uma pendência congelada por 15 minutos vira 'não há nada aqui' para todo mundo).
+    if pending:
+        return {'ok':False,'items':items,'count':len(items),'pending_sources':pending,
+                'detail':'consulta_pendente','source':'SIGEF/INCRA + OpenStreetMap — referências públicas',
+                'cached':False,'coverage':coverage}
     out={
         'ok':True,'items':items,'count':len(items),'validated_count':validated_count,'reference_count':reference_count,
         'candidate_count':len(features),'truncated':len(items)>=cap,
@@ -140,6 +167,11 @@ def _query_names_sync(west: float, south: float, east: float, north: float, limi
         },
         'coverage':coverage
     }
+    # Segunda trava, independente da primeira: o cancelamento pode ter chegado DEPOIS do curl, enquanto as
+    # geometrias eram lidas ou o OSM era tentado. A thread abandonada continua viva; o que ela escreve aqui
+    # é o que o próximo cliente lê.
+    if epl.scope_cancelled():
+        out['cancelled']=True;return out
     _CACHE[key]=(now,out)
     if len(_CACHE)>300:
         for k,_ in sorted(_CACHE.items(),key=lambda kv:kv[1][0])[:60]:_CACHE.pop(k,None)

@@ -995,10 +995,16 @@ def r_desistencia_simples():
 
 
 # Este portão importa os módulos do handler fora da ordem do arranque real (uma regra por vez, em processo
-# próprio). Módulo que remenda o HTML do portal e derruba o arranque quando a âncora não casa precisa declarar
-# de quem herdou a âncora: senão o cenário reprova por motivo alheio ao que prova E o portal fica preso a uma
-# ordem que ninguém escreveu. Medido em 16/09: portal_mining_resilience_v34 só casava as duas âncoras depois de
-# portal_property_tabs, e o controle de desistencia_sem_reserva reprovou com mining_resilience_anchor_missing.
+# próprio). Módulo que remenda o HTML do portal precisa declarar de quem herdou a âncora: senão o cenário
+# reprova por motivo alheio ao que prova E o portal fica preso a uma ordem que ninguém escreveu. Medido em
+# 16/09: portal_mining_resilience_v34 só casava as duas âncoras depois de portal_property_tabs, e o controle
+# de desistencia_sem_reserva reprovou com mining_resilience_anchor_missing.
+#
+# 16/09, segunda parte: aquele módulo deixou de DERRUBAR o arranque quando a âncora some (as duas vivem em
+# código que o portal_experience_v43 desliga; nenhum cliente as vê, e um texto que ninguém vê não pode apagar
+# o portal inteiro). Com isso, "o módulo importou" deixou de provar "a âncora casou": esta regra passa a ler
+# também o marcador _ANCHOR_MISSING= na saída. Sem essa leitura o controle por mutação deste par passaria com
+# o defeito posto de volta — e passou, até esta linha existir.
 @regra("cenario_importa_sozinho")
 def r_cenario_importa_sozinho():
     """Cada módulo que os cenários importam tem que importar sozinho, em processo limpo."""
@@ -1014,9 +1020,14 @@ def r_cenario_importa_sozinho():
     for nome in modulos:
         proc = subprocess.run([sys.executable, "-c", prefixo + f"import {nome}"], cwd=str(ROOT), env=env,
                               capture_output=True, timeout=600)
+        saida = (proc.stdout + proc.stderr).decode("utf-8", "ignore")
         if proc.returncode:
-            linhas = [x for x in (proc.stdout + proc.stderr).decode("utf-8", "ignore").splitlines() if x.strip()]
+            linhas = [x for x in saida.splitlines() if x.strip()]
             ruins.append(f"{nome} -> {linhas[-1][:200] if linhas else 'sem saída'}")
+        else:
+            perdidas = [x.strip() for x in saida.splitlines() if "_ANCHOR_MISSING=" in x]
+            if perdidas:
+                ruins.append(f"{nome} -> {perdidas[-1][:200]}")
     if ruins:
         fail("módulo do cenário não importa sozinho (o remendo depende da ordem do arranque): " + "; ".join(ruins))
     return f"{len(modulos)} módulos do cenário importam sozinhos: {', '.join(modulos)}"
@@ -1458,8 +1469,14 @@ CAR_FORA_DO_ESCOPO_DECLARADO = {
 # silêncio e só o número deixaria "sobrou" passar por explicação.
 #
 # E1 (16/09): as dez que o cliente dispara entraram no escopo (cartão V46, leitura completa F1B, PDF móvel,
-# mapa e busca). 43 -> 33. Cada prazo é derivado do módulo que implementa a fonte, nunca escrito à mão:
-#   portal_car_integrity_v47      2 x sicar_integrity_v47.QUERY_TIMEOUT_S + montagem da tabela
+# mapa e busca). 43 -> 33. Cada teto tem DUAS parcelas, e elas não têm o mesmo estatuto:
+#   (a) o prazo da FONTE, derivado do módulo que a implementa (nunca escrito à mão) — e, no caso da
+#       integridade, também a CONTAGEM de consultas, conferida pela regra integridade_conta_consultas;
+#   (b) a FOLGA para o trabalho local que corre na mesma thread depois que a rede volta (leitura de XML,
+#       geometria, montagem de tabela). Estas nove folgas são ARBITRADAS, não medidas, e cada uma diz isso no
+#       comentário do próprio módulo, com o tempo real da rota medido em 16/09 ao lado. O erro não é
+#       simétrico: folga grande só adia o 504; folga pequena corta resposta que hoje chega.
+#   portal_car_integrity_v47      2 x 5 consultas x sicar_integrity_v47.QUERY_TIMEOUT_S + montagem da tabela
 #   portal_conformity_sinaflor_v48 2 x deploy_app.CURL_WORST_CASE_S + car_resilient.WORST_CASE_SECONDS
 #   portal_property_tabs          climate_nasa.DAILY_WORST_CASE_S / CLIMATOLOGY_WORST_CASE_S
 #   property_names_viewport_v30   deploy_app.CURL_WORST_CASE_S + property_identity_runtime.OSM_WORST_CASE_S
@@ -1538,9 +1555,38 @@ OUTRAS_FORA_DO_ESCOPO_DECLARADO = {
         "embrulho assíncrono da consulta de alertas; quem chama repassa cancel_event direto ao curl, então o "
         "cancelamento chega por parâmetro. O teto fica para a fila, medido junto com o relatório",
 }
-# Total de chamadas (não de funções: uma função pode ter várias). Medido, não estimado: se mudar, o portão
-# obriga a decidir de novo.
-OUTRAS_FONTES_FORA_DO_ESCOPO = 33
+# Total de chamadas ESCRITAS COMO asyncio.to_thread (não de funções: uma função pode ter várias). Medido,
+# não estimado: se mudar, o portão obriga a decidir de novo.
+#
+# ⚠️ O QUE ESTE NÚMERO É, E O QUE ELE NÃO É (16/09). É a população de asyncio.to_thread, não a população de
+# "fontes fora do escopo". Um mesmo curl chega a um processo gerenciado por quatro caminhos, e só um deles
+# tem esta grafia. Enumerar pela propriedade começa por medir a população inteira, senão o total nunca muda,
+# ninguém é obrigado a declarar motivo, e o inventário segue dizendo "todas com motivo declarado" sobre uma
+# fatia. Os quatro caminhos e quem responde por cada um:
+#   asyncio.to_thread                      -> esta lista (copia o contexto; o escopo viaja)
+#   ThreadPoolExecutor.submit / .map /
+#   loop.run_in_executor                   -> regra copia_de_escopo_no_pool (NÃO copia o contexto: exige
+#                                             in_current_scope em cada trabalho, com controle por mutação)
+#   threading.Thread                       -> THREAD_PROPRIA_DECLARADA, logo abaixo (16/09: também enumerada,
+#                                             também com motivo por ponto e total travado)
+#   await direto de função assíncrona      -> corre no laço do handler, dentro do escopo de quem a chamou
+OUTRAS_FONTES_EM_TO_THREAD_FORA_DO_ESCOPO = 33
+# Thread própria: não copia o contexto (o escopo NÃO viaja) e quem abre uma precisa repassar cancel_event até
+# o run_managed_process. Mesma regra do inventário acima: motivo por ponto e total travado.
+THREAD_PROPRIA_DECLARADA = {
+    "car_resolver_smoke.py:<módulo>":
+        "prova de fumaça do arranque, sem cliente e sem requisição: não há desistência a ouvir, e o "
+        "desligamento já derruba os filhos pelo _SERVER_STOPPING",
+    "incra_snci_public_v42.py:background_probe":
+        "sonda de arranque do INCRA (uma chamada, 3 s depois de subir), sem cliente e sem requisição; o "
+        "desligamento já derruba o filho pelo _SERVER_STOPPING",
+    "portal_feature_smoke.py:<módulo>":
+        "prova de fumaça do arranque, sem cliente e sem requisição: mesmo caso do car_resolver_smoke",
+    "sitecustomize.py:<módulo>":
+        "carregador de módulo do arranque (importa o serviço do relatório depois do report_api), sem cliente "
+        "e sem requisição: não há desistência a ouvir",
+}
+THREADS_PROPRIAS_FORA_DO_ESCOPO = 4
 
 
 def _dentro_do_escopo(tree: ast.AST) -> set[int]:
@@ -1560,6 +1606,21 @@ def _dono(tree: ast.AST, node: ast.AST) -> str:
     return dono
 
 
+def _alvo_de_thread(node: ast.Call) -> str:
+    """O nome do trabalho passado a threading.Thread(target=...) ou ao pool, sem o embrulho do escopo."""
+    alvo = None
+    if node.args:
+        alvo = node.args[0]
+    for kw in node.keywords or []:
+        if kw.arg == "target":
+            alvo = kw.value
+    if alvo is None:
+        return ""
+    if isinstance(alvo, ast.Call) and getattr(alvo.func, "id", None) == "in_current_scope" and alvo.args:
+        alvo = alvo.args[0]
+    return alvo.id if isinstance(alvo, ast.Name) else (alvo.attr if isinstance(alvo, ast.Attribute) else "")
+
+
 @regra("busca_car_no_escopo")
 def r_car_no_escopo():
     problems: list[str] = []
@@ -1567,7 +1628,33 @@ def r_car_no_escopo():
     reaching = process_reaching(trees)
     no_escopo = 0
     outras = 0
+    threads = 0
     vistas_fora: set[str] = set()
+    vistas_thread: set[str] = set()
+    # threading.Thread NÃO copia o contexto: o escopo nunca viaja para dentro dela. Enumerada aqui pela mesma
+    # propriedade das outras (o trabalho chega a um processo gerenciado), para o inventário deixar de medir
+    # só a grafia asyncio.to_thread e dizer que mediu "as fontes fora do escopo".
+    for name, tree in trees.items():
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Call)
+                    and (getattr(node.func, "attr", None) == "Thread" or getattr(node.func, "id", None) == "Thread")):
+                continue
+            if _alvo_de_thread(node) not in reaching:
+                continue
+            threads += 1
+            chave = f"{name}:{_dono(tree, node)}"
+            vistas_thread.add(chave)
+            if chave not in THREAD_PROPRIA_DECLARADA:
+                problems.append(f"{name}:{node.lineno} thread própria com fonte fora de escopo ({chave}) sem motivo "
+                                f"declarado: o escopo não atravessa threading.Thread, então ou repassa cancel_event "
+                                f"até o run_managed_process, ou entra no inventário")
+    if threads != THREADS_PROPRIAS_FORA_DO_ESCOPO:
+        problems.append(f"threads próprias com fonte mudaram: {threads} agora, {THREADS_PROPRIAS_FORA_DO_ESCOPO} "
+                        f"declaradas (some do inventário ou repassa cancel_event, mas não passa calado)")
+    sobrando_thread = sorted(set(THREAD_PROPRIA_DECLARADA) - vistas_thread)
+    if sobrando_thread:
+        problems.append(f"motivo declarado para thread que não existe mais: {sobrando_thread}")
+    problems.extend(sem_motivo_declarado(THREAD_PROPRIA_DECLARADA))
     for name, tree in trees.items():
         dentro = _dentro_do_escopo(tree)
         for node in ast.walk(tree):
@@ -1591,9 +1678,9 @@ def r_car_no_escopo():
                 if chave not in OUTRAS_FORA_DO_ESCOPO_DECLARADO:
                     problems.append(f"{name}:{node.lineno} fonte em to_thread fora de escopo ({chave}) sem motivo "
                                     f"declarado: entra no escopo ou entra no inventário, mas não passa calado")
-    if outras != OUTRAS_FONTES_FORA_DO_ESCOPO:
-        problems.append(f"fontes fora de escopo mudaram: {outras} agora, {OUTRAS_FONTES_FORA_DO_ESCOPO} declaradas "
-                        f"(some do inventário ou entra no escopo, mas não passa calado)")
+    if outras != OUTRAS_FONTES_EM_TO_THREAD_FORA_DO_ESCOPO:
+        problems.append(f"fontes fora de escopo mudaram: {outras} agora, {OUTRAS_FONTES_EM_TO_THREAD_FORA_DO_ESCOPO} "
+                        f"declaradas (some do inventário ou entra no escopo, mas não passa calado)")
     # Motivo que sobrou é motivo que envelheceu: quem entrou no escopo sai do inventário no mesmo passo,
     # senão a próxima leitura acredita numa dívida que já foi paga.
     sobrando = sorted(set(OUTRAS_FORA_DO_ESCOPO_DECLARADO) - vistas_fora)
@@ -1603,9 +1690,12 @@ def r_car_no_escopo():
     problems.extend(sem_motivo_declarado(CAR_FORA_DO_ESCOPO_DECLARADO))
     problems.extend(sem_motivo_declarado(OUTRAS_FORA_DO_ESCOPO_DECLARADO))
     assert not problems, "busca do CAR: " + " | ".join(problems)
+    # A frase diz a POPULAÇÃO que cada número mede. "Outras fontes fora do escopo" sem dizer a grafia dava a
+    # entender que o inventário cobria os quatro caminhos até um processo gerenciado, e cobria um.
     return (f"{no_escopo} buscas do CAR dentro do escopo, {len(CAR_FORA_DO_ESCOPO_DECLARADO)} declaradas fora "
-            f"com motivo; {outras} outras fontes fora do escopo, todas com motivo declarado "
-            f"({len(OUTRAS_FORA_DO_ESCOPO_DECLARADO)} pontos)")
+            f"com motivo; {outras} chamadas em asyncio.to_thread fora do escopo, todas com motivo declarado "
+            f"({len(OUTRAS_FORA_DO_ESCOPO_DECLARADO)} pontos); {threads} threads próprias com fonte, todas com "
+            f"motivo declarado; os sítios de pool são cobrados por copia_de_escopo_no_pool")
 
 
 # --- 4) o nome resolvido EM EXECUÇÃO, não o escrito no import -----------------------------------------
@@ -1736,6 +1826,228 @@ def r_indisponivel():
         f"sem descendentes a memória deles é null, não zero: {clean['rss_descendentes_mb']!r}"
     assert "rss_descendentes_mb=sem_filhos" in s.log_line(clean, "teste")
     return "sem /proc do próprio processo tudo é indisponivel; idade negativa, memória e entrada ilegíveis também"
+
+
+# --- desistência é 499 em TODA rota convertida, inclusive nas quatro do relatório móvel --------------
+# O declarado era "desistência -> 499", e em quatro rotas não era: a RequestDisconnected que o _report_name
+# levanta subia até o ASGI em traceback (caminho de 500) no gesto mais banal do usuário, fechar a tela do
+# relatório. Não existe exception_handler global neste projeto, então o log de produção enchia de traceback
+# no lugar exato onde falha de verdade precisa aparecer.
+@regra("desistencia_vira_499_no_pdf")
+def r_pdf_499():
+    from fastapi import HTTPException
+    import portal_pdf_v21 as pdf
+    mod = epl()
+    car = "MG-3120904-AAAA1111BBBB2222CCCC3333DDDD4444"
+
+    class ClienteFora:
+        async def is_disconnected(self):
+            return True
+
+    def identidade_lenta(code, cancel_event=None):
+        time.sleep(0.2)          # sem rede: só dá tempo de a vigia ver a desistência
+        return {"ok": False}
+
+    real = pdf.resolve_property_identity_sync
+    pdf.resolve_property_identity_sync = identidade_lenta
+    try:
+        # controle negativo do instrumento: a cadeia do nome DEVE levantar RequestDisconnected, senão o 499
+        # das rotas abaixo não prova nada (poderiam estar devolvendo 499 por outro motivo, ou nenhum)
+        async def crua():
+            try:
+                await pdf._report_name(car, None, ClienteFora())
+                return None
+            except mod.RequestDisconnected as exc:
+                return exc
+
+        if asyncio.run(crua()) is None:
+            fail("instrumento quebrado: a cadeia do nome não levantou RequestDisconnected, então o cenário "
+                 "não exercita a desistência")
+        ruins: list[str] = []
+        for nome in ("mobile_report_prepare", "mobile_report_status", "mobile_report_open", "mobile_report_view"):
+            try:
+                asyncio.run(getattr(pdf, nome)(car, ClienteFora()))
+                ruins.append(f"{nome}: seguiu adiante depois de o cliente sair")
+            except HTTPException as exc:
+                if exc.status_code != 499:
+                    ruins.append(f"{nome}: {exc.status_code}, esperado 499")
+            except BaseException as exc:                                    # noqa: BLE001
+                ruins.append(f"{nome}: {type(exc).__name__} subiu até o ASGI (caminho de 500, traceback no log)")
+    finally:
+        pdf.resolve_property_identity_sync = real
+    if ruins:
+        fail("desistência no relatório móvel: " + " | ".join(ruins))
+    return "as quatro rotas móveis do relatório devolvem 499 na desistência, nenhuma deixa a exceção subir"
+
+
+# --- tentativa cancelada não é resposta, e não vai para cache compartilhado ---------------------------
+# A desistência de UM cliente virava resposta errada para TODOS os outros. Provado em 16/09 na branch: o
+# cliente A pediu /v1/live/incra-certified/status/BA e desistiu em 0,5 s; o escopo matou o curl; a função
+# gravou a tentativa cancelada no _CAP (TTL de meia hora) e o cliente B, com a requisição inteira, recebeu
+# ok:false, public_access:false, ManagedProcessCancelled — sobre uma fonte que ninguém perguntou. No mapa era
+# pior: /v1/live/property-names/viewport gravava um "não há nome nenhum nesta área" montado SEM o SIGEF, com
+# ok:true e count:0, por 15 minutos, no gesto mais comum do produto (arrastar o mapa). Regra 1, regra 2 e a
+# regra 3 do dono ("zero não é ausência") invertida.
+# Antes do escopo isto era impossível: sem escopo a desistência nunca chegava ao curl. Quem põe um trecho
+# DENTRO do escopo passa a responder por cada cache e cada trava que ele escreve.
+@regra("cancelamento_nao_vira_cache")
+def r_cancelamento_nao_vira_cache():
+    mod = epl()
+    import incra_snci_public_v42 as snci
+    import property_names_viewport_v30 as nomes
+    notas: list[str] = []
+
+    @contextlib.contextmanager
+    def escopo_cancelado():
+        """Escopo aberto e JÁ cancelado: o run_managed_process recusa antes de nascer processo nenhum.
+
+        Nenhuma rede e nenhum filho — é o mesmo caminho do cliente que desistiu, um passo antes do spawn."""
+        evento = threading.Event()
+        evento.set()
+        token = mod._open_scope(evento)
+        try:
+            yield
+        finally:
+            mod._SCOPES.reset(token)
+
+    # (a) INCRA · capabilities dentro de um escopo cancelado não grava no _CAP
+    snci._CAP.clear()
+    with escopo_cancelado():
+        out = snci.capabilities("BA")
+    if out.get("cancelled") is not True:
+        fail(f"capabilities cancelada não se declara cancelada: {out}")
+    if "public_access" in out:
+        fail("capabilities cancelada ainda afirma public_access sobre uma fonte que não foi perguntada")
+    if snci._CAP:
+        fail(f"tentativa cancelada gravada no _CAP: {sorted(snci._CAP)} (meia hora de resposta errada para "
+             f"todo cliente da mesma UF)")
+    # controle negativo do instrumento: falha de verdade CONTINUA sendo cacheada, então o _CAP vazio acima
+    # é a ausência da gravação, e não um instrumento que não enxerga gravação nenhuma
+    real = snci._curl
+    snci._curl = lambda url, timeout=12: {"ok": False, "detail": "falha_de_verdade"}
+    try:
+        snci.capabilities("BA")
+    finally:
+        snci._curl = real
+    if not snci._CAP:
+        fail("instrumento quebrado: nem a falha comum aparece no _CAP, então o _CAP vazio não prova nada")
+    snci._CAP.clear()
+    notas.append("INCRA: cancelada fora do _CAP, falha comum dentro")
+
+    # (b) mapa · três travas independentes, uma por vez. Nenhuma rede: o SIGEF e o OSM são substituídos, e o
+    # bbox é o de Curvelo, do CAR de prova.
+    bbox = (-44.46, -18.79, -44.40, -18.73)
+    semente = [{"name": "Fazenda de prova", "car_code": "MG-3120904-AAAA", "lat": -18.75, "lon": -44.43, "osm_id": 1}]
+    osm_chamado: list[int] = []
+
+    @contextlib.contextmanager
+    def mapa_sem_rede(resposta_do_sigef):
+        real_curl, real_osm, real_seed = nomes._curl, nomes._osm_named_farms_bbox, nomes.seed.in_bbox
+        nomes._curl = lambda url, expect_json=True, **kw: dict(resposta_do_sigef)
+        def osm(*a, **k):
+            osm_chamado.append(1)
+            return {"ok": False, "items": [], "count": 0, "detail": "sem_osm"}
+        nomes._osm_named_farms_bbox = osm
+        nomes.seed.in_bbox = lambda *a, **k: list(semente)
+        nomes._CACHE.clear()
+        try:
+            yield
+        finally:
+            nomes._curl, nomes._osm_named_farms_bbox, nomes.seed.in_bbox = real_curl, real_osm, real_seed
+            nomes._CACHE.clear()
+
+    # b1 · curl recusado pelo escopo: sai cancelado, e não grava
+    with mapa_sem_rede({"ok": False, "cancelled": True, "detail": "request_cancelled", "bytes": 0}):
+        with escopo_cancelado():
+            out = nomes._query_names_sync(*bbox, 60)
+        if out.get("ok") is not False or out.get("cancelled") is not True:
+            fail(f"bbox cancelado não se declara cancelado: "
+                 f"{({k: out.get(k) for k in ('ok', 'cancelled', 'detail')})}")
+        if nomes._CACHE:
+            fail("thread abandonada gravou o bbox no _CACHE: o cliente seguinte recebe 'não há nome nenhum "
+                 "aqui' por 15 minutos sobre uma área em que o SIGEF não foi consultado")
+
+    # b2 · SIGEF falhou de verdade: entrega o que veio, declara a pendência, e não grava
+    with mapa_sem_rede({"ok": False, "detail": "falha_de_verdade"}):
+        out = nomes._query_names_sync(*bbox, 60)
+        if out.get("ok") is not False:
+            fail("SIGEF sem responder e a resposta sai com ok:true: o que veio de outra fonte passa por "
+                 "'consultei a área inteira' (zero não é ausência)")
+        if "SIGEF/INCRA — espelho público" not in (out.get("pending_sources") or []):
+            fail(f"fonte que não respondeu não aparece em pending_sources: {out.get('pending_sources')}")
+        if not out.get("items"):
+            fail("o que a outra fonte trouxe sumiu da resposta: pendência declarada não é resposta apagada")
+        if nomes._CACHE:
+            fail("resposta com fonte pendente gravada no _CACHE: pendência congelada por 15 minutos vira ausência")
+
+    # b3 · a desistência chegou DEPOIS do curl: a resposta está completa, mas a thread já foi abandonada
+    with mapa_sem_rede({"ok": True, "json": {"features": []}, "bytes": 2}):
+        out = nomes._query_names_sync(*bbox, 60)
+        if out.get("ok") is not True or nomes._CACHE == {}:
+            fail(f"instrumento quebrado: sem cancelamento esta resposta tinha de sair ok e ir para o _CACHE "
+                 f"({({k: out.get(k) for k in ('ok', 'detail')})}, cache={len(nomes._CACHE)})")
+        nomes._CACHE.clear()
+        with escopo_cancelado():
+            out = nomes._query_names_sync(*bbox, 60)
+        if nomes._CACHE:
+            fail("cancelamento chegado depois do curl ainda grava no _CACHE: a thread abandonada segue viva "
+                 "durante a leitura das geometrias, e o que ela escrever é o que o próximo cliente lê")
+        if out.get("cancelled") is not True:
+            fail(f"resposta montada por thread abandonada não se declara cancelada: {out.get('cancelled')}")
+    if osm_chamado:
+        fail("o OSM ao vivo foi chamado num caminho em que o SIGEF já tinha resolvido: uma rede a mais por arrasto")
+    notas.append("mapa: cancelado antes e depois do curl fora do _CACHE, pendência declarada, nunca ok:true sem SIGEF")
+    return "; ".join(notas)
+
+
+# --- teto derivado de UMA chamada numa função que faz N ------------------------------------------------
+# O teto da rota de integridade do CAR era 2 x QUERY_TIMEOUT_S: multiplicou pela disputa da trava e esqueceu
+# a CONTAGEM. A leitura dispara CINCO consultas BigQuery em sequência, cada uma com o seu próprio
+# result(timeout=QUERY_TIMEOUT_S): o teto saia em 105 s sobre um pior caso de 450 s, e um CAR grande com
+# BigQuery frio que hoje responde passaria a devolver 504 — resposta que existia, sumiu. Quem escreve o teto
+# não conta as chamadas à mão: esta regra conta pela árvore, com peso por sítio de chamada (uma função
+# chamada duas vezes custa duas consultas) e reprova se o número do módulo divergir.
+@regra("integridade_conta_consultas")
+def r_integridade_conta_consultas():
+    tree = ast.parse(src("sicar_integrity_v47.py").read_text(encoding="utf-8"), filename="sicar_integrity_v47.py")
+    funcs = {fn.name: fn for fn in _funcoes(tree)}
+    raiz = "query_car_integrity_v47"
+    if raiz not in funcs or "_query" not in funcs:
+        fail(f"instrumento quebrado: sicar_integrity_v47 sem {raiz} ou sem _query")
+
+    def custo(nome: str, pilha: tuple[str, ...]) -> int:
+        total = 0
+        for node in _nos_proprios(funcs[nome]):
+            if not isinstance(node, ast.Call):
+                continue
+            alvo = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
+            if alvo == "_query":
+                total += 1
+            elif alvo in funcs and alvo not in pilha:   # recursão não entra em laço; um sítio custa o que custa
+                total += custo(alvo, pilha + (nome,))
+        return total
+
+    contadas = custo(raiz, (raiz,))
+    if contadas == 0:
+        fail("instrumento quebrado: nenhuma chamada de _query alcançada a partir de " + raiz)
+    import portal_car_integrity_v47 as portal_integ
+    declaradas = int(portal_integ._QUERIES_PER_INTEGRITY)
+    if contadas != declaradas:
+        fail(f"consultas por leitura de integridade: {contadas} no código, {declaradas} declaradas em "
+             f"portal_car_integrity_v47._QUERIES_PER_INTEGRITY (o teto da rota é derivado deste número: "
+             f"com ele errado a rota devolve 504 numa consulta que hoje responde)")
+    teto = float(portal_integ._INTEGRITY_S)
+    piso = declaradas * float(sicar_int().QUERY_TIMEOUT_S)
+    if teto < piso:
+        fail(f"teto da rota de integridade ({teto} s) menor que o pior caso de UMA passagem pelas {declaradas} "
+             f"consultas ({piso} s): corta resposta que hoje chega")
+    return (f"{contadas} consultas BigQuery por leitura de integridade, contadas pela árvore com peso por sítio; "
+            f"teto da rota {teto} s >= {piso} s")
+
+
+def sicar_int():
+    import sicar_integrity_v47
+    return sicar_integrity_v47
 
 
 @regra("medicao_real", linux=True)
@@ -2140,6 +2452,46 @@ MUTATIONS = [
      "", "não importa sozinho"),
     ("ci_roda_o_gate", ".github/workflows/quality-gate.yml", "python scripts/m1_processos_gate.py --exigir-linux",
      "python scripts/m1_processos_gate.py", "não exige Linux"),
+    # ---- desistência no relatório móvel: sem o embrulho, a exceção volta a subir até o ASGI
+    ("desistencia_vira_499_no_pdf", "portal_pdf_v21.py",
+     "        raise HTTPException(status_code=499,detail='client_disconnected')\n",
+     "        raise\n", "subiu até o ASGI"),
+    # ---- tentativa cancelada nao e resposta: cada trava, uma mutacao
+    ("cancelamento_nao_vira_cache", "incra_snci_public_v42.py",
+     "    if raw.get('cancelled'):\n"
+     "        out.pop('public_access',None);out['cancelled']=True;out['detail']='request_cancelled';return out\n",
+     "", "capabilities cancelada não se declara cancelada"),
+    ("cancelamento_nao_vira_cache", "incra_snci_public_v42.py",
+     "        out.pop('public_access',None);out['cancelled']=True;out['detail']='request_cancelled';return out\n",
+     "        out.pop('public_access',None);out['cancelled']=True;out['detail']='request_cancelled';_CAP[key]=(now,out);return out\n", "gravada no _CAP"),
+    ("cancelamento_nao_vira_cache", "property_names_viewport_v30.py",
+     "    if raw.get('cancelled'):\n"
+     "        return {'ok':False,'items':[],'count':0,'cancelled':True,'detail':'request_cancelled',\n"
+     "                'source':'SIGEF + OpenStreetMap','coverage':{'elapsed_ms':round((time.monotonic()-started)*1000,1)}}\n",
+     "", "bbox cancelado não se declara cancelado"),
+    ("cancelamento_nao_vira_cache", "property_names_viewport_v30.py",
+     "    if pending:\n"
+     "        return {'ok':False,'items':items,'count':len(items),'pending_sources':pending,\n"
+     "                'detail':'consulta_pendente','source':'SIGEF/INCRA + OpenStreetMap — referências públicas',\n"
+     "                'cached':False,'coverage':coverage}\n",
+     "", "sai com ok:true"),
+    ("cancelamento_nao_vira_cache", "property_names_viewport_v30.py",
+     "    if epl.scope_cancelled():\n"
+     "        out['cancelled']=True;return out\n",
+     "", "ainda grava no _CACHE"),
+    # ---- o teto derivado tem de contar as chamadas, não só o prazo de uma
+    ("integridade_conta_consultas", "sicar_integrity_v47.py",
+     "        uf_boundary = _fetch_boundary(own_client, uf_table, \"sigla_uf\", uf, uf)\n",
+     "        uf_boundary = _fetch_boundary(own_client, uf_table, \"sigla_uf\", uf, uf)\n"
+     "        _fetch_boundary(own_client, uf_table, \"sigla_uf\", uf, uf)\n",
+     "consultas por leitura de integridade"),
+    ("integridade_conta_consultas", "portal_car_integrity_v47.py",
+     "_QUERIES_PER_INTEGRITY = 5", "_QUERIES_PER_INTEGRITY = 2", "consultas por leitura de integridade"),
+    # ---- thread própria: o escopo não a atravessa, então ela também entra no inventário
+    ("busca_car_no_escopo", "incra_snci_public_v42.py",
+     "    threading.Thread(target=run,daemon=True).start()",
+     "    threading.Thread(target=run,daemon=True).start()\n    threading.Thread(target=run,daemon=True).start()",
+     "threads próprias com fonte mudaram"),
     # ---- E1: o inventário das OUTRAS fontes fora do escopo (motivo por ponto, não só o total)
     # fonte do cliente que sai do escopo tem de reprovar POR NÃO TER MOTIVO, não só por mudar o total
     ("busca_car_no_escopo", "portal_conformity_sinaflor_v48.py",

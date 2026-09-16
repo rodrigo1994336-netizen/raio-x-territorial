@@ -48,8 +48,11 @@ v45._panel_sync = _panel_sync_sinaflor_v48
 
 
 # Teto desta conferencia, derivado do que ela faz: o metadado da camada (um curl), o desenho do imovel (a
-# cadeia longa do CAR) e a consulta de candidatos (outro curl), mais folga para o cruzamento geometrico.
-# Menor cortaria resposta que hoje chega; o ganho vem do cancelamento, nao do corte.
+# cadeia longa do CAR) e a consulta de candidatos (outro curl), mais a folga abaixo. Menor cortaria
+# resposta que hoje chega; o ganho vem do cancelamento, nao do corte.
+# Folga ARBITRADA (não medida) para o cruzamento geométrico entre o desenho do imóvel e os polígonos
+# candidatos, que corre na mesma thread depois que os curls voltam. Medido em 16/09 nesta máquina, no CAR
+# de Curvelo: 2,56 s a rota inteira (rede inclusa) contra os 277,2 s do teto.
 _OVERLAP_S = 20.0
 _SINAFLOR_S = round(2 * deploy_app.CURL_WORST_CASE_S + car_resilient.WORST_CASE_SECONDS + _OVERLAP_S, 1)
 

@@ -80,11 +80,24 @@ _FIXES=[
      "['Terras raras',rare?'SINAL':'SEM SINAL ESPECÍFICO','nas fontes que responderam']",
      "['Terras raras',d.state==='unavailable'?'CONSULTA PENDENTE':(rare?'SINAL':'SEM SINAL ESPECÍFICO'),d.state==='unavailable'?'consulta pendente':'nas fontes que responderam']"),
 ]
+# 16/09 — A TRAVA DE ARRANQUE SAIU DE CIMA DE CODIGO MORTO. As duas ancoras vivem dentro de mineracao(),
+# que so e chamada por load() <- activate() <- os botoes que install() cria; e o portal_experience_v43,
+# carregado logo depois neste mesmo arranque, desliga o install() (troca setInterval(install,500) por
+# window.rxLegacyTabsDisabledV43=true). Conferido na tela, no cartao V46 de Curvelo, em 1440 e em 375:
+# #rxPropertyTabs ausente, .rx-tab-pane = 0, .rx-kpi = 0, 'Servico Geologico' e 'Terras raras' ausentes do
+# texto da pagina. Nenhum cliente ve estes dois KPI hoje.
+# Derrubar o arranque INTEIRO do portal por um texto que nao chega a ninguem troca um defeito invisivel por
+# uma tela em branco — e ja aconteceu: um cenario do m1 reprovou com mining_resilience_anchor_missing so
+# porque importou este modulo fora da ordem do sitecustomize. O remendo continua conferido; a ancora que
+# falta vira marcador de arranque, e quem reprova e o portao no CI (f1b_tela_gate, regra 1B.9), onde da
+# para consertar antes de publicar. Quando a mineracao e as terras raras forem para a leitura completa F1B
+# (caminho B), as ancoras vao junto e esta trava volta a fazer sentido no lugar novo.
 html=portal_v8.PORTAL_HTML
 _perdidas=[nome for nome,busca,_ in _FIXES if busca not in html]
-if _perdidas:
-    raise RuntimeError('mining_resilience_anchor_missing:'+','.join(_perdidas))
 for _nome,_busca,_troca in _FIXES:
     html=html.replace(_busca,_troca)
 portal_v8.PORTAL_HTML=html
-print(f'RX_MINING_RESILIENCE_V34=fail_soft_no_false_negative anchors:{len(_FIXES)}/{len(_FIXES)}',flush=True)
+if _perdidas:
+    print('RX_MINING_RESILIENCE_V34_ANCHOR_MISSING='+','.join(_perdidas),flush=True)
+print(f'RX_MINING_RESILIENCE_V34=fail_soft_no_false_negative '
+      f'anchors:{len(_FIXES)-len(_perdidas)}/{len(_FIXES)} legacy_tabs_off_by_v43',flush=True)
