@@ -4,10 +4,14 @@ import asyncio
 import os
 import httpx
 
+from fastapi import HTTPException, Request
+
 import portal_v8
+import car_resilient
 from critical_minerals import query_critical_minerals
 from agropecuaria import build_agro_profile
 from car_resilient import fetch_car_live_resilient
+from external_process_lifecycle import RequestDisconnected, wait_for_cancelling_processes
 from sicar_lookup_http import lookup_http_error
 from anm_resilient import query_anm_curl_exact
 import terra_verdade_t1
@@ -18,15 +22,23 @@ HEAVY_BASE=os.getenv('RX_HEAVY_BASE_URL','https://raio-x-territorial-report.onre
 REPLACE_PATHS={'/v1/live/critical-minerals/{car_code}','/v1/live/agropecuaria/{car_code}'}
 app.router.routes=[r for r in app.router.routes if getattr(r,'path',None) not in REPLACE_PATHS]
 
-async def _car(code:str):
-    car=await asyncio.to_thread(fetch_car_live_resilient,code.upper())
+def _desistiu():return HTTPException(status_code=499,detail='Consulta encerrada: o cliente desistiu.')
+
+async def _car(code:str,request=None):
+    # Dentro do escopo: a desistência do cliente derruba os curls desta busca e impede o próximo. O teto é o
+    # pior caso derivado pelo car_resilient — maior que a cadeia real, então não corta resposta que hoje chega.
+    try:
+        car=await wait_for_cancelling_processes(asyncio.to_thread(fetch_car_live_resilient,code.upper()),
+                                                car_resilient.WORST_CASE_SECONDS,request=request)
+    except RequestDisconnected:
+        raise _desistiu()
     if not car.get('ok'):
         raise lookup_http_error(car)
     return car
 
 @app.get('/v1/live/critical-minerals/{car_code}')
-async def critical_minerals_v18(car_code:str):
-    code=car_code.upper();car=await _car(code);geom=car.get('geometry');bbox=car.get('bbox') or []
+async def critical_minerals_v18(car_code:str,request:Request=None):
+    code=car_code.upper();car=await _car(code,request);geom=car.get('geometry');bbox=car.get('bbox') or []
     anm_task=asyncio.to_thread(query_anm_curl_exact,geom,bbox)
     # SGB can classify the ANM payload, but doing both serially is slow. Query ANM
     # first with a strict direct endpoint, then give it to SGB classification.
@@ -54,8 +66,8 @@ async def _heavy_agro(code:str):
     except Exception as e:return {'ok':False,'detail':f'heavy_worker:{type(e).__name__}:{str(e)[:180]}'}
 
 @app.get('/v1/live/agropecuaria/{car_code}')
-async def agropecuaria_v18(car_code:str):
-    code=car_code.upper();car=await _car(code)
+async def agropecuaria_v18(car_code:str,request:Request=None):
+    code=car_code.upper();car=await _car(code,request)
     minimal={'car':car}
     profile_task=build_agro_profile(minimal,code,True)
     heavy_task=_heavy_agro(code)

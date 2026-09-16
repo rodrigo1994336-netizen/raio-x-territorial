@@ -23,6 +23,8 @@ import json
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+
+from external_process_lifecycle import in_current_scope
 from pathlib import Path
 from typing import Any, Callable
 
@@ -100,9 +102,9 @@ def start_queries(result: dict[str, Any], car_code: str) -> dict[str, Any]:
     code = props.get("cod_imovel") or car_code
     updated = _first(props, "dat_atuali", "data_atualizacao", "dt_atualizacao")
     return {
-        "conab": _POOL.submit(conab_armazens.conab_warehouses_payload, geometry),
-        "deter": _POOL.submit(deter_alertas.deter_alerts_bundle, geometry, (result or {}).get("prodes")),
-        "alerts": _POOL.submit(mapbiomas_alerta.query_mapbiomas_alerta, code, geometry, car_updated_at=updated),
+        "conab": _POOL.submit(in_current_scope(conab_armazens.conab_warehouses_payload), geometry),
+        "deter": _POOL.submit(in_current_scope(deter_alertas.deter_alerts_bundle), geometry, (result or {}).get("prodes")),
+        "alerts": _POOL.submit(in_current_scope(mapbiomas_alerta.query_mapbiomas_alerta), code, geometry, car_updated_at=updated),
     }
 
 

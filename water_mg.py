@@ -4,7 +4,7 @@ import json
 import math
 import subprocess
 
-from external_process_lifecycle import ManagedProcessCancelled, run_managed_process
+from external_process_lifecycle import ManagedProcessCancelled, in_current_scope, run_managed_process
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 from urllib.parse import urlencode
@@ -119,7 +119,7 @@ def query_outorgas_mg(car_geometry:dict[str,Any], bbox:list[float], radius_km:fl
     xmin,ymin,xmax,ymax=bbox; qb=[xmin-dlon,ymin-dlat,xmax+dlon,ymax+dlat]
     layer_results={}
     with ThreadPoolExecutor(max_workers=2) as ex:
-        futs={ex.submit(_query_layer,layer,car,car_m,tr,qb,radius_km):key for key,layer in STATIC_LAYERS.items()}
+        futs={ex.submit(in_current_scope(_query_layer),layer,car,car_m,tr,qb,radius_km):key for key,layer in STATIC_LAYERS.items()}
         for fut in as_completed(futs):
             key=futs[fut]
             try: layer_results[key]=fut.result()

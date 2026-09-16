@@ -361,8 +361,11 @@ def prodes_zero_verdict(candidate_layers: list[str], failed_layers: list[Any], t
         return {"answer": False, "state": "pending", "reason": "prodes_layer_truncated"}
     from concurrent.futures import ThreadPoolExecutor
 
+    from external_process_lifecycle import in_current_scope
+
     with ThreadPoolExecutor(max_workers=min(8, len(yearly))) as pool:
-        states = list(pool.map(lambda name: (name, wfs_layer_total(TERRABRASILIS, name, PRODES_MIN_TOTAL)), yearly))
+        states = list(pool.map(in_current_scope(
+            lambda name: (name, wfs_layer_total(TERRABRASILIS, name, PRODES_MIN_TOTAL))), yearly))
     for name, layer in states:
         if not layer.get("ok"):
             return {"answer": False, "state": "pending", "reason": f"prodes_{layer.get('reason')}", "layer": {**layer, "type_name": name}}

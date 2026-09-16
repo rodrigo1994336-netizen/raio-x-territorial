@@ -3,7 +3,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from io import BytesIO
 import math
-from external_process_lifecycle import run_managed_process
+from external_process_lifecycle import in_current_scope, run_managed_process
 from typing import Any
 from urllib.parse import urlencode
 
@@ -75,7 +75,7 @@ def query_soilgrids_wcs(car_geometry:dict[str,Any]):
     except Exception as e:return {'ok':False,'source':'ISRIC SoilGrids','detail':f'centroid:{e}'}
     values={}
     with ThreadPoolExecutor(max_workers=4) as ex:
-        jobs=[ex.submit(_one,p,lon,lat) for p in PROPERTIES]
+        jobs=[ex.submit(in_current_scope(_one),p,lon,lat) for p in PROPERTIES]
         for fut in as_completed(jobs):
             prop,row=fut.result();values[prop]=row
     ok_count=sum(1 for x in values.values() if x.get('ok'))

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from external_process_lifecycle import run_managed_process
+from external_process_lifecycle import in_current_scope, run_managed_process
 import time
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -120,7 +120,7 @@ def query_sicar_details_v2(car_geometry:dict[str,Any],bbox:list[float],max_layer
     results_by_name={};geoms_by_name={}
     workers=max(1,min(4,len(layers)))
     with ThreadPoolExecutor(max_workers=workers,thread_name_prefix='sicar-v41') as ex:
-        futures={ex.submit(_query_layer,t,c,car,bbox,car_code):(t,c) for t,c in layers}
+        futures={ex.submit(in_current_scope(_query_layer),t,c,car,bbox,car_code):(t,c) for t,c in layers}
         for fut in as_completed(futures):
             t,c=futures[fut]
             try:item,geoms=fut.result()

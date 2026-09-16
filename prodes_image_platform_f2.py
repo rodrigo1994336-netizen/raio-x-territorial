@@ -26,7 +26,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 import json
 import re
-from external_process_lifecycle import ManagedProcessCancelled, run_managed_process
+from external_process_lifecycle import ManagedProcessCancelled, in_current_scope, run_managed_process
 from typing import Any, Callable, Iterable
 
 STAC_SEARCH = "https://planetarycomputer.microsoft.com/api/stac/v1/search"
@@ -193,7 +193,7 @@ def query_platforms_for_occurrences(occurrences: Iterable[dict[str, Any]], lonla
         return key, query_landsat_platform(day, path_row or None, lonlat, post)
 
     with ThreadPoolExecutor(max_workers=max(1, min(max_workers, len(keys)))) as pool:
-        return dict(pool.map(one, keys))
+        return dict(pool.map(in_current_scope(one), keys))
 
 
 def image_date_ptbr(value: Any) -> str:

@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import asyncio
 
+from fastapi import HTTPException, Request
+
 import portal_v8
 from anm_resilient import query_anm_curl_exact
 from car_resilient import fetch_car_live_resilient
-from external_process_lifecycle import wait_for_cancelling_processes
+from external_process_lifecycle import RequestDisconnected, wait_for_cancelling_processes
 from critical_minerals import query_critical_minerals
 
 app=portal_v8.app
@@ -24,10 +26,12 @@ def _unavailable(code:str,detail:str):
 
 
 @app.get(PATH)
-async def critical_minerals_v34(car_code:str):
+async def critical_minerals_v34(car_code:str,request:Request=None):
     code=car_code.upper()
     try:
-        car=await wait_for_cancelling_processes(asyncio.to_thread(fetch_car_live_resilient,code),9)
+        car=await wait_for_cancelling_processes(asyncio.to_thread(fetch_car_live_resilient,code),9,request=request)
+    except RequestDisconnected:
+        raise HTTPException(status_code=499,detail='Consulta encerrada: o cliente desistiu.')
     except Exception as e:
         return _unavailable(code,f'CAR/SICAR lento: {type(e).__name__}')
     if not car.get('ok'):
@@ -35,7 +39,9 @@ async def critical_minerals_v34(car_code:str):
     geom=car.get('geometry');bbox=car.get('bbox') or []
 
     try:
-        anm=await wait_for_cancelling_processes(asyncio.to_thread(query_anm_curl_exact,geom,bbox),10)
+        anm=await wait_for_cancelling_processes(asyncio.to_thread(query_anm_curl_exact,geom,bbox),10,request=request)
+    except RequestDisconnected:
+        raise HTTPException(status_code=499,detail='Consulta encerrada: o cliente desistiu.')
     except Exception as e:
         anm={'ok':False,'detail':f'{type(e).__name__}:{str(e)[:160]}','exact':{'available':False,'occurrence_count':None}}
 

@@ -6,6 +6,7 @@ from collections import OrderedDict
 from datetime import datetime, timezone
 
 import report_api as base
+import car_resilient  # instala a busca resiliente; importado DEPOIS do report_api (evita ciclo)
 from fastapi import Request
 from external_process_lifecycle import RequestDisconnected, wait_for_cancelling_processes
 from live_report_adapter_v9 import generate_live_report as generate_live_report_v9
@@ -19,9 +20,13 @@ _PROGRESS_TASKS:dict[str,asyncio.Task]={}
 _QUICK:OrderedDict[str,tuple[float,dict]]=OrderedDict()
 _QUICK_TTL=120
 _QUICK_MAX=16
-# Prazo do caminho de reserva (CAR sozinho). O fetch_car_live é UM curl com teto duro de 45 s no
-# deploy_app._curl: o prazo daqui é esse teto + 1 s de folga, para nunca cortar resposta que hoje chega.
-_CAR_FALLBACK_S=46
+# Prazo do caminho de reserva (CAR sozinho). O nome `base.fetch_car_live` é resolvido NA HORA DA CHAMADA, e
+# no arranque o car_resilient.install_global_patch() o troca pela busca resiliente: sondado em 15/09 nesta
+# máquina, ele resolve para car_resilient.fetch_car_live_resilient — uma cadeia de até 12 tentativas, não um
+# curl só. Por isso o prazo daqui é o teto do pior caso declarado pelo car_resilient (o mesmo que o
+# portal_property_tabs usa), que também é maior que o teto do curl único caso a troca não esteja instalada:
+# de um jeito ou do outro, não corta resposta que hoje chega. O ganho vem do cancelamento, não do corte.
+_CAR_FALLBACK_S=car_resilient.WORST_CASE_SECONDS
 
 
 def _prune_quick():

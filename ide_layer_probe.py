@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import contextvars
 import json
 import subprocess
 
-from external_process_lifecycle import ManagedProcessCancelled, run_managed_process
+from external_process_lifecycle import ManagedProcessCancelled, in_current_scope, run_managed_process
 from urllib.parse import urlencode
 from shapely.geometry import shape
 from pyproj import Geod
@@ -105,11 +104,10 @@ def probe_benchmark(car_geometry:dict,bbox:list[float]):
 
     # The useful state layers are independent: query them concurrently. This turns
     # the old sum-of-latencies path into roughly the latency of the slowest source.
-    # ThreadPoolExecutor.submit NÃO copia o contexto (asyncio.to_thread copia): sem esta cópia o escopo de
-    # cancelamento não chega ao trabalhador e o curl dele sobreviveria ao prazo e à desistência do cliente.
-    # Uma cópia POR trabalho: o mesmo Context não pode ser entrado por duas threads ao mesmo tempo.
+    # ThreadPoolExecutor.submit NÃO copia o contexto (asyncio.to_thread copia): sem in_current_scope o escopo
+    # de cancelamento não chega ao trabalhador e o curl dele sobreviveria ao prazo e à desistência do cliente.
     with ThreadPoolExecutor(max_workers=len(LAYERS)) as ex:
-        jobs={ex.submit(contextvars.copy_context().run,query_layer,layer,bbox,car_geometry):key
+        jobs={ex.submit(in_current_scope(query_layer),layer,bbox,car_geometry):key
               for key,layer in LAYERS.items()}
         for fut in as_completed(jobs):
             key=jobs[fut];layer=LAYERS[key]
