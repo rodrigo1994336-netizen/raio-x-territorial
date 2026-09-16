@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import external_process_lifecycle as epl
 from external_process_lifecycle import run_managed_process
 import threading
 import time
@@ -26,9 +27,27 @@ def _theme(uf:str,kind:str='privado')->str:
     return f'imoveiscertificados_{kind}_{u}'
 
 
+# Folga entre o --max-time do curl e o prazo do processo gerenciado.
+CURL_SLACK_S=4
+CAPABILITIES_TIMEOUT_S=10
+VIEWPORT_TIMEOUT_S=13
+
+
+def worst_case_s(timeout:float)->float:
+    """Teto de UMA chamada: prazo de rede + folga do processo + carencia de parada do filho gerenciado.
+
+    Quem poe prazo em cima de capabilities() ou viewport() usa este numero; menor cortaria resposta que
+    hoje chega."""
+    return round(float(timeout)+CURL_SLACK_S+epl.STOP_OVERHEAD_SECONDS,1)
+
+
+CAPABILITIES_WORST_CASE_S=worst_case_s(CAPABILITIES_TIMEOUT_S)
+VIEWPORT_WORST_CASE_S=worst_case_s(VIEWPORT_TIMEOUT_S)
+
+
 def _curl(url:str,timeout:int=12)->dict[str,Any]:
     try:
-        p=br_bridge.run_curl(['curl','-k','-sS','-L','--fail','--retry','0','--connect-timeout','5','--max-time',str(timeout),'-A','Raio-X-Territorial/INCRA-SNCI-v42',url],timeout_seconds=timeout+4,runner=run_managed_process)
+        p=br_bridge.run_curl(['curl','-k','-sS','-L','--fail','--retry','0','--connect-timeout','5','--max-time',str(timeout),'-A','Raio-X-Territorial/INCRA-SNCI-v42',url],timeout_seconds=timeout+CURL_SLACK_S,runner=run_managed_process)
     except Exception as e:return {'ok':False,'detail':f'{type(e).__name__}:{str(e)[:180]}'}
     if p.returncode:return {'ok':False,'detail':p.stderr.decode('utf-8','ignore')[:220],'bytes':len(p.stdout)}
     raw=p.stdout
@@ -39,7 +58,7 @@ def capabilities(uf:str,kind:str='privado')->dict[str,Any]:
     key=f'{kind}:{str(uf).upper()}';now=time.monotonic();cached=_CAP.get(key)
     if cached and now-cached[0]<TTL:return dict(cached[1])
     tema=_theme(uf,kind);url=BASE+'?'+urlencode({'tema':tema,'service':'WFS','request':'GetCapabilities'})
-    raw=_curl(url,10)
+    raw=_curl(url,CAPABILITIES_TIMEOUT_S)
     out={'ok':False,'uf':str(uf).upper(),'theme':tema,'source':'INCRA Acervo Fundiário — WFS oficial','feature_types':[],'public_access':False}
     if not raw.get('ok'):
         out['detail']=raw.get('detail');_CAP[key]=(now,out);return out
@@ -84,7 +103,7 @@ def viewport(west:float,south:float,east:float,north:float,uf:str,limit:int=50)-
     ft=(cap.get('feature_types') or [{}])[0].get('name')
     if not ft:return {'ok':False,'items':[],'count':0,'detail':'no_feature_type','source':cap.get('source')}
     params={'tema':cap['theme'],'service':'WFS','version':'1.0.0','request':'GetFeature','typeName':ft,'outputFormat':'application/json','srsName':'EPSG:4326','bbox':f'{west},{south},{east},{north},EPSG:4326','maxFeatures':str(max(1,min(int(limit),80)))}
-    raw=_curl(BASE+'?'+urlencode(params),13)
+    raw=_curl(BASE+'?'+urlencode(params),VIEWPORT_TIMEOUT_S)
     if not raw.get('ok'):return {'ok':False,'items':[],'count':0,'uf':str(uf).upper(),'source':cap.get('source'),'detail':raw.get('detail'),'public_access':True}
     try:data=json.loads(raw.get('text') or '')
     except Exception as e:return {'ok':False,'items':[],'count':0,'source':cap.get('source'),'detail':f'geojson:{type(e).__name__}'}

@@ -5,12 +5,19 @@ import json
 from urllib.parse import urlencode
 from typing import Any
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 from shapely.geometry import shape, mapping
 
+import deploy_app
 from anm_resilient import ANM_QUERY
 from critical_minerals import MINERAL_TERMS, _capabilities, _classify_text
 from deploy_app import _curl
+from external_process_lifecycle import RequestDisconnected, wait_for_cancelling_processes
+
+# Teto desta camada: uma chamada do curl padrao do deploy_app, mais folga para a simplificacao das
+# geometrias e a classificacao dos processos, que correm na mesma thread depois que o curl volta.
+_GEOMETRY_S=20.0
+_ANM_VIEWPORT_S=round(deploy_app.CURL_WORST_CASE_S+_GEOMETRY_S,1)
 
 
 def _norm_code(v:str|None) -> str:
@@ -43,7 +50,7 @@ async def mineral_wms_layers(mineral:str='terras_raras'):
     }
 
 
-async def anm_mineral_viewport(west:float,south:float,east:float,north:float,mineral:str='terras_raras',limit:int=300):
+async def anm_mineral_viewport(west:float,south:float,east:float,north:float,request:Request,mineral:str='terras_raras',limit:int=300):
     code=_norm_code(mineral)
     if not (-180<=west<east<=180 and -90<=south<north<=90):
         raise HTTPException(status_code=422,detail='Área inválida.')
@@ -56,7 +63,14 @@ async def anm_mineral_viewport(west:float,south:float,east:float,north:float,min
         'inSR':'4326','spatialRel':'esriSpatialRelIntersects','outFields':'*','returnGeometry':'true','outSR':'4326',
         'resultRecordCount':str(cap)
     }
-    raw=await asyncio.to_thread(_curl,ANM_QUERY+'?'+urlencode(params),True)
+    # Dentro do escopo: o cliente arrasta o mapa e a camada anterior deixa de interessar; o curl dela cai.
+    try:
+        raw=await wait_for_cancelling_processes(
+            asyncio.to_thread(_curl,ANM_QUERY+'?'+urlencode(params),True),_ANM_VIEWPORT_S,request=request)
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504,detail='ANM não respondeu dentro do prazo desta consulta.')
+    except RequestDisconnected:
+        raise HTTPException(status_code=499,detail='client_disconnected')
     if not raw.get('ok'):
         raise HTTPException(status_code=502,detail='ANM indisponível: '+str(raw.get('detail') or raw.get('preview') or 'falha')[:180])
     data=raw.get('json') or {};features=data.get('features') or [];out=[]

@@ -3,11 +3,14 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 import portal_v8
 import portal_map_panel_v45 as v45
+import car_resilient
+import deploy_app
 from car_resilient import CAR_RE
+from external_process_lifecycle import RequestDisconnected, wait_for_cancelling_processes
 import sinaflor_authorization_hardening_v48  # noqa: F401 — patches the source engine deliberately
 from sinaflor_authorization_v48 import query_sinaflor_authorization
 import portal_panel_sources_f2
@@ -44,12 +47,27 @@ def _panel_sync_sinaflor_v48(car_code: str, *, cancel_event=None) -> dict[str, A
 v45._panel_sync = _panel_sync_sinaflor_v48
 
 
+# Teto desta conferencia, derivado do que ela faz: o metadado da camada (um curl), o desenho do imovel (a
+# cadeia longa do CAR) e a consulta de candidatos (outro curl), mais folga para o cruzamento geometrico.
+# Menor cortaria resposta que hoje chega; o ganho vem do cancelamento, nao do corte.
+_OVERLAP_S = 20.0
+_SINAFLOR_S = round(2 * deploy_app.CURL_WORST_CASE_S + car_resilient.WORST_CASE_SECONDS + _OVERLAP_S, 1)
+
+
 @app.get("/v1/live/conformity/sinaflor/{car_code}")
-async def conformity_sinaflor_v48(car_code: str):
+async def conformity_sinaflor_v48(car_code: str, request: Request):
     code = str(car_code or "").strip().upper()
     if not CAR_RE.match(code):
         raise HTTPException(status_code=422, detail="invalid_car_format")
-    return await asyncio.to_thread(query_sinaflor_authorization, code)
+    # Dentro do escopo: esta rota puxa a cadeia longa do CAR; sem isso a desistencia do cliente deixava os
+    # curls do SICAR rodando por minutos depois de o cartao fechar.
+    try:
+        return await wait_for_cancelling_processes(
+            asyncio.to_thread(query_sinaflor_authorization, code), _SINAFLOR_S, request=request)
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="sinaflor_timeout")
+    except RequestDisconnected:
+        raise HTTPException(status_code=499, detail="client_disconnected")
 
 
 # MTE owns the shared audit UI and now renders every canonical registry row

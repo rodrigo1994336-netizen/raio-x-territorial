@@ -35,6 +35,9 @@ GEOD = Geod(ellps="GRS80")
 TABLE_ID_RE = re.compile(r"^[A-Za-z0-9_-]+\.[A-Za-z0-9_]+\.[A-Za-z0-9_]+$")
 CAR_RE = re.compile(r"^[A-Z]{2}-\d{7}-[A-F0-9]{32}$", re.I)
 
+# Prazo do proprio BigQuery nesta consulta, nomeado para quem precisa derivar teto de tempo em cima dela.
+QUERY_TIMEOUT_S = 45
+
 THEMES: dict[str, dict[str, Any]] = {
     "vegetacao_nativa": {"label": "Vegetação nativa", "table": "vegetacao_nativa", "declared_area": True},
     "reserva_legal": {"label": "Reserva legal", "table": "reserva_legal", "declared_area": True},
@@ -133,7 +136,7 @@ def _query(client: Any, sql: str, params: dict[str, Any]) -> list[dict[str, Any]
             cfg.maximum_bytes_billed = int(max_bytes)
         except Exception as exc:
             raise RuntimeError("invalid_bigquery_max_bytes_billed") from exc
-    rows = client.query(sql, job_config=cfg).result(timeout=45)
+    rows = client.query(sql, job_config=cfg).result(timeout=QUERY_TIMEOUT_S)
     return [dict(row.items()) for row in rows]
 
 

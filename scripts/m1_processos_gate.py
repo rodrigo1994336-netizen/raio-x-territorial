@@ -66,8 +66,9 @@ Regras
                              PRAZO_HANDLERS aparece numa cobertura de desistência (ou declarado COM MOTIVO).
   busca_car_no_escopo        nenhum asyncio.to_thread(fetch_car_live*) solto: a cadeia do CAR é a longa
                              (car_resilient.WORST_CASE_SECONDS). O que ainda corre fora do escopo está
-                             declarado com motivo, e as OUTRAS fontes fora do escopo são um número medido —
-                             se mudar, o portão obriga a decidir de novo.
+                             declarado com motivo — a busca do CAR e também CADA outra fonte, uma a uma, com
+                             o número total travado. Motivo que sobra (fonte que já entrou no escopo) também
+                             reprova: inventário que envelhece vira dívida imaginária.
   nome_do_car_resolve_em_execucao
                              sonda em execução: imprime para que função os nomes fetch_car_live resolvem
                              DEPOIS do arranque (o car_resilient troca o nome) e confere que todo prazo posto
@@ -1060,12 +1061,19 @@ DIRECT_DECLARED = {
 # Quem chega a um processo gerenciado é calculado (fecho transitivo por nome a partir destas sementes), não
 # mantido à mão: por nome é conservador (duas funções com o mesmo nome contam juntas).
 PROCESS_SEEDS = {"run_managed_process"}
-# Chamadas "await wait_for_cancelling_processes(" por arquivo.
+# Chamadas de wait_for_cancelling_processes por arquivo, contadas pela ÁRVORE, não pelo texto. Era
+# text.count("await wait_for_cancelling_processes("): um escopo escrito dentro de um asyncio.gather não leva
+# `await` na frente e não era contado — a regra dizia "2" num arquivo com 4 escopos e ninguém via a
+# diferença. Contagem literal responde sobre a grafia; a pergunta é sobre a chamada.
 SCOPED_SITES = {
     "portal_mining_resilience_v34.py": 2, "report_quick_v22.py": 1, "report_v9_patch.py": 2,
-    "portal_property_tabs.py": 2, "core_retry_fast_v29.py": 1, "report_extras_perf_v30.py": 1,
+    "portal_property_tabs.py": 4, "core_retry_fast_v29.py": 1, "report_extras_perf_v30.py": 1,
     "portal_advanced_name_v40.py": 1, "property_search.py": 2, "heavy_live_api_v20.py": 1,
     "portal_live_fix_v18.py": 1, "portal_api.py": 1,
+    # E1 (16/09): fontes do cartão, da leitura completa, do PDF, do mapa e da busca que entraram no escopo.
+    "portal_car_integrity_v47.py": 1, "portal_conformity_sinaflor_v48.py": 1,
+    "portal_incra_certified_v42.py": 2, "property_names_viewport_v30.py": 1,
+    "map_mineral_routes.py": 1, "portal_cafir_inverse_v44.py": 1,
 }
 # Quais escopos têm efeito NÃO é mais afirmação do autor: sai do mesmo fecho transitivo. Um sítio cujo
 # trabalho chega a run_managed_process tem efeito; um sítio que recebe a corrotina pronta por parâmetro é
@@ -1082,6 +1090,12 @@ DIRECT_PROCESS_CALLS = {"os.system", "os.popen", "os.fork", "os.forkpty", "os.po
                         "pty.fork", "pty.spawn", "subprocess.getoutput", "subprocess.getstatusoutput"}
 DIRECT_PROCESS_PREFIXES = ("os.exec", "os.spawn", "asyncio.create_subprocess")
 DIRECT_PROCESS_ATTRS = {"subprocess_exec", "subprocess_shell"}  # loop.subprocess_exec / subprocess_shell
+
+
+def _e_chamada_de_escopo(node: ast.AST) -> bool:
+    """Chamada de wait_for_cancelling_processes, com ou sem `await` colado na frente."""
+    return isinstance(node, ast.Call) and (getattr(node.func, "id", None) == "wait_for_cancelling_processes"
+                                           or getattr(node.func, "attr", None) == "wait_for_cancelling_processes")
 
 
 def process_reaching(trees: dict[str, ast.AST]) -> set[str]:
@@ -1182,19 +1196,20 @@ def r_inventario():
                 hit = names & reaching
                 if hit:
                     problems.append(f"{where} asyncio.wait_for puro sobre {sorted(hit)} (use wait_for_cancelling_processes)")
+    escopos_por_arquivo = {
+        name: sum(1 for node in ast.walk(tree) if _e_chamada_de_escopo(node)) for name, tree in trees.items()
+    }
     for name, count in SCOPED_SITES.items():
-        text = src(name).read_text(encoding="utf-8")
-        got = text.count("await wait_for_cancelling_processes(")
+        got = escopos_por_arquivo.get(name, 0)
         if got != count:
             problems.append(f"{name}: {got} chamada(s) de wait_for_cancelling_processes, esperado {count}")
     for name in sorted(set(trees) - set(SCOPED_SITES)):
-        if "await wait_for_cancelling_processes(" in src(name).read_text(encoding="utf-8"):
+        if escopos_por_arquivo.get(name, 0):
             problems.append(f"{name} abriu escopo e não está no inventário SCOPED_SITES")
     com_efeito = opacos = 0
     for name, tree in trees.items():
         for node in ast.walk(tree):
-            if not (isinstance(node, ast.Call) and (getattr(node.func, "id", None) == "wait_for_cancelling_processes"
-                                                    or getattr(node.func, "attr", None) == "wait_for_cancelling_processes")):
+            if not _e_chamada_de_escopo(node):
                 continue
             arg = node.args[0] if node.args else None
             if isinstance(arg, ast.Name):   # corrotina recebida por parâmetro: indecidível por nome
@@ -1437,17 +1452,101 @@ CAR_FORA_DO_ESCOPO_DECLARADO = {
         "chamada sempre DENTRO de um escopo pelos handlers (asyncio.to_thread copia o contexto): o escopo de "
         "quem chamou já alcança este curl, e é isso que cadeia_car_prazo mede",
 }
-# Fontes que NÃO são o CAR e ainda correm em to_thread fora de qualquer escopo. Número medido, não estimado:
-# enquanto for este, o inventário está honesto; se mudar, o portão obriga a decidir de novo. É a fila do
-# próximo passo, e é por isso que "prazo e cancelamento valem na cadeia inteira" ainda não pode ser dito.
-OUTRAS_FONTES_FORA_DO_ESCOPO = 43
+# Fontes que NÃO são o CAR e ainda correm em to_thread fora de qualquer escopo. Antes isto era só um número
+# (43 em 15/09): o número dizia QUANTAS faltavam, nunca POR QUE cada uma ficou. Agora cada ponto é declarado
+# com motivo, e o número continua travado — as duas coisas, porque só o motivo deixaria a dívida crescer em
+# silêncio e só o número deixaria "sobrou" passar por explicação.
+#
+# E1 (16/09): as dez que o cliente dispara entraram no escopo (cartão V46, leitura completa F1B, PDF móvel,
+# mapa e busca). 43 -> 33. Cada prazo é derivado do módulo que implementa a fonte, nunca escrito à mão:
+#   portal_car_integrity_v47      2 x sicar_integrity_v47.QUERY_TIMEOUT_S + montagem da tabela
+#   portal_conformity_sinaflor_v48 2 x deploy_app.CURL_WORST_CASE_S + car_resilient.WORST_CASE_SECONDS
+#   portal_property_tabs          climate_nasa.DAILY_WORST_CASE_S / CLIMATOLOGY_WORST_CASE_S
+#   property_names_viewport_v30   deploy_app.CURL_WORST_CASE_S + property_identity_runtime.OSM_WORST_CASE_S
+#   portal_incra_certified_v42    incra_snci_public_v42.CAPABILITIES/VIEWPORT_WORST_CASE_S
+#   map_mineral_routes            deploy_app.CURL_WORST_CASE_S + simplificação das geometrias
+#   portal_cafir_inverse_v44      cafir_name_search_v44.LOCATE_WORST_CASE_S
+#   portal_pdf_v21                sem teto externo: mesma forma da rota /v1/live/property-identity, que
+#                                 resolve o MESMO nome (cancel_event chega a cada curl da cadeia)
+OUTRAS_FORA_DO_ESCOPO_DECLARADO = {
+    # --- chamadas que JÁ correm dentro de um escopo em execução; o filtro estático é que não enxerga ---
+    "report_extras_perf_v30.py:_extras_v41":
+        "em escopo em execução: o _timed embrulha cada slot em wait_for_cancelling_processes, e o to_thread "
+        "está escrito no chamador, não dentro da chamada — o filtro por sintaxe não atravessa parâmetro. "
+        "Quem prova em execução é a regra cadeia_slots_relatorio",
+    "deploy_app.py:analyze_car":
+        "chamada sempre DENTRO de um escopo pelos handlers (asyncio.to_thread copia o contexto): o escopo de "
+        "quem chamou já alcança este curl, e é isso que cadeia_car_prazo mede",
+    "anm_fast_v29.py:query_anm_fast":
+        "substitui deploy_app.query_anm/report_api.query_anm em execução e só roda dentro do analyze_car, "
+        "que corre no escopo do handler; o to_thread copia o contexto e o curl herda o cancelamento",
+
+    # --- código substituído em execução: a versão efetiva é outra, e essa já está no escopo ou declarada ---
+    "live_report_adapter_v13.py:_extras":
+        "substituído em execução por report_extras_perf_v30._extras_v41 (v13._extras=_extras_v41): base da "
+        "cadeia de remendos, nunca executada no serviço do relatório",
+    "live_report_adapter_v17.py:_extras_v17":
+        "substituído em execução por report_extras_perf_v30._extras_v41 (v17._extras_v17=_extras_v41): elo "
+        "da cadeia de remendos, nunca executado no serviço do relatório",
+    "live_report_adapter_v19.py:_extras_v47":
+        "elo da cadeia de remendos do relatório; o efetivo é o _extras_v41, carregado depois pelo "
+        "sitecustomize. Entra no escopo junto com o v41 quando a fila do relatório chegar",
+    "report_visual_identity_v28.py:_extras_v28":
+        "substituído em execução por report_extras_perf_v30._extras_v41, importado depois no sitecustomize",
+    "portal_advanced_name_v40.py:advanced_search_v40":
+        "a rota /v1/live/search/advanced foi tomada pelo portal_cafir_inverse_v44, que remove a rota do v40 "
+        "e registra a própria: esta função não recebe mais pedido de cliente",
+    "portal_live_fix_v18.py:critical_minerals_v18":
+        "a rota /v1/live/critical-minerals foi tomada pelo portal_mining_resilience_v34, carregado depois: "
+        "esta função não recebe mais pedido de cliente",
+    "report_api.py:_build":
+        "as duas rotas de relatório do report_api são removidas pelo report_v13_patch, que registra as suas; "
+        "o _build fica como base da cadeia e não recebe pedido de cliente",
+
+    # --- sem cliente: arranque, segundo plano e diagnóstico interno ---
+    "report_api.py:_background_full_smoke":
+        "prova de fumaça do arranque, sem cliente e sem requisição: não há desistência a ouvir, e o "
+        "desligamento já derruba os filhos pelo _SERVER_STOPPING",
+    "report_api.py:_background_ide_probe":
+        "sonda de arranque, sem cliente e sem requisição: não há desistência a ouvir, e o desligamento já "
+        "derruba os filhos pelo _SERVER_STOPPING",
+    "report_api.py:_background_catalog_probe":
+        "sonda de catálogo do arranque, sem cliente e sem requisição: o desligamento já derruba os filhos",
+    "report_api.py:_reapply_prodes_reading":
+        "releitura em segundo plano sobre análise já entregue: não há cliente pendurado nesta chamada",
+    "report_api.py:_retry_failed_core":
+        "nova tentativa em segundo plano de fonte que falhou; o cliente já recebeu a resposta anterior",
+    "report_api.py:ide_catalog":
+        "rota interna de diagnóstico (/v1/internal/ide/catalog), não é caminho de cliente; fila do próximo passo",
+    "report_api.py:ide_probe":
+        "rota interna de diagnóstico (/v1/internal/ide/probe), não é caminho de cliente; fila do próximo passo",
+    "deploy_app.py:probe_sources":
+        "rota de diagnóstico das fontes, sem cliente do produto pendurado nela; fila do próximo passo",
+
+    # --- fila declarada do próximo passo: caminho de cliente, ainda fora ---
+    "report_v13_patch.py:_build_v13":
+        "renderização do PDF no serviço do relatório (semáforo de 1): é caminho de cliente e ENTRA na fila "
+        "do próximo passo. Fica fora aqui porque o prazo tem que ser medido no serviço do relatório, com o "
+        "render real de 55 s, e não nesta máquina",
+    "report_v20_patch.py:_build_v20":
+        "mesma renderização do PDF, um elo acima do _build_v13: entra na fila do próximo passo junto com ele, "
+        "medida no serviço do relatório",
+    "heavy_live_api_v20.py:agro_raster":
+        "rota /v1/heavy/agro-raster do serviço do relatório: a busca do CAR já corre no escopo; MapBiomas e "
+        "SRTM ficam para a fila, porque o teto deles precisa de medição no serviço do relatório",
+    "mapbiomas_alerta.py:query_mapbiomas_alerta_async":
+        "embrulho assíncrono da consulta de alertas; quem chama repassa cancel_event direto ao curl, então o "
+        "cancelamento chega por parâmetro. O teto fica para a fila, medido junto com o relatório",
+}
+# Total de chamadas (não de funções: uma função pode ter várias). Medido, não estimado: se mudar, o portão
+# obriga a decidir de novo.
+OUTRAS_FONTES_FORA_DO_ESCOPO = 33
 
 
 def _dentro_do_escopo(tree: ast.AST) -> set[int]:
     dentro: set[int] = set()
     for node in ast.walk(tree):
-        if isinstance(node, ast.Call) and (getattr(node.func, "id", None) == "wait_for_cancelling_processes"
-                                           or getattr(node.func, "attr", None) == "wait_for_cancelling_processes"):
+        if _e_chamada_de_escopo(node):
             dentro.update(id(sub) for sub in ast.walk(node))
     return dentro
 
@@ -1468,6 +1567,7 @@ def r_car_no_escopo():
     reaching = process_reaching(trees)
     no_escopo = 0
     outras = 0
+    vistas_fora: set[str] = set()
     for name, tree in trees.items():
         dentro = _dentro_do_escopo(tree)
         for node in ast.walk(tree):
@@ -1486,13 +1586,26 @@ def r_car_no_escopo():
                                     f"({chave}): prazo e desistência não a alcançam")
             elif nome in reaching and id(node) not in dentro:
                 outras += 1
+                chave = f"{name}:{_dono(tree, node)}"
+                vistas_fora.add(chave)
+                if chave not in OUTRAS_FORA_DO_ESCOPO_DECLARADO:
+                    problems.append(f"{name}:{node.lineno} fonte em to_thread fora de escopo ({chave}) sem motivo "
+                                    f"declarado: entra no escopo ou entra no inventário, mas não passa calado")
     if outras != OUTRAS_FONTES_FORA_DO_ESCOPO:
         problems.append(f"fontes fora de escopo mudaram: {outras} agora, {OUTRAS_FONTES_FORA_DO_ESCOPO} declaradas "
                         f"(some do inventário ou entra no escopo, mas não passa calado)")
+    # Motivo que sobrou é motivo que envelheceu: quem entrou no escopo sai do inventário no mesmo passo,
+    # senão a próxima leitura acredita numa dívida que já foi paga.
+    sobrando = sorted(set(OUTRAS_FORA_DO_ESCOPO_DECLARADO) - vistas_fora)
+    if sobrando:
+        problems.append(f"motivo declarado para fonte que não está mais fora do escopo: {sobrando} "
+                        f"(tirar do inventário no mesmo passo em que ela entrou)")
     problems.extend(sem_motivo_declarado(CAR_FORA_DO_ESCOPO_DECLARADO))
+    problems.extend(sem_motivo_declarado(OUTRAS_FORA_DO_ESCOPO_DECLARADO))
     assert not problems, "busca do CAR: " + " | ".join(problems)
     return (f"{no_escopo} buscas do CAR dentro do escopo, {len(CAR_FORA_DO_ESCOPO_DECLARADO)} declaradas fora "
-            f"com motivo; {outras} outras fontes ainda fora do escopo (fila do próximo passo)")
+            f"com motivo; {outras} outras fontes fora do escopo, todas com motivo declarado "
+            f"({len(OUTRAS_FORA_DO_ESCOPO_DECLARADO)} pontos)")
 
 
 # --- 4) o nome resolvido EM EXECUÇÃO, não o escrito no import -----------------------------------------
@@ -2027,6 +2140,25 @@ MUTATIONS = [
      "", "não importa sozinho"),
     ("ci_roda_o_gate", ".github/workflows/quality-gate.yml", "python scripts/m1_processos_gate.py --exigir-linux",
      "python scripts/m1_processos_gate.py", "não exige Linux"),
+    # ---- E1: o inventário das OUTRAS fontes fora do escopo (motivo por ponto, não só o total)
+    # fonte do cliente que sai do escopo tem de reprovar POR NÃO TER MOTIVO, não só por mudar o total
+    ("busca_car_no_escopo", "portal_conformity_sinaflor_v48.py",
+     "        return await wait_for_cancelling_processes(\n"
+     "            asyncio.to_thread(query_sinaflor_authorization, code), _SINAFLOR_S, request=request)",
+     "        return await asyncio.to_thread(query_sinaflor_authorization, code)",
+     "sem motivo declarado"),
+    # motivo que sobrou também reprova: fonte declarada fora que entrou no escopo sai do inventário
+    ("busca_car_no_escopo", "report_api.py",
+     "    terms=[x.strip() for x in q.split(',') if x.strip()]; return await asyncio.to_thread(search_catalog,terms,100)",
+     "    terms=[x.strip() for x in q.split(',') if x.strip()]\n"
+     "    from external_process_lifecycle import wait_for_cancelling_processes\n"
+     "    return await wait_for_cancelling_processes(asyncio.to_thread(search_catalog,terms,100),10)",
+     "não está mais fora do escopo"),
+    # a contagem de escopos por arquivo é da ÁRVORE: escopo dentro de gather (sem `await` colado) conta
+    ("inventario_processos", "portal_property_tabs.py",
+     "        wait_for_cancelling_processes(asyncio.to_thread(query_climatology_nasa,geom),_CLIMA_NORMAL_S,request=request),\n",
+     "        asyncio.to_thread(query_climatology_nasa,geom),\n",
+     "portal_property_tabs.py: 3 chamada(s) de wait_for_cancelling_processes, esperado 4"),
 ]
 
 

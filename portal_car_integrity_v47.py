@@ -5,10 +5,12 @@ import time
 import threading
 from typing import Any
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 import portal_v8
 import sicar_overlap_hardening_v47  # applies narrow CAR-overlap dedup patch before imports below
+import sicar_integrity_v47
+from external_process_lifecycle import RequestDisconnected, wait_for_cancelling_processes
 from sicar_integrity_v47 import CAR_RE, query_car_integrity_v47
 from sicar_integrity_display_v47 import panel_table_rows
 
@@ -57,9 +59,23 @@ def _query_sync(car_code: str) -> dict[str, Any]:
         return out
 
 
+# Teto desta consulta: o prazo do proprio BigQuery contado DUAS vezes, porque a trava por CAR pode fazer
+# este pedido esperar uma consulta igual ja em curso antes de comecar a sua, mais folga para a montagem da
+# tabela. Derivado do modulo que a implementa; menor cortaria resposta que hoje chega.
+_TABLE_BUILD_S = 15.0
+_INTEGRITY_S = round(2 * sicar_integrity_v47.QUERY_TIMEOUT_S + _TABLE_BUILD_S, 1)
+
+
 @app.get("/v1/live/car-integrity/{car_code}")
-async def car_integrity_v47(car_code: str):
-    out = await asyncio.to_thread(_query_sync, car_code)
+async def car_integrity_v47(car_code: str, request: Request):
+    # Dentro do escopo: prazo e desistencia do cliente alcancam esta consulta e os processos que ela abrir.
+    try:
+        out = await wait_for_cancelling_processes(
+            asyncio.to_thread(_query_sync, car_code), _INTEGRITY_S, request=request)
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="car_integrity_timeout")
+    except RequestDisconnected:
+        raise HTTPException(status_code=499, detail="client_disconnected")
     if out.get("state") == "invalid":
         raise HTTPException(status_code=422, detail=out)
     return out

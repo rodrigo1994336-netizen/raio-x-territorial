@@ -6,15 +6,23 @@ import time
 from typing import Any
 from urllib.parse import urlencode
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 from shapely.geometry import shape
 
 import portal_v8
+import deploy_app
+import property_identity_runtime
 import public_property_name_seed_v43 as seed
 from deploy_app import SIGEF_MIRROR, _curl
+from external_process_lifecycle import RequestDisconnected, wait_for_cancelling_processes
 from property_identity_runtime import _clean_name, _osm_named_farms_bbox
 
 app = portal_v8.app
+# Teto desta consulta: o espelho SIGEF (uma chamada do curl padrao do deploy_app) e, quando o SIGEF nao
+# devolve nome nenhum, o OSM ao vivo (os dois espelhos em sequencia). Mais folga para a leitura das
+# geometrias, que corre na mesma thread. Derivado dos modulos que implementam cada trecho.
+_GEOMETRY_S = 20.0
+_NAMES_S = round(deploy_app.CURL_WORST_CASE_S + property_identity_runtime.OSM_WORST_CASE_S + _GEOMETRY_S, 1)
 TTL_SECONDS = 900
 _CACHE: dict[tuple[float, float, float, float, int], tuple[float, dict[str, Any]]] = {}
 
@@ -139,10 +147,16 @@ def _query_names_sync(west: float, south: float, east: float, north: float, limi
 
 
 @app.get('/v1/live/property-names/viewport')
-async def property_names_viewport(west:float,south:float,east:float,north:float,limit:int=60,car_visible:int|None=None,diagnostic:bool=False):
+async def property_names_viewport(west:float,south:float,east:float,north:float,request:Request,limit:int=60,car_visible:int|None=None,diagnostic:bool=False):
     if not (-180<=west<east<=180 and -90<=south<north<=90):raise HTTPException(status_code=422,detail='Área do mapa inválida.')
     if max(east-west,north-south)>1.50:raise HTTPException(status_code=422,detail='Aproxime o mapa para visualizar os nomes das fazendas.')
-    out=await asyncio.to_thread(_query_names_sync,west,south,east,north,limit);out=dict(out);coverage=dict(out.get('coverage') or {});coverage['car_visible']=max(0,min(int(car_visible),5000)) if car_visible is not None else None;out['coverage']=coverage
+    # Dentro do escopo: o mapa do cliente troca de area a cada arrasto; o curl da area abandonada cai junto.
+    try:
+        out=await wait_for_cancelling_processes(
+            asyncio.to_thread(_query_names_sync,west,south,east,north,limit),_NAMES_S,request=request)
+    except asyncio.TimeoutError:raise HTTPException(status_code=504,detail='property_names_timeout')
+    except RequestDisconnected:raise HTTPException(status_code=499,detail='client_disconnected')
+    out=dict(out);coverage=dict(out.get('coverage') or {});coverage['car_visible']=max(0,min(int(car_visible),5000)) if car_visible is not None else None;out['coverage']=coverage
     if diagnostic:print('RX_PROPERTY_NAMES_COVERAGE='+json.dumps(coverage,ensure_ascii=False,separators=(',',':')),flush=True)
     return out
 
