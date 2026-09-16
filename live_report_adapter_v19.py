@@ -89,7 +89,7 @@ def _patch_car_integrity_v47(payload: dict, integrity: dict):
         car["environmental_composition"] = []
         payload.setdefault("sources", []).append({
             "name": "Base dos Dados / SICAR — composição e consistência geométrica do CAR",
-            "description": f"Consulta indisponível nesta emissão: {integrity.get('detail') or 'sem detalhe'}. Nenhum zero foi inferido.",
+            "description": f"Consulta pendente nesta emissão: {integrity.get('detail') or 'sem detalhe'}.",
             "status": "INDISPONÍVEL",
             "level": "attention",
         })

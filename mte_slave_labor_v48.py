@@ -154,8 +154,8 @@ def query_mte_slave_labor(owner_document: str | None = None, owner_name: str | N
             "state": "blocked_missing_owner_identity",
             "match_count": None,
             "reason": (
-                "Esta fonte é nominal (CPF/CNPJ). O CAR público analisado não informa com segurança "
-                "o proprietário; nenhum vínculo entre empregador e imóvel foi inferido."
+                "A lista do Ministério do Trabalho é de empregadores, não de imóveis. Sem saber quem é "
+                "o dono — e o CAR público não diz — não há como responder por este imóvel."
             ),
             "owner_name_supplied": bool(str(owner_name or "").strip()),
         }

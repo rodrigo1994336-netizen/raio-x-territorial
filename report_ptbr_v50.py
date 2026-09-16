@@ -44,12 +44,36 @@ _BARE_DEC = re.compile(r"(?<![\w.,/:\-])(-?\d+)\.(\d+)(?![\w/\-%°]|[.,]\d)")
 _ISO_DT = re.compile(r"(?<![\w])(20\d{2})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::\d{2}(?:\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?")
 _ISO_D = re.compile(r"(?<![\w/])(20\d{2})-(\d{2})-(\d{2})(?![\w:])")
 _COMPACT_D = re.compile(r"(?<![\w/])(20\d{2})(\d{2})(\d{2})(?![\w/])")
-_TECH_TAIL = re.compile(r"\s*[:—-]?\s*(?:[A-Za-z]+(?:Error|Exception|Timeout)|Traceback)\b.*$", re.S)
+# T2: o rabo técnico da mensagem (classe de erro, comando curl, endereço do serviço) nunca é texto de cliente.
+# "TimeoutExpired" e "CalledProcessError" não terminavam em fronteira de palavra depois de "Timeout"/"Error",
+# então o comando inteiro do curl chegava impresso no PDF; o endereço http também passava sem classe de erro.
+# O endereço só conta como rabo técnico quando está solto no texto: dentro de um atributo
+# (``<link href="https://…">``) cortar aqui partiria a marcação do parágrafo.
+_TECH_TAIL = re.compile(
+    r"\s*[:—-]?\s*(?:[A-Za-z]*(?:Error|Exception|Timeout)[A-Za-z]*\b|Traceback\b|Command\s*'?\[|(?<![\w\"'=/])https?://).*$",
+    re.S,
+)
 _OFF = re.compile(r"\s*[—-]\s*OFF\b")
 
 _CODES = {
     "AT": "Ativo", "PE": "Pendente", "SU": "Suspenso", "CA": "Cancelado",
     "IRU": "Imóvel Rural", "AST": "Assentamento", "PCT": "Povos e Comunidades Tradicionais",
+    # T2: estado técnico dito em português de quem compra terra. Só quando a célula é SÓ o estado
+    # (é assim que a tabela de fontes e os selos imprimem); dentro de frase nada é trocado, para não
+    # virar "FONTE RESPONDEU EM PARTE". A cor continua vindo do valor cru, antes do Paragraph.
+    "PARCIAL": "RESPONDEU EM PARTE",
+    "PARCIALMENTE": "RESPONDEU EM PARTE",
+    "INDISPONÍVEL": "CONSULTA PENDENTE",
+    "INDISPONIVEL": "CONSULTA PENDENTE",
+    "NÃO CONSULTADA": "CONSULTA PENDENTE",
+    "NÃO CONSULTADO": "CONSULTA PENDENTE",
+    "NAO CONSULTADA": "CONSULTA PENDENTE",
+    "NAO CONSULTADO": "CONSULTA PENDENTE",
+    "NÃO CONSULTADO NESTA FONTE": "CONSULTA PENDENTE",
+    "NÃO EXECUTADA": "CONSULTA PENDENTE",
+    "RESTRITA": "CONSULTA PENDENTE",
+    "NÃO CLASSIFICADO": "SEM CLASSIFICAÇÃO",
+    "NÃO CLASSIFICADA": "SEM CLASSIFICAÇÃO",
 }
 _MONTHS = {
     "JAN": "JAN", "FEB": "FEV", "MAR": "MAR", "APR": "ABR", "MAY": "MAI", "JUN": "JUN",
@@ -74,8 +98,48 @@ _PHRASES = {
     "A reconciliação final remove placeholders antigos quando o conector efetivamente respondeu; um dado só permanece indisponível/restrito quando essa é a situação real desta emissão.":
         "Cada fonte é consultada de novo a cada emissão; uma consulta pendente é refeita na emissão seguinte.",
     "CONSULTADA, PARCIAL, INDISPONÍVEL, RESTRITA ou NÃO EXECUTADA":
-        "CONSULTADA, PARCIAL, CONSULTA PENDENTE ou NÃO CONSULTADA",
+        "CONSULTADA, RESPONDEU EM PARTE ou CONSULTA PENDENTE",
+    "Cadastro Ambiental Rural consultado via WFS público.":
+        "Cadastro Ambiental Rural consultado na base pública oficial.",
+    "Camadas PRODES consultadas por WFS e intersectadas geometricamente com o CAR.":
+        "Mapa de desmatamento do INPE conferido sobre o desenho do imóvel.",
+    "Processos minerários consultados e intersectados geometricamente.":
+        "Processos de mineração conferidos sobre o desenho do imóvel.",
+    "Consulta territorial por polígono e interseção exata.":
+        "Conferido sobre o desenho do imóvel.",
+    "Base oficial de áreas embargadas do IBAMA, com cruzamento exato pela geometria do CAR.":
+        "Lista oficial de áreas embargadas do IBAMA, conferida sobre o desenho do imóvel.",
+    "O WFS público consultado expõe o limite e atributos gerais do imóvel, mas não disponibilizou camadas separadas de APP, Reserva Legal, vegetação e área consolidada. Esses itens permanecem NÃO CONSULTADOS nesta emissão.":
+        "A base pública do SICAR devolveu o limite e os dados gerais do imóvel, mas não devolveu, em separado, APP, reserva legal, vegetação e área consolidada.",
+    "NÃO CONSULTADO nunca é tratado como ausência de ocorrência.":
+        "Consulta pendente não quer dizer que não existe ocorrência.",
+    "Completar as camadas ainda marcadas como NÃO CONSULTADO antes de emitir conclusão abrangente.":
+        "Refazer as consultas que ficaram pendentes antes de fechar uma conclusão.",
+    "Interseções espaciais exatas são recalculadas localmente sobre a geometria do CAR.":
+        "Cada cruzamento é refeito por nós sobre o desenho do imóvel, não copiado da fonte.",
+    "PRODES indica desmatamento mapeado e não prova, isoladamente, infração ambiental.":
+        "Desmatamento mapeado pelo INPE não é, por si só, prova de infração.",
+    "CAR não comprova titularidade registral do imóvel.":
+        "O CAR não prova quem é o dono; quem prova é a matrícula do cartório.",
+    "Processo ANM não comprova jazida, reserva ou viabilidade econômica mineral.":
+        "Processo de mineração não prova que exista minério aproveitável no imóvel.",
+    "Consulta online às fontes oficiais e cálculo espacial exato do motor Raio-X Territorial.":
+        "Consulta feita nas fontes públicas oficiais, com os cruzamentos refeitos sobre o desenho do imóvel.",
+    "Completar a consulta SNCI/INCRA quando o conector público/autenticado estiver disponível.":
+        "Consultar a certificação do imóvel no SNCI/INCRA.",
 }
+# Nome interno de serviço/camada que não diz nada a quem compra terra. O de cima é aplicado antes.
+_INTERNAL_NAMES = (
+    (re.compile(r"\bIBAMA\s*[-/]\s*PAMGIA\b"), "IBAMA"),
+    (re.compile(r"\bPAMGIA\b"), "IBAMA"),
+    (re.compile(r"\bBase dos Dados\s*/\s*SICAR\b"), "SICAR"),
+    (re.compile(r"\bSICAR\s*/\s*WFS(?:\s+público)?\b"), "SICAR (base pública oficial)"),
+    (re.compile(r"\bSICAR\s+WFS\b"), "SICAR"),
+    (re.compile(r"\s*\bvia WFS(?:\s+público)?\b"), " na base pública oficial"),
+    (re.compile(r"\bWFS(?:\s+público)?\b"), "base pública oficial"),
+    (re.compile(r"\bGeoServer\b|\bgeoserver\b"), "base pública oficial"),
+    (re.compile(r"\bCamada\s+IDE-Sisema;\s*"), ""),
+)
 _INPE_FILE = re.compile(r"focos_10min_(20\d{2})(\d{2})(\d{2})_(\d{2})(\d{2})\.csv")
 
 
@@ -190,6 +254,8 @@ def _normalize_segment(out: str, zone: dict | None = None) -> str:
     out = re.sub(r"IDE-Sisema(?:[;,]\s*IDE-Sisema)+", "IDE-Sisema", _IDE_LAYER.sub("IDE-Sisema", out))
     for old, new in _PHRASES.items():
         out = out.replace(old, new)
+    for rx, new in _INTERNAL_NAMES:
+        out = rx.sub(new, out)
     out = _INPE_FILE.sub(lambda m: _zone_note(_inpe_bulletin(m), m, zone), out)
     out = _ISO_DT.sub(lambda m: _zone_note(_iso_dt(m), m, zone), out)
     out = _ISO_D.sub(_iso_d, out)
@@ -202,9 +268,26 @@ def _normalize_segment(out: str, zone: dict | None = None) -> str:
 
 
 def _drop_tail(text: str, start: int, replacement: str) -> str:
-    # Keep closing tags of the dropped tail so Paragraph markup stays balanced.
-    closing = "".join(re.findall(r"</[^>]+>", text[start:]))
-    return text[:start] + replacement + closing
+    # Keep closing tags of the dropped tail so Paragraph markup stays balanced — but only the ones
+    # whose opening tag survived the cut: a stray </x> breaks the parser as surely as a missing one.
+    head = text[:start]
+    if replacement == ".":
+        # Rabo técnico: o corte não pode deixar ".." nem espaço solto antes do ponto.
+        head = head.rstrip()
+        if head.endswith((".", "!", "?", ";", ">")):
+            replacement = ""
+    open_names = [m.group(1).lower() for m in re.finditer(r"<([A-Za-z][\w-]*)[^>]*>", head) if not m.group(0).startswith("</")]
+    for m in re.finditer(r"</([A-Za-z][\w-]*)>", head):
+        name = m.group(1).lower()
+        if name in open_names:
+            open_names.remove(name)
+    closing = ""
+    for m in re.finditer(r"</([A-Za-z][\w-]*)>", text[start:]):
+        name = m.group(1).lower()
+        if name in open_names:
+            open_names.remove(name)
+            closing += m.group(0)
+    return head + replacement + closing
 
 
 def normalize_text(text):
@@ -229,7 +312,7 @@ def normalize_text(text):
     return "".join(part if part.startswith("<") and part.endswith(">") else _normalize_segment(part, zone) for part in _TAG.split(out))
 
 
-_PENDING_TEXT = "Esta consulta não pôde ser confirmada nesta emissão. Isso não é tratado como ausência de ocorrência; a consulta é refeita na próxima emissão."
+_PENDING_TEXT = "Esta fonte não respondeu nesta emissão; a consulta é refeita na próxima."
 # F2: a count taken from the PAMGIA mirror envelope is never the property's certification.
 _LAND_SUMMARY = (
     "Certificação SIGEF e SNCI (INCRA): consulta pendente. "
@@ -237,6 +320,26 @@ _LAND_SUMMARY = (
 )
 # A row still built from the PAMGIA mirror means the official base was not asked in this emission: never "não respondeu".
 _MIRROR_CERT_ROW = ["SIGEF", "CONSULTA PENDENTE", "—", "Consulta ao INCRA não realizada nesta emissão; isso não indica ausência de certificação."]
+
+# T2: o que o produto NÃO consulta não é pendência nem ausência — é escopo. Fora da tabela de situação
+# das fontes e fora da matriz de vínculo, dito uma vez, em linha própria e honesta.
+OUT_OF_SCOPE_TERMS = ("registro de imóveis", "matrícula", "matricula", "detentor", "titular", "cartório", "cartorio")
+SCOPE_NOTE = (
+    "Este relatório não inclui matrícula, ônus nem titularidade do cartório de registro de imóveis: "
+    "essa certidão é pedida à parte, no cartório da comarca do imóvel."
+)
+
+
+_SOUNDS_LIKE_GAP = re.compile(
+    r"não entregar|nao entregar|não consultad|nao consultad|não respond|nao respond|"
+    r"ponto cego|pendente|ausência|ausencia|indisponí|indisponi"
+)
+
+
+def is_out_of_scope(name) -> bool:
+    """True quando a fonte/linha é de registro de imóveis — coisa que o produto não consulta."""
+    text = str(name or "").strip().lower()
+    return any(term in text for term in OUT_OF_SCOPE_TERMS)
 
 
 def _not_activated(status) -> bool:
@@ -261,8 +364,18 @@ def client_payload(payload: dict) -> dict:
             continue
         if _not_activated(src.get("status")) or "não ativado" in str(src.get("description") or "").lower():
             continue
+        # T2: fonte que o produto não consulta sai da tabela e vira a linha de escopo (SCOPE_NOTE).
+        if is_out_of_scope(src.get("name")):
+            continue
         status = str(src.get("status") or "").upper()
-        if status in ("INDISPONÍVEL", "INDISPONIVEL", "FALHOU", "ERRO"):
+        if status.startswith(("NÃO CONSULTAD", "NAO CONSULTAD")):
+            # Não é escopo (o de escopo já saiu acima). Se a fonte respondeu e só faltou parte,
+            # o texto dela explica o que veio e o que não veio; senão é pendência, dita baixo.
+            if "não disponibiliz" in str(src.get("description") or "").lower():
+                src = {**src, "status": "PARCIAL", "level": "attention"}
+            else:
+                src = {**src, "status": "CONSULTA PENDENTE", "level": "attention", "description": _PENDING_TEXT}
+        elif status in ("INDISPONÍVEL", "INDISPONIVEL", "FALHOU", "ERRO"):
             src = {**src, "status": "CONSULTA PENDENTE", "description": _PENDING_TEXT}
         elif str(src.get("description") or "").startswith(". Origem usada nesta emissão"):
             src = {**src, "status": "CONSULTADA", "level": "ok",
@@ -270,6 +383,16 @@ def client_payload(payload: dict) -> dict:
         sources.append(src)
     if "sources" in out:
         out["sources"] = sources
+        out["sources_scope_note"] = SCOPE_NOTE
+    # Último ponto: uma frase montada rio acima pode citar a fonte fora de escopo como base que
+    # "não entregou". O escopo é dito em linha própria; aqui essa frase sai.
+    for block in ("narrative", "conclusion"):
+        item = out.get(block)
+        if not isinstance(item, dict):
+            continue
+        for key, rows in list(item.items()):
+            if isinstance(rows, list) and all(isinstance(r, str) for r in rows):
+                item[key] = [r for r in rows if not (is_out_of_scope(r) and _SOUNDS_LIKE_GAP.search(r))]
     # H1: a layer or check that did not answer (or whose base cannot prove absence)
     # reads as a quiet pending consultation, never as a loud "fonte indisponível".
     env = out.get("environment")
@@ -304,7 +427,22 @@ def client_payload(payload: dict) -> dict:
         for key in ("certifications", "matrix"):
             rows = land.get(key)
             if isinstance(rows, list):
-                land[key] = [r for r in rows if not (isinstance(r, (list, tuple)) and len(r) > 1 and _not_activated(r[1]))]
+                land[key] = [
+                    r for r in rows
+                    if not (isinstance(r, (list, tuple)) and len(r) > 1 and _not_activated(r[1]))
+                    # T2: matrícula e detentor/titular não são pendência do Raio-X — são escopo (SCOPE_NOTE).
+                    and not (isinstance(r, (list, tuple)) and r and is_out_of_scope(r[0]))
+                ]
+        evidence = land.get("evidence")
+        if isinstance(evidence, dict):
+            land["evidence"] = {
+                **evidence,
+                "score": "O CAR NÃO PROVA O DONO",
+                "text": (
+                    "CAR e SIGEF mostram cadastro e georreferenciamento do imóvel; nenhum dos dois diz quem é o "
+                    "dono hoje. Quem diz é a matrícula do cartório de registro de imóveis, pedida à parte."
+                ),
+            }
         certs = land.get("certifications")
         if isinstance(certs, list):
             land["certifications"] = [

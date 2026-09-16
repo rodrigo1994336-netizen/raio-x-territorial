@@ -84,20 +84,22 @@ def build_premium_property_report_v6(path:str|Path,payload:dict[str,Any])->str:
     story += _section('A leitura que interessa para a decisão','Primeiro vem o que muda a decisão; depois, a evidência técnica que sustenta cada conclusão.')
     story.append(_decision_columns(nar))
     story += [Spacer(1,6*mm),Paragraph('O que fazer agora',S['h2'])]+_bullets(nar.get('next_steps') or con.get('diligence') or [],12)
-    story += [Spacer(1,4*mm),_callout('REGRA DO RAIO-X','Fonte indisponível vira ponto cego. O sistema nunca transforma “não consegui consultar” em “não existe problema”.','attention'),PageBreak()]
+    story += [Spacer(1,4*mm),_callout('CONSULTA PENDENTE NÃO É “NÃO EXISTE”','Quando uma fonte não responde, o item fica pendente e é consultado de novo. Pendente nunca vira “sem problema”.','attention'),PageBreak()]
 
     # 3 — cobertura
     stats=_source_stats(sources)
     story += _section('Cobertura das fontes','Uma fonte só conta como consultada quando efetivamente respondeu nesta emissão.')
-    story.append(_kpis([('Consultadas',stats['ok'],'responderam','CONSULTADA'),('Parciais',stats['partial'],'retorno incompleto','PARCIAL'),('Pendentes',stats['unavailable'],'refeitas na próxima emissão','ATENÇÃO'),('Outras',stats['other'],'não consultadas nesta emissão','ATENÇÃO')]))
+    # T2: "Outras — não consultadas nesta emissão" anunciava como ausência aquilo que o produto não consulta.
+    # O que está fora do escopo é dito uma vez, na linha de escopo abaixo do subtítulo desta seção.
+    story.append(_kpis([('Consultadas',stats['ok'],'responderam','CONSULTADA'),('Responderam em parte',stats['partial'],'trouxeram só parte','PARCIAL'),('Pendentes',stats['unavailable']+stats['other'],'refeitas na próxima emissão','ATENÇÃO')]))
     story += [Spacer(1,5*mm),_sources_table(sources),PageBreak()]
 
     # 4 — CAR e fundiário
     story += _section('CAR, cadastro e situação fundiária','Cadastro ambiental, georreferenciamento e propriedade registral respondem perguntas diferentes.')
     story.append(_info(car.get('fields') or [],[60*mm,105*mm],['Campo','Resultado']))
-    story += [Spacer(1,5*mm),Paragraph('SIGEF, SNCI, CCIR e matrícula',S['h2']),_info(land.get('certifications') or [],[28*mm,35*mm,24*mm,78*mm],['Base','Situação','Registros','Leitura'])]
+    story += [Spacer(1,5*mm),Paragraph('Certificação do INCRA e registro em cartório',S['h2']),_info(land.get('certifications') or [],[28*mm,35*mm,24*mm,78*mm],['Base','Situação','Registros','Leitura'])]
     if land.get('matrix'): story += [Spacer(1,4*mm),_info(land.get('matrix'),[35*mm,40*mm,28*mm,62*mm],['Base/campo','Resultado','Área','O que significa'])]
-    ev=land.get('evidence') or {}; story += [Spacer(1,4*mm),_callout('EVIDÊNCIA DOMINIAL',f"{_s(ev.get('score'),'NÃO CLASSIFICADA')} — {_s(ev.get('text'),'')}",'attention'),PageBreak()]
+    ev=land.get('evidence') or {}; story += [Spacer(1,4*mm),_callout('QUEM É O DONO',f"{_s(ev.get('score'),'SEM CLASSIFICAÇÃO')} — {_s(ev.get('text'),'')}",'attention'),PageBreak()]
 
     # 5 — ambiental
     pd=env.get('prodes') or {}

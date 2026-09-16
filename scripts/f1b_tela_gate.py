@@ -367,7 +367,7 @@ def judge_harness(r: dict) -> list[str]:
             leaked = [t for t in ("NÃO CONSULTADA", "PENDENTE DE IMPLEMENTAÇÃO", "implementação", "contador", "Reserva Legal", "Matrícula") if t in text]
             if leaked:
                 p.append(f"audit lists sources nobody asked or internal text ({when_}): {leaked}")
-            if "CAR / SICAR" not in text or "MTE — Trabalho Escravo" not in text or "NÃO VERIFICADA" not in text:
+            if "CAR / SICAR" not in text or "Trabalho escravo (Ministério do Trabalho)" not in text or "NÃO DÁ PARA RESPONDER PELO CAR" not in text:
                 p.append(f"audit lost the sources that answered ({when_}): {text[:160]}")
         for text in (a.get("after") or "", a.get("rebuilt") or ""):
             if "IBAMA — áreas embargadas RESPONDEU · COM OCORRÊNCIA" not in text or "INPE — PRODES RESPONDEU · COM OCORRÊNCIA" not in text \

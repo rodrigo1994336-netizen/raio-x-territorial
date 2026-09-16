@@ -24,19 +24,19 @@ MTE_ID = "mte_slave_labor"
 SINAFLOR_ID = "sinaflor"
 
 PENDING_STATUS = "CONSULTA PENDENTE"
-PENDING_REASON = "A fonte oficial não respondeu agora. Nenhum resultado foi presumido."
+PENDING_REASON = "A fonte oficial não respondeu agora."
 
 # Only an answer the source itself marked as answered can become found/not_found.
 _MTE_ANSWERED = {
     "checked_clear": ("not_found", "SEM OCORRÊNCIA"),
     "checked_hit": ("found", "OCORRÊNCIA LOCALIZADA"),
 }
-_MTE_BLOCKED = {"blocked_missing_owner_identity": ("blocked", "NÃO VERIFICADA")}
+_MTE_BLOCKED = {"blocked_missing_owner_identity": ("blocked", "NÃO DÁ PARA RESPONDER PELO CAR")}
 _SINAFLOR_ANSWERED = {
-    "checked_clear": ("not_found", "SEM AUTORIZAÇÃO SINAFLOR LOCALIZADA"),
-    "checked_spatial_record_unconfirmed": ("found", "REGISTRO ESPACIAL · VÍNCULO NÃO CONFIRMADO"),
-    "checked_authorization_overlap": ("found", "AUTORIZAÇÃO SINAFLOR LOCALIZADA"),
-    "checked_authorization_overlap_unconfirmed": ("found", "AUTORIZAÇÃO LOCALIZADA · VIGÊNCIA NÃO CONFIRMADA"),
+    "checked_clear": ("not_found", "NENHUMA AUTORIZAÇÃO SOBRE O IMÓVEL"),
+    "checked_spatial_record_unconfirmed": ("found", "REGISTRO NA REGIÃO, SEM LIGAÇÃO COM O IMÓVEL"),
+    "checked_authorization_overlap": ("found", "AUTORIZAÇÃO SOBRE O IMÓVEL"),
+    "checked_authorization_overlap_unconfirmed": ("found", "AUTORIZAÇÃO SOBRE O IMÓVEL, PRAZO NÃO CONFIRMADO"),
 }
 
 

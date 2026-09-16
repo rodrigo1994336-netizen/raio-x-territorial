@@ -885,7 +885,7 @@ def _card(reading: dict[str, Any], texts: dict[str, Any]) -> dict[str, str]:
         return {"dot": "diligence", "status": "Desmatamento dentro do imóvel", "reason": size + reason}
     if reading["state"] == "pending":
         return {"dot": "source_failed", "status": "Consulta pendente",
-                "reason": "O PRODES não respondeu por completo nesta consulta. Nada foi presumido."}
+                "reason": "O mapa de desmatamento do INPE não respondeu por completo nesta consulta."}
     return {"dot": "checked_clear", "status": "Sem desmatamento dentro do imóvel", "reason": texts["boundary_short"]}
 
 

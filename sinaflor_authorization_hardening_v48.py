@@ -236,7 +236,7 @@ def query_sinaflor_authorization(car_code: str) -> dict[str, Any]:
 
     meta = metadata()
     if not meta.get("ok"):
-        return {"ok": False, "answered": False, "state": "source_failed", "source": sf.SOURCE_NAME, "source_page": sf.SOURCE_PAGE, "queried_at": queried_at, "data_date": meta.get("data_date"), "data_date_status": meta.get("data_date_status", "unavailable"), "reason": "A fonte oficial SINAFLOR/PAMGIA não respondeu com metadados utilizáveis. Nenhuma ausência foi presumida.", "detail": meta.get("detail")}
+        return {"ok": False, "answered": False, "state": "source_failed", "source": sf.SOURCE_NAME, "source_page": sf.SOURCE_PAGE, "queried_at": queried_at, "data_date": meta.get("data_date"), "data_date_status": meta.get("data_date_status", "unavailable"), "reason": "A fonte oficial do IBAMA não respondeu de forma utilizável agora.", "detail": meta.get("detail")}
 
     car = fetch_car_live_resilient(code)
     if not car.get("ok") or not car.get("geometry") or not car.get("bbox"):
@@ -244,7 +244,7 @@ def query_sinaflor_authorization(car_code: str) -> dict[str, Any]:
 
     candidates = sf._query_candidates(car["bbox"])
     if not candidates.get("ok"):
-        return {"ok": False, "answered": False, "state": "source_failed", "source": sf.SOURCE_NAME, "source_page": sf.SOURCE_PAGE, "queried_at": queried_at, "data_date": meta.get("data_date"), "data_date_status": meta.get("data_date_status"), "reason": "A consulta espacial à camada oficial SINAFLOR/PAMGIA falhou. Nenhuma ausência foi presumida.", "detail": candidates.get("detail"), "candidate_count": candidates.get("candidate_count")}
+        return {"ok": False, "answered": False, "state": "source_failed", "source": sf.SOURCE_NAME, "source_page": sf.SOURCE_PAGE, "queried_at": queried_at, "data_date": meta.get("data_date"), "data_date_status": meta.get("data_date_status"), "reason": "A consulta à base oficial do IBAMA não respondeu agora.", "detail": candidates.get("detail"), "candidate_count": candidates.get("candidate_count")}
 
     props = car.get("properties") or {}
     exact = evaluate_features(
@@ -255,7 +255,7 @@ def query_sinaflor_authorization(car_code: str) -> dict[str, Any]:
         car_uf=props.get("uf") or code[:2],
     )
     if not exact.get("ok"):
-        return {"ok": False, "answered": False, "state": "source_failed", "source": sf.SOURCE_NAME, "source_page": sf.SOURCE_PAGE, "queried_at": queried_at, "data_date": meta.get("data_date"), "data_date_status": meta.get("data_date_status"), "reason": "A geometria não pôde ser confrontada com segurança. Nenhuma ausência foi presumida.", "detail": exact.get("detail")}
+        return {"ok": False, "answered": False, "state": "source_failed", "source": sf.SOURCE_NAME, "source_page": sf.SOURCE_PAGE, "queried_at": queried_at, "data_date": meta.get("data_date"), "data_date_status": meta.get("data_date_status"), "reason": "O desenho do imóvel não pôde ser conferido com segurança agora.", "detail": exact.get("detail")}
 
     matches = exact.get("matches") or []
     record_dates = [m.get("data_updated_at") for m in matches if m.get("data_updated_at")]

@@ -20,11 +20,11 @@ GUARD_KEYS={
 }
 
 SERVICES={
-    'terra_indigena':('Terra Indígena','FUNAI / IBAMA-PAMGIA','https://pamgia.ibama.gov.br/server/rest/services/01_Publicacoes_Bases/lim_terra_indigena_a/FeatureServer'),
-    'unidade_conservacao':('Unidade de Conservação','CNUC/MMA / IBAMA-PAMGIA','https://pamgia.ibama.gov.br/server/rest/services/BasesSincronizadas/lim_unidades_conserva%C3%A7%C3%A3o_mma_a/FeatureServer'),
-    'quilombola':('Território Quilombola','INCRA / IBAMA-PAMGIA','https://pamgia.ibama.gov.br/server/rest/services/BasesSincronizadas/lim_quilombos_incra_a/FeatureServer'),
-    'assentamento':('Assentamento','INCRA / IBAMA-PAMGIA','https://pamgia.ibama.gov.br/server/rest/services/01_Publicacoes_Bases/assentamentos_incra/FeatureServer'),
-    'embargo_icmbio':('Embargo ICMBio','ICMBio / IBAMA-PAMGIA','https://pamgia.ibama.gov.br/server/rest/services/01_Publicacoes_Bases/adm_embargo_icmbio_a/FeatureServer'),
+    'terra_indigena':('Terra Indígena','FUNAI · mapa público do IBAMA','https://pamgia.ibama.gov.br/server/rest/services/01_Publicacoes_Bases/lim_terra_indigena_a/FeatureServer'),
+    'unidade_conservacao':('Unidade de Conservação','CNUC/MMA · mapa público do IBAMA','https://pamgia.ibama.gov.br/server/rest/services/BasesSincronizadas/lim_unidades_conserva%C3%A7%C3%A3o_mma_a/FeatureServer'),
+    'quilombola':('Território Quilombola','INCRA · mapa público do IBAMA','https://pamgia.ibama.gov.br/server/rest/services/BasesSincronizadas/lim_quilombos_incra_a/FeatureServer'),
+    'assentamento':('Assentamento','INCRA · mapa público do IBAMA','https://pamgia.ibama.gov.br/server/rest/services/01_Publicacoes_Bases/assentamentos_incra/FeatureServer'),
+    'embargo_icmbio':('Embargo ICMBio','ICMBio · mapa público do IBAMA','https://pamgia.ibama.gov.br/server/rest/services/01_Publicacoes_Bases/adm_embargo_icmbio_a/FeatureServer'),
 }
 
 
@@ -97,4 +97,4 @@ async def query_territorial_constraints(car_geometry:dict[str,Any],bbox:list[flo
     all_geoms=[]
     for r in results.values(): all_geoms.extend(r.pop('_geoms',[]) or [])
     union=unary_union(all_geoms) if all_geoms else None
-    return {'ok':any(r.get('ok') for r in results.values()),'services':results,'area_unique_all_constraints_ha':round(_area_ha(union),6) if union is not None else 0.0,'source':'Fontes públicas territoriais via IBAMA/PAMGIA'}
+    return {'ok':any(r.get('ok') for r in results.values()),'services':results,'area_unique_all_constraints_ha':round(_area_ha(union),6) if union is not None else 0.0,'source':'Bases públicas territoriais · mapa público do IBAMA'}

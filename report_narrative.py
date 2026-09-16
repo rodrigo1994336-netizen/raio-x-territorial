@@ -38,9 +38,15 @@ def _consulted(srcs, term):
 
 
 def _missing_or_partial(srcs):
+    # T2: fonte que o Raio-X não consulta (registro de imóveis) não é base que "não entregou": é escopo,
+    # dito uma vez em linha própria. Listá-la aqui transforma uma decisão de produto em falha nossa.
+    from report_ptbr_v50 import is_out_of_scope
+
     out=[]
     for x in srcs or []:
         st=str(x.get('status') or '').upper()
+        if is_out_of_scope(x.get('name')):
+            continue
         if any(k in st for k in ('NÃO CONSULT','NAO CONSULT','INDISPON','PARCIAL','RESTRITA','NÃO EXECUT','NAO EXECUT')):
             out.append(str(x.get('name') or 'fonte'))
     return out

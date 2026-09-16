@@ -39,7 +39,7 @@ def _patch_autos(payload: dict, result: dict):
         level='critical' if count else 'ok'
         badge='ALTO' if count else 'BAIXO'
         payload['compliance'].append({'label':'Autos / multas IBAMA','text':text,'badge':badge,'level':level})
-        payload['sources'].append({'name':'IBAMA / PAMGIA - autos de infração','description':'Autos ambientais por coordenada, com deduplicação para reduzir contagem superestimada. Dados pessoais não são exibidos no relatório.','status':'CONSULTADA','level':'ok'})
+        payload['sources'].append({'name':'IBAMA — autos de infração','description':'Autos ambientais por coordenada, com deduplicação para reduzir contagem superestimada. Dados pessoais não são exibidos no relatório.','status':'CONSULTADA','level':'ok'})
         cats=payload.get('conclusion',{}).get('categories') or []
         for row in cats:
             if row.get('label')=='Fiscalização':
@@ -60,7 +60,7 @@ def _patch_autos(payload: dict, result: dict):
         payload['enforcement']['auto_count']='NÃO CONSULTADO'
         payload['enforcement']['fine_total_text']='fonte indisponível nesta emissão'
         payload['compliance'].append({'label':'Autos / multas IBAMA','text':'A fonte de autos não respondeu nesta emissão.','badge':'NÃO CONSULTADO','level':'neutral'})
-        payload['sources'].append({'name':'IBAMA / PAMGIA - autos de infração','description':'A consulta falhou ou não respondeu nesta emissão.','status':'INDISPONÍVEL','level':'attention'})
+        payload['sources'].append({'name':'IBAMA — autos de infração','description':'A consulta falhou ou não respondeu nesta emissão.','status':'INDISPONÍVEL','level':'attention'})
     return payload
 
 

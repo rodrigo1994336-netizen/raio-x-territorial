@@ -13,7 +13,7 @@ VIEWPORTS = ((375, 812, "375"), (768, 900, "768"), (1440, 900, "1440"))
 EXPECTED = (
     "Nenhuma inconsistência cadastral: o imóvel não se sobrepõe a outro CAR e está inteiramente dentro de Curvelo/MG.",
     "Sobreposição CAR × CAR", "0,0000 ha · 0,00% do imóvel", "Município · Curvelo/MG",
-    "Estado · Minas Gerais (MG)", "Dentro do limite", "Snapshot SICAR: 04/08/2026",
+    "Estado · Minas Gerais (MG)", "Dentro do limite", "Dados do SICAR de 04/08/2026",
     "Vegetação nativa", "Reserva legal", "Nenhuma feição desta classe no imóvel",
     "APP", "1,4547 ha", "1,4556 ha · 100,00%", "Uso restrito", "Área consolidada",
     "12,5701 ha", "12,5778 ha · 100,00%", "Hidrografia", "Campo não publicado",

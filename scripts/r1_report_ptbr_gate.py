@@ -80,7 +80,11 @@ def test_normalize_text() -> None:
         "Climatologia FEB": "Climatologia FEV",
         "rain_30d_mm: 31.46": "chuva em 30 dias (mm): 31,46",
         "Não respondeu nesta emissão: HTTPStatusError: Server error for url 'https://x/export?bbox=1'": "Não respondeu nesta emissão.",
-        "<b>Esri</b> Não respondeu nesta emissão: ReadTimeout x</b>": "<b>Esri</b> Não respondeu nesta emissão.</b>",
+        # T2: o </b> do rabo cortado já estava fechado antes do corte; devolvê-lo deixava marcação solta.
+        "<b>Esri</b> Não respondeu nesta emissão: ReadTimeout x</b>": "<b>Esri</b> Não respondeu nesta emissão.",
+        "<b>Solo</b> 0 interseção(ões). TimeoutExpired:Command '['curl', '-sS']' timed out": "<b>Solo</b> 0 interseção(ões).",
+        '<b>Rua:</b> <link href="https://maps.google.com/?q=1,2" color="#0E603B">abrir</link>':
+            '<b>Rua:</b> <link href="https://maps.google.com/?q=1,2" color="#0E603B">abrir</link>',
         '<font size="7.5">14.795 ha</font>': '<font size="7.5">14,80 ha</font>',
         # Already Portuguese or identifiers: untouched.
         "1.243,57 ha": "1.243,57 ha",

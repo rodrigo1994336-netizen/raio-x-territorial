@@ -41,6 +41,10 @@ jobs:
         env:
           RX_RELEASE: OFF
         run: PYTHONPATH=. python scripts/r1_report_ptbr_gate.py
+      - name: T2 textos do cliente (sem jargao, sigla solta, nome interno, estado tecnico ou erro cru no portal, em /novo e no PDF; escopo do cartorio fora da tabela de fontes; controles positivos por mutacao)
+        env:
+          RX_RELEASE: V8_OPERATIONAL_ZERO_COST
+        run: PYTHONPATH=. python scripts/t2_textos_cliente_gate.py
       - name: V2 small truths gate (Brasília time with the note on PDF and screen; only an empty exact SICAR answer is 404, any failure is 503 pending, on the booted report and portal chains and the PDF viewer; rules and positive controls; needs Node)
         env:
           RX_RELEASE: OFF

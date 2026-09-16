@@ -55,7 +55,7 @@ def _patch_extra_territorial(payload:dict,result:dict):
 def _patch_restricted_parity(payload:dict):
     pstat=premium_status();by_code={x['code']:x for x in pstat.get('integrations') or []}
     mapping=[
-        ('sncr_ccir','SNCR / CCIR','CCIR e dados cadastrais do imóvel rural mediante habilitação oficial.'),
+        ('sncr_ccir','Cadastro do imóvel no INCRA (CCIR)','Certificado de cadastro do imóvel rural, mediante habilitação oficial.'),
         ('onr_matricula','ONR / RI Digital — Matrícula','Matrícula atualizada e serviços registrais.'),
         ('onr_onus','ONR / RI Digital — Ônus','Certidão de ônus e atos registrais.'),
         ('onr_pesquisa_bens','ONR — Pesquisa Nacional de Bens','Pesquisa patrimonial autorizada conforme regras do serviço.'),

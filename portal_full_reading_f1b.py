@@ -160,7 +160,7 @@ FULL_READING_UI = r'''
    // The time the engine produced the data, never the time the browser received it; unknown -> not shown.
    const stamp=[isNum(e.at)?`Consulta feita em ${when(e.at)}`:'',isNum(e.refilled)?`pendências consultadas de novo em ${when(e.refilled)}`:''].filter(Boolean).join(' · ');
    return head(stamp?`<span class="rx-f1b-when">${esc(stamp+BRT_NOTE)}</span>`:'')+`<div class="rx-f1b-rows">${e.rows.map(rowHtml).join('')}</div>`+fillHtml(e)}
-  return head()+'<div class="rx-f1b-state" data-rx-f1b-pending="1"><span><span><strong>Consulta pendente.</strong> As fontes oficiais não responderam agora; nada foi presumido.</span></span><button type="button" class="rx-f1b-retry" data-rx-f1b-retry>Consultar de novo</button></div>';
+  return head()+'<div class="rx-f1b-state" data-rx-f1b-pending="1"><span><span><strong>Consulta pendente.</strong> As fontes oficiais não responderam agora.</span></span><button type="button" class="rx-f1b-retry" data-rx-f1b-retry>Consultar de novo</button></div>';
  }
 
  // QUICK covers the portal proxy budget (engine wake-up wait 70 s + 22 s + one retry); STATUS is above the

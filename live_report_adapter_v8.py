@@ -42,7 +42,7 @@ def _patch_prodes_truth(payload:dict,result:dict):
             ['Histórico PRODES completo',unavailable],
             ['Recorte pós-31/07/2019',unavailable],
         ]+original
-        pd['meaning']='A fonte PRODES não respondeu nesta emissão. Indisponibilidade não é tratada como ausência de ocorrência. '+str(pd.get('meaning') or '')
+        pd['meaning']='O mapa de desmatamento do INPE não respondeu nesta emissão. '+str(pd.get('meaning') or '')
         rules=payload.setdefault('interpretation_rules',[])
         rule='Fonte PRODES indisponível nunca é interpretada como zero ocorrência ou ausência de desmatamento.'
         if rule not in rules: rules.append(rule)
@@ -141,7 +141,7 @@ def _patch_minerals(payload:dict,result:dict):
     mining['critical_minerals']=mineral_codes
     mining['rare_earth_count']=rare_count if anm_ok else 'PENDENTE'
     mining['rare_earth_signal']='SIM' if rare_signal else ('NÃO IDENTIFICADO' if screen_ok else 'PENDENTE')
-    mining['rare_earth_source']='ANM/SIGMINE + Serviço Geológico do Brasil (GeoSGB/WMS)'
+    mining['rare_earth_source']='ANM/SIGMINE + Serviço Geológico do Brasil'
     if not anm_ok:mining['pending']=True
     mining['critical_rows']=[
         ['Processos ANM classificados como minerais críticos',mining['critical_process_count'] if anm_ok else 'CONSULTA PENDENTE'],

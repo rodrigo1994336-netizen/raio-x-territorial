@@ -42,7 +42,7 @@ async def critical_minerals_v18(car_code:str):
         'anm_available':anm_available,'sgb_available':sgb_available,
         'anm':{**classified,'process_count':classified.get('process_count') if classified.get('process_count') is not None else exact.get('occurrence_count',0),'exact':exact},
         'source':'ANM/SIGMINE + Serviço Geológico do Brasil (GeoSGB)',
-        'note':'Consulta direta da aba. Não depende da geração do dossiê completo; falha de uma fonte não é tratada como ausência.'
+        'note':'Consulta feita direto nesta aba, sem precisar gerar o relatório.'
     }
 
 async def _heavy_agro(code:str):
@@ -86,10 +86,10 @@ async def agropecuaria_v18(car_code:str):
 def install_ui_fixes():
     html=portal_v8.PORTAL_HTML
     html=html.replace("const active=d.persistence==='durable'","const active=['durable','operational_nonpersistent'].includes(d.persistence)")
-    html=html.replace("${active?'PERSISTENTE — PRONTO':'AGUARDANDO VÍNCULO DO BANCO'}","${d.persistence==='durable'?'PERSISTENTE — PRONTO':(active?'OPERACIONAL — FREE':'BACKEND DE ALERTAS INDISPONÍVEL')}")
+    html=html.replace("${active?'PERSISTENTE — PRONTO':'AGUARDANDO VÍNCULO DO BANCO'}","${d.persistence==='durable'?'DISPONÍVEL':(active?'DISPONÍVEL':'AINDA NÃO DISPONÍVEL')}")
     html=html.replace("Pastagem/vigor MapBiomas só exibirá percentuais quando o worker raster devolver métricas reais do polígono.","${d.pasture?.state==='ready'?`Pastagem MapBiomas ${d.pasture.year||''}: <b>${fmt(d.pasture.pasture_area_ha,2)} ha</b> (${fmt(d.pasture.pasture_share_pct,1)}% do CAR). Vegetação nativa: ${fmt(d.pasture.native_vegetation_share_pct,1)}%.`:'MapBiomas não respondeu nesta consulta; isso não significa ausência de pastagem.'}")
     html=html.replace("Fontes restritas permanecem preparadas — OFF até habilitação.","Fontes públicas são consultadas automaticamente. Serviços cadastrais/registrários pagos aparecem abaixo apenas como integrações opcionais que exigem credencial ou contratação.")
-    html=html.replace("<span class=\"rx-pill\">${x.ready?'ATIVO':'PREPARADO — OFF'}</span>","<span class=\"rx-pill\">${x.ready?'ATIVO':'OPCIONAL / REQUER HABILITAÇÃO'}</span>")
+    html=html.replace("<span class=\"rx-pill\">${x.ready?'DISPONÍVEL':'AINDA NÃO DISPONÍVEL'}</span>","<span class=\"rx-pill\">${x.ready?'DISPONÍVEL':'AINDA NÃO DISPONÍVEL'}</span>")
     portal_v8.PORTAL_HTML=html
 
 install_ui_fixes()

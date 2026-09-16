@@ -159,7 +159,7 @@ async def arcgis_bbox(url,bbox,out_fields='*',in_sr='4674',out_sr='4674',f='geoj
 
 async def query_sigef(bbox):
     fields='parcela_co,situacao_i,codigo_imo,data_submi,data_aprov,status,nome_area,registro_m,registro_d,municipio_,uf_id'
-    r=await arcgis_bbox(SIGEF_MIRROR,bbox,fields,'4674','4674','json');r['source']='IBAMA/PAMGIA espelho público SIGEF-INCRA'
+    r=await arcgis_bbox(SIGEF_MIRROR,bbox,fields,'4674','4674','json');r['source']='SIGEF/INCRA · mapa público do IBAMA'
     # The mirror stopped in 04/2022 and holds only public parcels: its silence is not an answer.
     if r.get('ok') or r.get('answer_problem'):
         layer_guard.apply_verdict(r,await layer_guard.zero_verdict_async('sigef_publico_espelho',zero=not r.get('feature_count'),answer_problem=r.get('answer_problem')))

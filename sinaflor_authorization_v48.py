@@ -32,7 +32,7 @@ except Exception:  # pragma: no cover - shapely < 2 compatibility
 
 from sicar_integrity_v47 import area_ha_grs80
 
-SOURCE_NAME = "IBAMA — SINAFLOR / PAMGIA"
+SOURCE_NAME = "IBAMA — autorizações de corte de vegetação"
 LAYER_URL = (
     "https://pamgia.ibama.gov.br/server/rest/services/"
     "SINAFLORGEO/sinaflor_proj_externo_merge_a/FeatureServer/6"
@@ -336,7 +336,7 @@ def query_sinaflor_authorization(car_code: str) -> dict[str, Any]:
             "source_page": SOURCE_PAGE,
             "queried_at": queried_at,
             "data_date": metadata.get("data_date"),
-            "reason": "A fonte oficial SINAFLOR/PAMGIA não respondeu com metadados utilizáveis. Nenhuma ausência foi presumida.",
+            "reason": "A fonte oficial do IBAMA não respondeu de forma utilizável agora.",
             "detail": metadata.get("detail"),
         }
 
@@ -364,7 +364,7 @@ def query_sinaflor_authorization(car_code: str) -> dict[str, Any]:
             "source_page": SOURCE_PAGE,
             "queried_at": queried_at,
             "data_date": metadata.get("data_date"),
-            "reason": "A consulta espacial à camada oficial SINAFLOR/PAMGIA falhou. Nenhuma ausência foi presumida.",
+            "reason": "A consulta à base oficial do IBAMA não respondeu agora.",
             "detail": candidates.get("detail"),
             "candidate_count": candidates.get("candidate_count"),
         }
@@ -379,7 +379,7 @@ def query_sinaflor_authorization(car_code: str) -> dict[str, Any]:
             "source_page": SOURCE_PAGE,
             "queried_at": queried_at,
             "data_date": metadata.get("data_date"),
-            "reason": "A geometria não pôde ser confrontada com segurança. Nenhuma ausência foi presumida.",
+            "reason": "O desenho do imóvel não pôde ser conferido com segurança agora.",
             "detail": exact.get("detail"),
         }
 
