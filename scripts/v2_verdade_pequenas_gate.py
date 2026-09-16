@@ -759,7 +759,9 @@ REPORT_CHAIN_MUTATIONS = {
 PORTAL_CHAIN_MUTATIONS = {
     "portal lookup routes reverted (body lost, exports and tabs say not located)": ({
         "portal_car_resilient": [("raise lookup_http_error(car,not_found_detail=body,pending_detail=body,invalid_detail=body)", "raise lookup_http_error(car)")],
-        "portal_api": [("        raise lookup_http_error(car)\n    feature = {", "        raise HTTPException(status_code=404 if car.get('not_found') else 502, detail='CAR não localizado ou SICAR indisponível.')\n    feature = {")],
+        # As duas exportações passaram a buscar o CAR pelo mesmo _car_para_exportar (dentro do escopo de
+        # cancelamento): a âncora é a resposta honesta dele, e a mutação agora atinge GeoJSON e KML de uma vez.
+        "portal_api": [("        raise lookup_http_error(car)\n    return car", "        raise HTTPException(status_code=404 if car.get('not_found') else 502, detail='CAR não localizado ou SICAR indisponível.')\n    return car")],
         "portal_property_tabs": [("    if not car.get('ok'):raise lookup_http_error(car)\n",
                                   "    if not car.get('ok'):raise __import__('fastapi').HTTPException(status_code=404 if car.get('not_found') else 502,detail='Imóvel não localizado')\n")],
     }, ("portal_car_body", "portal_exports", "portal_tabs")),
