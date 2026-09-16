@@ -743,20 +743,27 @@ def r_cadeia_prazo():
             task = asyncio.create_task(handler(CAR))
             if not await await_until(lambda: "pid" in first or task.done(), 20.0):
                 fail(f"{name}: o curl falso não nasceu em 20 s", children_now() - before)
+            # Com o caminho de reserva TAMBÉM dentro do escopo, o instrumento estoura o prazo dele junto:
+            # o handler pode terminar em "consulta pendente" antes de o gate olhar. Isso é resposta honesta;
+            # o que não pode é sobrar curl (conferido logo abaixo).
             if task.done() and not task.cancelled() and task.exception() is not None \
-                    and getattr(task.exception(), "status_code", None) != 504:
+                    and getattr(task.exception(), "status_code", None) not in (502, 503, 504):
                 fail(f"{name}: falhou antes de o curl do prazo cair: {task.exception()!r}"[:300], children_now() - before)
             if "pid" not in first:
                 fail(f"{name}: terminou sem consultar o SICAR ({task.result() if task.done() else 'em curso'!r})"[:300])
             pid = first["pid"]
             took = await asyncio.to_thread(assert_gone, pid, f"{name}: curl do prazo")
         if fallback:
-            # o caminho de reserva consulta de novo (o CAR sozinho ainda serve). Ele também corre dentro do
-            # escopo: cancelar a tarefa derruba o curl dele SEM o desligamento de emergência.
-            task.cancel()
-            with contextlib.suppress(BaseException):
-                await task
-            await assert_none_left(before, f"{name}: curl do caminho de reserva depois do cancelamento")
+            # o caminho de reserva consulta de novo (o CAR sozinho ainda serve) e corre dentro do escopo: com o
+            # prazo dele também estourado pelo instrumento, o handler termina em "consulta pendente" e NÃO
+            # deixa curl vivo — sem o desligamento de emergência que antes escondia a sobra.
+            try:
+                outcome = await asyncio.wait_for(asyncio.shield(task), 20)
+            except BaseException as exc:  # noqa: BLE001
+                outcome = exc
+            if not (isinstance(outcome, dict) or getattr(outcome, "status_code", None) in (502, 503, 504)):
+                fail(f"{name}: resposta inesperada do caminho de reserva: {outcome!r}"[:300], children_now() - before)
+            await assert_none_left(before, f"{name}: curl do caminho de reserva")
             return f"{name} {took}s"
         try:
             outcome = await asyncio.wait_for(task, 10)
@@ -980,6 +987,12 @@ def runtime_modules() -> list[Path]:
     return [src(p.name) for p in sorted(ROOT.glob("*.py")) if p.is_file()]
 
 
+def sem_motivo_declarado(declared: dict[str, str]) -> list[str]:
+    """Módulo declarado sem motivo de verdade. "sobrou" não é motivo: exige uma frase."""
+    faltando = sorted(name for name, why in declared.items() if len(str(why).strip()) < 20)
+    return [f"módulo com processo direto sem motivo declarado: {faltando}"] if faltando else []
+
+
 @regra("inventario_processos")
 def r_inventario():
     problems: list[str] = []
@@ -1047,9 +1060,11 @@ def r_inventario():
     if direct != set(DIRECT_DECLARED):
         problems.append(f"lista de chamadas diretas mudou: novas {sorted(direct - set(DIRECT_DECLARED))} "
                         f"sumidas {sorted(set(DIRECT_DECLARED) - direct)}")
-    sem_motivo = sorted(name for name, why in DIRECT_DECLARED.items() if len(str(why).strip()) < 20)
-    if sem_motivo:
-        problems.append(f"módulo com processo direto sem motivo declarado: {sem_motivo}")
+    problems.extend(sem_motivo_declarado(DIRECT_DECLARED))
+    # controle positivo da própria checagem: mutar o ARQUIVO do gate não tem efeito (o gate roda do original,
+    # só os módulos vem do MUTANT_DIR), então a prova de que esta regra não é inerte fica aqui.
+    if not sem_motivo_declarado({**DIRECT_DECLARED, "br_bridge.py": " "}):
+        problems.append("a checagem de motivo declarado não pega motivo vazio (regra inerte)")
     assert not problems, "inventário: " + " | ".join(problems)
     sites = sum(SCOPED_SITES.values())
     return (f"{len(direct)} módulos com processo direto limitado por timeout, todos com motivo declarado; "
@@ -1441,7 +1456,8 @@ MUTATIONS = [
     ("escopo_da_rota", "external_process_lifecycle.py",
      "    return any(scope.is_set() for scope in _SCOPES.get())", "    return False", "ainda vivo"),
     ("escopo_prazo_to_thread", "external_process_lifecycle.py",
-     "    except BaseException:\n        event.set()\n        raise", "    except BaseException:\n        raise", "ainda vivo"),
+     "    except BaseException:\n        event.set()\n        if seen:", "    except BaseException:\n        if seen:",
+     "ainda vivo"),
     ("escopo_prazo_to_thread", "external_process_lifecycle.py", "    if asyncio.isfuture(aw):\n        raise TypeError(",
      "    if False:\n        raise TypeError(", "tarefa/Future criada antes aceita"),
     ("cancelado_antes_de_nascer", "external_process_lifecycle.py",
@@ -1493,9 +1509,6 @@ MUTATIONS = [
      "check=True,stdout=subprocess.DEVNULL", "sem timeout"),
     ("inventario_processos", "sicar_detail_sources_v2.py", "runner=run_managed_process)", "runner=br_bridge.subprocess_runner)",
      "lista de chamadas diretas mudou"),
-    ("inventario_processos", "scripts/m1_processos_gate.py",
-     '"jwt_runtime_bootstrap.py": "pip no arranque do processo, antes de existir requisi\u00e7\u00e3o; nada a cancelar"',
-     '"jwt_runtime_bootstrap.py": ""', "sem motivo declarado"),
     # ---- prazo estourado + cliente desistiu
     ("desistencia_apos_prazo", "report_v9_patch.py",
      "car=await wait_for_cancelling_processes(asyncio.to_thread(base.fetch_car_live,code),_CAR_FALLBACK_S,request=request)",
