@@ -51,6 +51,9 @@ Regras
                              critical_minerals_v34, climate_detail, groundwater_detail, crop_context): o
                              cliente desiste com o curl da primeira consulta vivo -> nada sobra, nada nasce
                              depois, resposta 499.
+  cenario_importa_sozinho    todo módulo que os cenários importam tem que importar sozinho, em processo
+                             limpo: remendo de HTML que depende de outro módulo ter vindo antes derruba o
+                             arranque do portal e faz o cenário reprovar pelo motivo errado.
   escopo_no_pool             ThreadPoolExecutor não copia o contexto: o sondador de camadas IDE embrulha cada
                              trabalho em in_current_scope, e o curl do trabalhador cai no prazo do escopo.
   copia_de_escopo_no_pool    REGRA DE FORMA: todo submit/map/run_in_executor dos módulos do servidor embrulha
@@ -988,6 +991,34 @@ def r_desistencia_simples():
                 mod._SERVER_STOPPING.clear()
             assert_no_children(f"depois de {name}")
     return "desistência na primeira consulta não deixa filho nem abre consulta nova: " + ", ".join(notes)
+
+
+# Este portão importa os módulos do handler fora da ordem do arranque real (uma regra por vez, em processo
+# próprio). Módulo que remenda o HTML do portal e derruba o arranque quando a âncora não casa precisa declarar
+# de quem herdou a âncora: senão o cenário reprova por motivo alheio ao que prova E o portal fica preso a uma
+# ordem que ninguém escreveu. Medido em 16/09: portal_mining_resilience_v34 só casava as duas âncoras depois de
+# portal_property_tabs, e o controle de desistencia_sem_reserva reprovou com mining_resilience_anchor_missing.
+@regra("cenario_importa_sozinho")
+def r_cenario_importa_sozinho():
+    """Cada módulo que os cenários importam tem que importar sozinho, em processo limpo."""
+    modulos = sorted({m for m, *_ in PRAZO_HANDLERS} | {m for m, _ in DESISTENCIA_HANDLERS}
+                     | {m for m, _ in DESISTENCIA_SEM_RESERVA})
+    if not modulos:
+        fail("instrumento quebrado: nenhum módulo de cenário encontrado nas listas do portão")
+    env = dict(os.environ, PYTHONIOENCODING="utf-8", RX_RELEASE="OFF", RX_RASTERIO_RUNTIME_INSTALL="off")
+    env.pop("RX_M1_MUTANT_DIR", None)
+    # sys.path[0] do -c é o cwd (a árvore original): a cópia mutada precisa entrar antes dele, à mão.
+    prefixo = f"import sys;sys.path.insert(0,{MUTANT_DIR!r});" if MUTANT_DIR else ""
+    ruins: list[str] = []
+    for nome in modulos:
+        proc = subprocess.run([sys.executable, "-c", prefixo + f"import {nome}"], cwd=str(ROOT), env=env,
+                              capture_output=True, timeout=600)
+        if proc.returncode:
+            linhas = [x for x in (proc.stdout + proc.stderr).decode("utf-8", "ignore").splitlines() if x.strip()]
+            ruins.append(f"{nome} -> {linhas[-1][:200] if linhas else 'sem saída'}")
+    if ruins:
+        fail("módulo do cenário não importa sozinho (o remendo depende da ordem do arranque): " + "; ".join(ruins))
+    return f"{len(modulos)} módulos do cenário importam sozinhos: {', '.join(modulos)}"
 
 
 @regra("escopo_no_pool", linux=True)
@@ -1991,6 +2022,9 @@ MUTATIONS = [
     ("desistencia_sem_reserva", "portal_mining_resilience_v34.py",
      "asyncio.to_thread(fetch_car_live_resilient,code),9,request=request)",
      "asyncio.to_thread(fetch_car_live_resilient,code),9)", "curl depois da desistência"),
+    ("cenario_importa_sozinho", "portal_mining_resilience_v34.py",
+     "import portal_property_tabs  # noqa: F401 - dono das âncoras kpi-servico-geologico e kpi-terras-raras\n",
+     "", "não importa sozinho"),
     ("ci_roda_o_gate", ".github/workflows/quality-gate.yml", "python scripts/m1_processos_gate.py --exigir-linux",
      "python scripts/m1_processos_gate.py", "não exige Linux"),
 ]
