@@ -413,7 +413,7 @@ def build_live_payload(result: dict[str, Any], report_id: str, generated_at: str
         },
         'sources': [
             _source_row('SICAR', car.get('ok'), 'Cadastro Ambiental Rural consultado via WFS público.'),
-            _source_row('IBAMA / PAMGIA', emb_ok, 'Base oficial de áreas embargadas do IBAMA, com cruzamento exato pela geometria do CAR.'),
+            _source_row('IBAMA — áreas embargadas', emb_ok, 'Base oficial de áreas embargadas do IBAMA, com cruzamento exato pela geometria do CAR.'),
             _source_row('INPE / TerraBrasilis / PRODES', prodes.get('ok'), 'Camadas PRODES consultadas por WFS e intersectadas geometricamente com o CAR.'),
             _source_row('ANM / SIGMINE', anm.get('ok'), 'Processos minerários consultados e intersectados geometricamente.'),
             _source_row('Registro de imóveis', None, 'Matrícula e titularidade não consultadas nesta emissão.'),

@@ -38,9 +38,15 @@ def _consulted(srcs, term):
 
 
 def _missing_or_partial(srcs):
+    # T2: fonte que o Raio-X não consulta (registro de imóveis) não é base que "não entregou": é escopo,
+    # dito uma vez em linha própria. Listá-la aqui transforma uma decisão de produto em falha nossa.
+    from report_ptbr_v50 import is_out_of_scope
+
     out=[]
     for x in srcs or []:
         st=str(x.get('status') or '').upper()
+        if is_out_of_scope(x.get('name')):
+            continue
         if any(k in st for k in ('NÃO CONSULT','NAO CONSULT','INDISPON','PARCIAL','RESTRITA','NÃO EXECUT','NAO EXECUT')):
             out.append(str(x.get('name') or 'fonte'))
     return out
@@ -122,7 +128,9 @@ def build_narrative(payload: dict[str,Any]) -> dict[str,Any]:
         attention.append(f"Há {post_n} ocorrência(s) PRODES no recorte pós-31/07/2019. A análise de crédito deve conferir documentação ambiental e a regra vigente; o Raio-X não transforma isso em impedimento automático.")
     missing=_missing_or_partial(sources)
     if missing:
-        attention.append(f"Algumas bases não entregaram resposta completa nesta emissão: {', '.join(missing[:6])}. Isso é ponto cego, não resultado negativo.")
+        # T2: "ponto cego" e "não entregaram resposta" são a sinceridade que parece defeito. A frase continua
+        # verdadeira, dita como pendência: pendente nunca vira "sem problema".
+        attention.append(f"Algumas consultas ficaram pendentes nesta emissão: {', '.join(missing[:6])}. Pendente não quer dizer que não existe ocorrência.")
 
     next_steps=[]
     if not _consulted(sources,'registro de imóveis'): next_steps.append('Obter matrícula atualizada e verificar titularidade, ônus e cadeia dominial.')

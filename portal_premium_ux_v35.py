@@ -10,7 +10,9 @@ def _patch_climate(html: str) -> str:
     if old in html:
         html = html.replace(old, new, 1)
 
-    old_end = "loaded.clima=true}catch(e){pane('clima','<div class=\"rx-error\">'+esc(e.message)+'</div>')}}"
+    # T2: o catch da aba Clima deixou de imprimir e.message (erro cru na tela). A âncora acompanha o
+    # texto novo; sem isto o remendo virava no-op silencioso e a aba perdia o "dados anteriores mantidos".
+    old_end = "loaded.clima=true}catch(e){pane('clima','<div class=\"rx-error\">Não foi possível carregar esta parte agora.</div>')}}"
     new_end = "loaded.clima=true;const hp=q('#rxPane-clima');if(hp){hp.dataset.rxClimateReady='1';hp.classList.remove('rx-local-refresh');hp.querySelector('.rx-period-refresh')?.remove()}}catch(e){const hp=q('#rxPane-clima');if(hp&&hp.dataset.rxClimateReady==='1'){hp.classList.remove('rx-local-refresh');hp.querySelector('.rx-period-refresh')?.remove();let n=hp.querySelector('.rx-inline-error');if(!n){n=document.createElement('div');n.className='rx-inline-error';hp.prepend(n)}n.textContent='Não foi possível atualizar este período agora. Os dados anteriores foram mantidos.'}else{pane('clima','<div class=\"rx-error\">Não foi possível carregar os dados climáticos agora. Tente novamente.</div>')}}}"
     if old_end in html:
         html = html.replace(old_end, new_end, 1)

@@ -314,11 +314,11 @@ async function main() {
   }
   // ---- "ver fontes e datas": the open box after the full analysis answered (Altamira: embargo and PRODES found)
   if (input.audit) {
-    const IDS = [['car', 'CAR / SICAR'], ['embargo', 'Embargos'], ['prodes', 'PRODES'], ['indigenous_land', 'Terra Indígena'], ['legal_reserve', 'Reserva Legal'], ['conservation_unit', 'Un. Conservação'], ['registry', 'Matrícula'], ['public_forest', 'Floresta Pública'], ['snci', 'SNCI'], ['mte_slave_labor', 'MTE — Trabalho Escravo'], ['sinaflor', 'SINAFLOR — Supressão']];
+    const IDS = [['car', 'CAR / SICAR'], ['embargo', 'Embargos'], ['prodes', 'PRODES'], ['indigenous_land', 'Terra Indígena'], ['legal_reserve', 'Reserva Legal'], ['conservation_unit', 'Un. Conservação'], ['registry', 'Matrícula'], ['public_forest', 'Floresta Pública'], ['snci', 'SNCI'], ['mte_slave_labor', 'Trabalho escravo (Ministério do Trabalho)'], ['sinaflor', 'Autorização para cortar vegetação (IBAMA)']];
     const ALT = complete(CAR, { embargos_ibama: { ok: true, exact: { available: true, occurrence_count: 2, area_unique_ha: 3.2 } } });
     const env = makeEnv(async (u) => u.includes('/v1/live/quick/') ? { body: { ok: true, mode: 'quick-cache', analysis: ALT, deep_state: { state: 'ready', completed_at: STAMP_OLD, analysis: ALT } } } : { status: 404, body: {} });
     const rowEls = {
-      mte_slave_labor: { dataset: { state: 'blocked_missing_owner_identity' }, querySelector: s => s === '.rx48-check-status' ? { textContent: 'NÃO VERIFICADA' } : s === '.rx48-check-reason' ? { textContent: 'O CAR não traz CPF/CNPJ do titular.' } : null },
+      mte_slave_labor: { dataset: { state: 'blocked_missing_owner_identity' }, querySelector: s => s === '.rx48-check-status' ? { textContent: 'NÃO DÁ PARA RESPONDER PELO CAR' } : s === '.rx48-check-reason' ? { textContent: 'A lista é de empregadores, não de imóveis.' } : null },
     };
     for (const [id] of IDS) if (!rowEls[id] && id !== 'car') rowEls[id] = { dataset: {}, querySelector: () => null };
     let box = null;

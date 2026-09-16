@@ -32,7 +32,7 @@ def _panel_sync_sinaflor_v48(car_code: str, *, cancel_event=None) -> dict[str, A
         raise RuntimeError("sinaflor_source_missing_from_canonical_registry")
     sinaflor.update({
         "state": "on_demand",
-        "reason": "Aguardando confronto espacial com a camada pública IBAMA/PAMGIA.",
+        "reason": "Conferindo as autorizações de corte de vegetação sobre o desenho do imóvel.",
     })
     out["compliance_sources"] = compliance
     audit = dict(base.get("source_audit") or {})
@@ -65,21 +65,27 @@ UI = r'''
 <script>
 (function(){
  const q=s=>document.querySelector(s);
- const fmtDate=v=>{if(!v)return 'não publicada pela camada';const s=String(v),m=s.match(/^(\d{4})-(\d{2})-(\d{2})/);return m?`${m[3]}/${m[2]}/${m[1]}`:s};
+ const fmtDate=v=>{const s=String(v||''),m=s.match(/^(\d{4})-(\d{2})-(\d{2})/);return m?`${m[3]}/${m[2]}/${m[1]}`:s};
+ // T2: sem data publicada, a linha dizia "dado de não publicada pela camada". Diz o que é, em português.
+ const metaData=v=>v?`dado de ${fmtDate(v)}`:'sem data publicada';
  const fmtQuery=v=>{if(!v)return 'não realizada';try{return new Date(v).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'})}catch(e){return String(v)}};
  const ha=v=>{const n=Number(v);return Number.isFinite(n)?n.toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:4}):'—'};
  function row(card){return card?.querySelector('.rx45-check[data-source="sinaflor"]')||null}
- const SF_ID='sinaflor',SF_LABEL='SINAFLOR — Supressão';
+ const SF_ID='sinaflor',SF_LABEL='Autorização para cortar vegetação (IBAMA)';
+ // T2: o título vem do servidor (portal_panel_sources_f2.status_labels) — uma fonte de verdade só.
+ // Escrito nos dois lugares, o texto divergiu: o Python dizia uma coisa e o JS outra.
+ const SF_STATUS=__RX_SF_STATUS__;
  // F2: same vocabulary as portal_panel_sources_f2.classify_sinaflor — only an answer the source marked as answered leaves "pending".
  function view(d){if(!d||typeof d!=='object'||d.ok!==true||d.answered!==true)return null;const first=(d.matches||[])[0]||{},state=d.state;
-   if(state==='checked_clear')return {state,status:'SEM AUTORIZAÇÃO SINAFLOR LOCALIZADA',reason:d.reason};
-   if(state==='checked_spatial_record_unconfirmed'){const num=first.authorization_number?`ASV ${first.authorization_number}: `:'';return {state,status:'REGISTRO ESPACIAL · VÍNCULO NÃO CONFIRMADO',reason:`${num}intersecta espacialmente o CAR, mas a geometria publicada é territorial ampla e não identifica este CAR. O imóvel não foi declarado como autorizado.`}}
-   if(state==='checked_authorization_overlap'){const num=first.authorization_number?`ASV ${first.authorization_number}`:'Autorização';return {state,status:'AUTORIZAÇÃO SINAFLOR LOCALIZADA',reason:`${num} com interseção espacial confirmada${first.overlap_ha!=null?` (${ha(first.overlap_ha)} ha no CAR)`:''}. A validade para eventual desmatamento depende também da data do evento.`}}
-   if(state==='checked_authorization_overlap_unconfirmed'){const num=first.authorization_number?`ASV ${first.authorization_number}: `:'';return {state,status:'AUTORIZAÇÃO LOCALIZADA · VIGÊNCIA NÃO CONFIRMADA',reason:`${num}há vínculo espacial/local, mas vigência/status não confirmam cobertura atual. Não foi concluído que eventual desmatamento estava autorizado.`}}
+   // T2: a razão do servidor traz ASV, UAS, SINAFLOR e "intersectando" — o cartão escreve a dele, em português de comprador.
+   if(state==='checked_clear')return {state,status:SF_STATUS[state],reason:'Nenhuma autorização de corte de vegetação com desenho sobre este imóvel foi localizada na base pública do IBAMA. Autorização dada por órgão do Estado pode não aparecer aqui.'};
+   if(state==='checked_spatial_record_unconfirmed'){const num=first.authorization_number?`Autorização nº ${first.authorization_number}: `:'';return {state,status:SF_STATUS[state],reason:`${num}o desenho publicado dessa autorização de corte de vegetação cobre esta região, mas é largo e não identifica este imóvel. Não dá para dizer que a autorização é dele — nem que não é.`}}
+   if(state==='checked_authorization_overlap'){const num=first.authorization_number?`Autorização nº ${first.authorization_number}`:'Autorização';return {state,status:SF_STATUS[state],reason:`${num} de corte de vegetação, com desenho sobre o imóvel${first.overlap_ha!=null?` (${ha(first.overlap_ha)} ha no CAR)`:''}. Se houve corte, a data dele também entra na conta para saber se estava autorizado.`}}
+   if(state==='checked_authorization_overlap_unconfirmed'){const num=first.authorization_number?`Autorização nº ${first.authorization_number}: `:'';return {state,status:SF_STATUS[state],reason:`${num}o desenho cobre o imóvel, mas o prazo e a situação da autorização não foram confirmados. Não está dito que um corte de vegetação estava autorizado.`}}
    return null}
- function paint(card,e){const el=row(card),U=window.rxV48UpdateComplianceSource;if(!el||typeof U!=='function')return;if(e.phase==='checking'){U(SF_ID,{state:'checking',label:SF_LABEL,status:'CONSULTANDO',reason:'Confrontando o perímetro do CAR com os polígonos públicos ASV/UAS do SINAFLOR. BBOX não conta como ocorrência.',meta:'Fonte: IBAMA/PAMGIA',answered:false},card);return}const d=e.data||{},v=e.phase==='done'?view(d):null;if(v){U(SF_ID,{state:v.state,label:SF_LABEL,status:v.status,reason:v.reason,meta:`Fonte: IBAMA/PAMGIA · dado: ${fmtDate(d.data_date)} · consulta: ${fmtQuery(d.queried_at)}`,answered:true},card);return}
+ function paint(card,e){const el=row(card),U=window.rxV48UpdateComplianceSource;if(!el||typeof U!=='function')return;if(e.phase==='checking'){U(SF_ID,{state:'checking',label:SF_LABEL,status:'CONSULTANDO',reason:'Conferindo as autorizações de corte de vegetação sobre o desenho do imóvel.',meta:'Fonte: IBAMA',answered:false},card);return}const d=e.data||{},v=e.phase==='done'?view(d):null;if(v){U(SF_ID,{state:v.state,label:SF_LABEL,status:v.status,reason:v.reason,meta:`Fonte: IBAMA · ${metaData(d.data_date)} · consulta em ${fmtQuery(d.queried_at)}`,answered:true},card);return}
    // Not answered: no data date is claimed for a query that did not return.
-   U(SF_ID,{state:'source_failed',label:SF_LABEL,status:'CONSULTA PENDENTE',reason:'A fonte oficial não respondeu agora. Nenhum resultado foi presumido.',meta:`Fonte: IBAMA/PAMGIA${d.queried_at?` · consulta: ${fmtQuery(d.queried_at)}`:''}`,answered:false},card)}
+   U(SF_ID,{state:'source_failed',label:SF_LABEL,status:'CONSULTA PENDENTE',reason:'A fonte oficial não respondeu agora.',meta:`Fonte: IBAMA${d.queried_at?` · consulta em ${fmtQuery(d.queried_at)}`:''}`,answered:false},card)}
  const sfPause=ms=>new Promise(res=>setTimeout(res,ms));
  async function query(car,alive,attempts=2){let last=null;for(let i=0;i<attempts;i++){if(i){await sfPause(4000);if(!alive())return {abandoned:true}}try{const r=await fetch(`/v1/live/conformity/sinaflor/${encodeURIComponent(car)}`),d=await r.json();if(r.ok&&d&&typeof d==='object')last=d;if(r.ok&&view(d))return {done:true,data:d}}catch(e){}}return {done:false,data:last}}
  // F2: driven by the rx45:panel-rendered event; the per-CAR memory repaints a re-render without a new query.
@@ -91,6 +97,13 @@ UI = r'''
 })();
 </script>
 '''
+
+import json as _json
+
+_SF_STATUS_TOKEN = "__RX_SF_STATUS__"
+if _SF_STATUS_TOKEN not in UI:  # âncora do próprio módulo: sem ela o título do cartão sairia "undefined"
+    raise RuntimeError("sinaflor_status_token_missing")
+UI = UI.replace(_SF_STATUS_TOKEN, _json.dumps(portal_panel_sources_f2.status_labels(portal_panel_sources_f2.SINAFLOR_ID), ensure_ascii=False))
 
 portal_panel_sources_f2.install()  # idempotent; MTE normally injected it already
 if "RX_CONFORMITY_SINAFLOR_V48" not in portal_v8.PORTAL_HTML:

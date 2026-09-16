@@ -657,7 +657,7 @@ def all_places_contract():
         "deploy_app.py": "incra_acervo_f2.summary_item",
         "live_report_adapter_v19.py": "v18.generate_live_report(with_incra_acervo(result), car_code)",
         # The CAFIR locator still reads the frozen mirror: it must say so, and never read its silence as absence.
-        "cafir_name_search_v44.py": "'source':'SIGEF/INCRA — espelho público IBAMA/PAMGIA'",
+        "cafir_name_search_v44.py": "'source':f'SIGEF/INCRA {source.lower()} · mapa público do IBAMA'",
         # The gate is required on every PR, not only by hand.
         ".github/workflows/quality-gate.yml": "PYTHONPATH=. python scripts/f2_incra_sigef_snci_gate.py",
     }

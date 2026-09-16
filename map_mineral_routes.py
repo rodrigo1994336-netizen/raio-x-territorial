@@ -36,7 +36,7 @@ async def mineral_wms_layers(mineral:str='terras_raras'):
         return {'ok':False,'mineral':code,'layers':[],'detail':err,'source':'SGB / GeoSGB WMS'}
     selected=[x for x in layers if code in (x.get('minerals') or [])]
     return {
-        'ok':True,'mineral':code,'source':'Serviço Geológico do Brasil — GeoSGB/WMS',
+        'ok':True,'mineral':code,'source':'Serviço Geológico do Brasil',
         'wms_url':'https://geoservicos.sgb.gov.br/geoserver/ows',
         'layers':selected[:40],
         'interpretation':'Camadas de interesse/potencial geológico. Não significam jazida, recurso ou reserva economicamente explotável.'

@@ -371,7 +371,9 @@ def sicar_flight_contract() -> None:
 # Fingerprint of the upstream loader text V46 replaces, for RX_RELEASE=V8_OPERATIONAL_ZERO_COST.
 # If it changes, an upstream module edited the region: port that change into _W1A_LOADER (or
 # confirm it is obsolete) and update this pin in the same commit.
-W1A_REGION_SHA256 = "edccd3db74ed34b7c6eff0b6621aeb67847879e7859a49c40482f3eba4aae6b3"
+# T2: o carregador antigo (o que V46 substitui) deixou de imprimir o texto cru do erro no mapa.
+# O carregador do V46 ja dizia "Parte dos imoveis desta area ainda nao carregou.": nada a portar.
+W1A_REGION_SHA256 = "754078a7434a2430c108bed75f72d4cbb9829aa6032d0270573e3723cf7d8fcf"
 
 
 def region_drift_contract() -> None:

@@ -78,8 +78,8 @@ if OLD_FLOW not in portal_v8.PORTAL_HTML:
 portal_v8.PORTAL_HTML=portal_v8.PORTAL_HTML.replace(OLD_FLOW,NEW_FLOW,1)
 
 portal_v8.PORTAL_HTML=portal_v8.PORTAL_HTML.replace(
-    'Fontes: SICAR/WFS para imóveis e MapBiomas Coleção 11 para perfil de uso/cobertura.',
-    'Fontes: CAFIR/Receita Federal para busca por denominação; SICAR/WFS para CAR; MapBiomas Coleção 11 para perfil de uso/cobertura.'
+    'Fontes: SICAR para os imóveis e MapBiomas Coleção 11 para o perfil de uso do solo.',
+    'Fontes: CAFIR/Receita Federal para a busca por nome; SICAR para o CAR; MapBiomas Coleção 11 para o perfil de uso do solo.'
 )
 
 if 'RX_CAFIR_INVERSE_V44' not in portal_v8.PORTAL_HTML:

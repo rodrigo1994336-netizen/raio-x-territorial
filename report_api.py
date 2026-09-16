@@ -161,7 +161,7 @@ async def _query_autos_resilient(geometry,bbox,attempts=3):
         try:
             last=await query_ibama_autos(geometry,bbox)
             if last.get('ok'): return last
-        except Exception as e: last={'ok':False,'source':'IBAMA/PAMGIA - autos de infração ambiental','detail':f'{type(e).__name__}:{e}'}
+        except Exception as e: last={'ok':False,'source':'IBAMA — autos de infração ambiental','detail':f'{type(e).__name__}:{e}'}
         if i<attempts-1: await asyncio.sleep(.7*(i+1))
     return last
 

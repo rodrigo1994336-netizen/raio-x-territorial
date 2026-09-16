@@ -6,7 +6,7 @@ import iphan_sicg
 EXTRA_SERVICES={
     'floresta_publica':(
         'Floresta Pública',
-        'Serviço Florestal Brasileiro / IBAMA-PAMGIA',
+        'Serviço Florestal Brasileiro · mapa público do IBAMA',
         'https://pamgia.ibama.gov.br/server/rest/services/01_Publicacoes_Bases/lim_floresta_publica_a/FeatureServer',
     ),
     # F2: a checagem de sítio arqueológico usa o IPHAN oficial (pontos + polígonos).

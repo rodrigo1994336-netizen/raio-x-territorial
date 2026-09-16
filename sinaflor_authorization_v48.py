@@ -32,7 +32,7 @@ except Exception:  # pragma: no cover - shapely < 2 compatibility
 
 from sicar_integrity_v47 import area_ha_grs80
 
-SOURCE_NAME = "IBAMA — SINAFLOR / PAMGIA"
+SOURCE_NAME = "IBAMA — autorizações de corte de vegetação"
 LAYER_URL = (
     "https://pamgia.ibama.gov.br/server/rest/services/"
     "SINAFLORGEO/sinaflor_proj_externo_merge_a/FeatureServer/6"
@@ -310,7 +310,7 @@ def query_sinaflor_authorization(car_code: str) -> dict[str, Any]:
             "source_page": SOURCE_PAGE,
             "queried_at": queried_at,
             "data_date": None,
-            "reason": f"Dependência do CAR indisponível: {type(exc).__name__}.",
+            "reason": "O desenho do imóvel não pôde ser carregado agora.",
             "detail": "car_resolver_dependency_unavailable",
         }
     if not CAR_RE.match(code):
@@ -322,7 +322,7 @@ def query_sinaflor_authorization(car_code: str) -> dict[str, Any]:
             "source_page": SOURCE_PAGE,
             "queried_at": queried_at,
             "data_date": None,
-            "reason": "Código CAR inválido; a checagem espacial não foi executada.",
+            "reason": "O código do CAR não está num formato válido; a conferência não foi feita.",
             "detail": "invalid_car_format",
         }
 
@@ -336,7 +336,7 @@ def query_sinaflor_authorization(car_code: str) -> dict[str, Any]:
             "source_page": SOURCE_PAGE,
             "queried_at": queried_at,
             "data_date": metadata.get("data_date"),
-            "reason": "A fonte oficial SINAFLOR/PAMGIA não respondeu com metadados utilizáveis. Nenhuma ausência foi presumida.",
+            "reason": "A base pública do IBAMA não respondeu agora.",
             "detail": metadata.get("detail"),
         }
 
@@ -350,7 +350,7 @@ def query_sinaflor_authorization(car_code: str) -> dict[str, Any]:
             "source_page": SOURCE_PAGE,
             "queried_at": queried_at,
             "data_date": metadata.get("data_date"),
-            "reason": "O perímetro do CAR não pôde ser obtido; a checagem espacial SINAFLOR não foi concluída.",
+            "reason": "O desenho do imóvel não pôde ser obtido; a conferência não foi concluída.",
             "detail": car.get("detail") or "car_geometry_unavailable",
         }
 
@@ -364,7 +364,7 @@ def query_sinaflor_authorization(car_code: str) -> dict[str, Any]:
             "source_page": SOURCE_PAGE,
             "queried_at": queried_at,
             "data_date": metadata.get("data_date"),
-            "reason": "A consulta espacial à camada oficial SINAFLOR/PAMGIA falhou. Nenhuma ausência foi presumida.",
+            "reason": "A base pública do IBAMA não respondeu agora.",
             "detail": candidates.get("detail"),
             "candidate_count": candidates.get("candidate_count"),
         }
@@ -379,7 +379,7 @@ def query_sinaflor_authorization(car_code: str) -> dict[str, Any]:
             "source_page": SOURCE_PAGE,
             "queried_at": queried_at,
             "data_date": metadata.get("data_date"),
-            "reason": "A geometria não pôde ser confrontada com segurança. Nenhuma ausência foi presumida.",
+            "reason": "O desenho do imóvel não pôde ser conferido com segurança agora.",
             "detail": exact.get("detail"),
         }
 
@@ -406,9 +406,10 @@ def query_sinaflor_authorization(car_code: str) -> dict[str, Any]:
         return {
             **base,
             "state": "checked_clear",
+            # T2: texto impresso no cartão do cliente; sem ASV, UAS, SINAFLOR nem "polígono".
             "reason": (
-                "Nenhum polígono público de ASV/UAS do SINAFLOR foi localizado intersectando o imóvel. "
-                "Isso não prova ausência de autorização emitida fora do SINAFLOR ou em sistema estadual competente."
+                "Nenhuma autorização de corte de vegetação com desenho sobre este imóvel foi localizada na "
+                "base pública do IBAMA. Autorização dada por órgão do Estado pode não aparecer aqui."
             ),
         }
 
@@ -418,16 +419,16 @@ def query_sinaflor_authorization(car_code: str) -> dict[str, Any]:
     if current_confirmed:
         state = "checked_authorization_overlap"
         reason = (
-            f"{len(matches)} autorização(ões) ASV/UAS com interseção espacial positiva foram localizadas; "
-            f"{len(current_confirmed)} têm vigência/status compatíveis com a data da consulta. "
-            "A existência da autorização não substitui a comparação temporal com o evento de desmatamento."
+            f"{len(matches)} autorização(ões) de corte de vegetação com desenho sobre o imóvel; "
+            f"{len(current_confirmed)} com prazo compatível com a data da consulta. "
+            "Se houve corte, a data dele também entra na conta para saber se estava autorizado."
         )
     else:
         state = "checked_authorization_overlap_unconfirmed"
         reason = (
-            f"{len(matches)} autorização(ões) ASV/UAS intersectam o imóvel, mas nenhuma teve vigência/status atual confirmados "
-            f"({len(non_current)} não atuais; {len(unknown)} indeterminadas). "
-            "Não foi concluído que eventual desmatamento estava autorizado."
+            f"{len(matches)} autorização(ões) de corte de vegetação com desenho sobre o imóvel, mas nenhuma "
+            f"teve prazo e situação atual confirmados ({len(non_current)} fora do prazo; {len(unknown)} sem informação). "
+            "Não está dito que um corte de vegetação estava autorizado."
         )
     return {**base, "state": state, "reason": reason}
 

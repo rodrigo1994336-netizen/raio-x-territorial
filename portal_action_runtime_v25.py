@@ -70,7 +70,7 @@ UI=r'''
  function report(kind,b,msg){try{fetch('/v1/ui/client-error',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({kind,button:ident(b),message:String(msg||''),path:location.pathname}),keepalive:true})}catch(e){}}
  function flash(b){if(!b)return;b.classList.add('rx-action-flash');setTimeout(()=>b.classList.remove('rx-action-flash'),180)}
  document.addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;flash(b);const id=ident(b);b.dataset.rxLastClick=String(Date.now());if(/ANÁLISE COMPLETA|RAIO-X PECUÁRIO|GERAR PDF|PDF PREPARANDO|MONITORAR/i.test(b.textContent||''))status('Ação recebida: '+(b.textContent||id).trim().replace(/…/g,'')+'.','ok',1400)},true);
- window.addEventListener('error',e=>{status('Erro na interface: '+String(e.message||'falha inesperada'),'bad',6000);report('window-error',null,e.message||'error')});
+ window.addEventListener('error',e=>{status('Algo não funcionou nesta tela. Atualize a página em alguns segundos.','bad',6000);report('window-error',null,e.message||'error')});
  window.addEventListener('unhandledrejection',e=>{const m=e.reason?.message||e.reason||'falha assíncrona';status('A ação falhou: '+String(m),'bad',6000);report('promise-rejection',null,m)});
  const nativeFetch=window.fetch.bind(window);
  // W1a: an aborted request (the map left that area, the user closed a lookup) is not a connection failure.
@@ -78,7 +78,7 @@ UI=r'''
    try{const r=await nativeFetch(input,init);if(!r.ok&&String(input).includes('/v1/')){report('http-'+r.status,null,String(input))}return r}
    catch(e){if(e?.name==='AbortError'||init?.signal?.aborted)throw e;report('network-error',null,e?.message||e);status('Falha de conexão ao executar a ação.','bad',5000);throw e}
  };
- async function readiness(){try{const r=await nativeFetch('/v1/ui/readiness',{cache:'no-store'}),d=await r.json();if(!d.ok){status('Portal carregou parcialmente. Atualize a página em alguns segundos.','bad',6500);report('readiness',null,(d.missing_routes||[]).join(','))}}catch(e){}}
+ async function readiness(){try{const r=await nativeFetch('/v1/ui/readiness',{cache:'no-store'}),d=await r.json();if(!d.ok){status('A página não carregou por inteiro. Atualize em alguns segundos.','bad',6500);report('readiness',null,(d.missing_routes||[]).join(','))}}catch(e){}}
  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',readiness);else readiness();
  window.rxUiStatus=status;
 })();

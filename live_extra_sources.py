@@ -100,7 +100,7 @@ async def query_ibama_autos(car_geometry: dict[str, Any], bbox: list[float]):
             data = None
         problem = layer_guard.arcgis_answer_problem(r.status_code, data)
         if problem:
-            return layer_guard.apply_verdict({'ok': False, 'status': r.status_code, 'source': 'IBAMA/PAMGIA - autos de infração ambiental'},
+            return layer_guard.apply_verdict({'ok': False, 'status': r.status_code, 'source': 'IBAMA — autos de infração ambiental'},
                                              {'answer': False, 'state': 'pending', 'reason': problem})
         features = data.get('features') or []
         car = shape(car_geometry)
@@ -127,11 +127,11 @@ async def query_ibama_autos(car_geometry: dict[str, Any], bbox: list[float]):
             'occurrence_count': len(kept),
             'fine_total': total,
             'autos': kept,
-            'source': 'IBAMA/PAMGIA - autos de infração ambiental',
+            'source': 'IBAMA — autos de infração ambiental',
             'deduplicated': True,
         }
         # H1: a zero from an empty or broken layer is pending, never "nenhum auto".
         verdict = await layer_guard.zero_verdict_async('ibama_autos', zero=not kept)
         return layer_guard.apply_verdict(out, verdict)
     except Exception as e:
-        return {'ok':False,'error':type(e).__name__,'detail':str(e)[:300],'source':'IBAMA/PAMGIA - autos de infração ambiental'}
+        return {'ok':False,'error':type(e).__name__,'detail':str(e)[:300],'source':'IBAMA — autos de infração ambiental'}

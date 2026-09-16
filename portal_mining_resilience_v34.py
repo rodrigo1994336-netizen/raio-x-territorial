@@ -66,14 +66,21 @@ async def critical_minerals_v34(car_code:str,request:Request=None):
     }
 
 
+# T2: "fonte indisponível" e "consulta inconclusiva" são estado técnico na cara do cliente; o rótulo
+# "SGB" é sigla sem explicação. Remendo por string que não casa é silencioso — cada âncora é conferida.
+_FIXES=[
+    ("kpi-servico-geologico",
+     "['Serviço Geológico',fmt((s.hit_layers||[]).length,0),'camadas com sinal']",
+     "['Serviço Geológico',d.state==='unavailable'?'CONSULTA PENDENTE':fmt((s.hit_layers||[]).length,0),d.state==='unavailable'?'consulta pendente':'camadas com sinal']"),
+    ("kpi-terras-raras",
+     "['Terras raras',rare?'SINAL':'SEM SINAL ESPECÍFICO','nas fontes que responderam']",
+     "['Terras raras',d.state==='unavailable'?'CONSULTA PENDENTE':(rare?'SINAL':'SEM SINAL ESPECÍFICO'),d.state==='unavailable'?'consulta pendente':'nas fontes que responderam']"),
+]
 html=portal_v8.PORTAL_HTML
-html=html.replace(
-    "['SGB',fmt((s.hit_layers||[]).length,0),'camadas com sinal']",
-    "['SGB',d.state==='unavailable'?'NÃO CONCLUÍDO':fmt((s.hit_layers||[]).length,0),d.state==='unavailable'?'fonte indisponível':'camadas com sinal']"
-)
-html=html.replace(
-    "['Terras raras',rare?'SINAL':'SEM SINAL ESPECÍFICO','nas fontes que responderam']",
-    "['Terras raras',d.state==='unavailable'?'NÃO CONCLUÍDO':(rare?'SINAL':'SEM SINAL ESPECÍFICO'),d.state==='unavailable'?'consulta inconclusiva':'nas fontes que responderam']"
-)
+_perdidas=[nome for nome,busca,_ in _FIXES if busca not in html]
+if _perdidas:
+    raise RuntimeError('mining_resilience_anchor_missing:'+','.join(_perdidas))
+for _nome,_busca,_troca in _FIXES:
+    html=html.replace(_busca,_troca)
 portal_v8.PORTAL_HTML=html
-print('RX_MINING_RESILIENCE_V34=fail_soft_no_false_negative',flush=True)
+print(f'RX_MINING_RESILIENCE_V34=fail_soft_no_false_negative anchors:{len(_FIXES)}/{len(_FIXES)}',flush=True)

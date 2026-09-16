@@ -62,7 +62,7 @@ def _header_footer(c,doc):
     c.drawRightString(PAGE_W-16*mm,PAGE_H-13.4*mm,f"CAR {_s(prop.get('car_code'),'—')}")
     c.setStrokeColor(LINE); c.line(16*mm,13*mm,PAGE_W-16*mm,13*mm)
     c.setFillColor(MUTED); c.setFont('Helvetica',5.4)
-    c.drawString(16*mm,8.7*mm,'Dados reais das fontes consultadas. Fonte indisponível nunca é tratada como ausência de ocorrência.')
+    c.drawString(16*mm,8.7*mm,'Dados das fontes públicas oficiais consultadas nesta emissão. Consulta pendente não quer dizer que não existe ocorrência.')
     c.drawRightString(PAGE_W-16*mm,8.7*mm,f'Página {doc.page}')
     c.restoreState()
 
@@ -159,7 +159,7 @@ def build_premium_property_report_v5(path:str|Path,payload:dict[str,Any])->str:
     # 2 — decisão prática
     story += _section('A leitura que interessa para a decisão','Antes das tabelas, responda três perguntas: o que está bom, o que merece atenção e o que pode virar custo.')
     story.append(_decision_columns(nar)); story += [Spacer(1,6*mm),Paragraph('O que fazer agora',S['h2'])]+_bullets(nar.get('next_steps') or con.get('diligence') or [],12)
-    story += [Spacer(1,4*mm),_callout('REGRA DO RAIO-X','Se uma fonte falha, ela aparece como ponto cego. O sistema nunca transforma “não consegui consultar” em “não existe problema”.','attention')]
+    story += [Spacer(1,4*mm),_callout('CONSULTA PENDENTE NÃO É “NÃO EXISTE”','Quando uma fonte não responde, o item fica pendente e é consultado de novo. Pendente nunca vira “sem problema”.','attention')]
     story.append(PageBreak())
 
     # 3 — cobertura real de fontes
@@ -171,7 +171,7 @@ def build_premium_property_report_v5(path:str|Path,payload:dict[str,Any])->str:
     # 4 — CAR e fundiário
     story += _section('CAR, cadastro e situação fundiária','CAR, SIGEF e matrícula respondem perguntas diferentes. O relatório não mistura cadastro ambiental com propriedade registral.')
     story.append(_info(car.get('fields') or [],[60*mm,105*mm],['Campo','Resultado']))
-    story += [Spacer(1,5*mm),Paragraph('SIGEF, SNCI, CCIR e matrícula',S['h2']),_info(land.get('certifications') or [],[28*mm,35*mm,24*mm,78*mm],['Base','Situação','Registros','Leitura'])]
+    story += [Spacer(1,5*mm),Paragraph('Certificação do imóvel no INCRA',S['h2']),_info(land.get('certifications') or [],[28*mm,35*mm,24*mm,78*mm],['Base','Situação','Registros','Leitura'])]
     if land.get('matrix'): story += [Spacer(1,4*mm),_info(land.get('matrix'),[35*mm,40*mm,28*mm,62*mm],['Base/campo','Resultado','Área','O que isso significa'])]
     ev=land.get('evidence') or {}; story += [Spacer(1,4*mm),_callout('EVIDÊNCIA DOMINIAL',f"{_s(ev.get('score'),'NÃO CLASSIFICADA')} — {_s(ev.get('text'),'')}",'attention'),PageBreak()]
 

@@ -30,7 +30,7 @@ def _sigef_search_sync(term:str,limit:int=20):
            f"OR UPPER(parcela_co) LIKE UPPER('%{t}%') OR UPPER(codigo_imo) LIKE UPPER('%{t}%')")
     p={'f':'geojson','where':where,'outFields':'parcela_co,situacao_i,codigo_imo,data_aprov,status,nome_area,registro_m,registro_d,municipio_,uf_id','returnGeometry':'true','outSR':'4326','resultRecordCount':str(cap)}
     raw=_curl(SIGEF_MIRROR+'?'+urlencode(p),True)
-    if not raw.get('ok'):return {'ok':False,'source':'SIGEF/INCRA — espelho público IBAMA/PAMGIA','detail':raw.get('detail') or raw.get('preview')}
+    if not raw.get('ok'):return {'ok':False,'source':'SIGEF/INCRA · mapa público do IBAMA','detail':raw.get('detail') or raw.get('preview')}
     data=raw.get('json') or {};features=data.get('features') or [];items=[]
     for f in features:
         props=f.get('properties') or {};geom=f.get('geometry');center=None;area_ha=None
@@ -39,7 +39,7 @@ def _sigef_search_sync(term:str,limit:int=20):
             area_ha=abs(GEOD.geometry_area_perimeter(g)[0])/10000.0
         except Exception:pass
         items.append({'type':'sigef','name':props.get('nome_area') or 'Área certificada SIGEF','municipality':props.get('municipio_'),'uf':props.get('uf_id'),'parcel_code':props.get('parcela_co'),'property_code':props.get('codigo_imo'),'registry':props.get('registro_m') or props.get('registro_d'),'status':props.get('status') or props.get('situacao_i'),'area_ha':round(area_ha,4) if area_ha is not None else None,'center':center,'geometry':geom,'source':'SIGEF/INCRA — espelho público'})
-    return {'ok':True,'source':'SIGEF/INCRA — espelho público IBAMA/PAMGIA','items':items,'count':len(items)}
+    return {'ok':True,'source':'SIGEF/INCRA · mapa público do IBAMA','items':items,'count':len(items)}
 
 
 def _desistiu():return HTTPException(status_code=499,detail='Consulta encerrada: o cliente desistiu.')

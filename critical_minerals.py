@@ -172,7 +172,7 @@ async def query_critical_minerals(car_geometry: dict[str,Any], anm_result: dict[
         mineral_codes=sorted(set(mineral_codes)|set(anm['counts']))
     return {
         'ok': sgb_complete,
-        'source':'ANM/SIGMINE + Serviço Geológico do Brasil (GeoSGB/WMS)',
+        'source':'ANM/SIGMINE + Serviço Geológico do Brasil',
         'anm':anm,
         'sgb':{
             'capabilities_ok':err is None,

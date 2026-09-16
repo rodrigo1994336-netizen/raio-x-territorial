@@ -80,7 +80,11 @@ def test_normalize_text() -> None:
         "Climatologia FEB": "Climatologia FEV",
         "rain_30d_mm: 31.46": "chuva em 30 dias (mm): 31,46",
         "Não respondeu nesta emissão: HTTPStatusError: Server error for url 'https://x/export?bbox=1'": "Não respondeu nesta emissão.",
-        "<b>Esri</b> Não respondeu nesta emissão: ReadTimeout x</b>": "<b>Esri</b> Não respondeu nesta emissão.</b>",
+        # T2: o </b> do rabo cortado já estava fechado antes do corte; devolvê-lo deixava marcação solta.
+        "<b>Esri</b> Não respondeu nesta emissão: ReadTimeout x</b>": "<b>Esri</b> Não respondeu nesta emissão.",
+        "<b>Solo</b> 0 interseção(ões). TimeoutExpired:Command '['curl', '-sS']' timed out": "<b>Solo</b> 0 interseção(ões).",
+        '<b>Rua:</b> <link href="https://maps.google.com/?q=1,2" color="#0E603B">abrir</link>':
+            '<b>Rua:</b> <link href="https://maps.google.com/?q=1,2" color="#0E603B">abrir</link>',
         '<font size="7.5">14.795 ha</font>': '<font size="7.5">14,80 ha</font>',
         # Already Portuguese or identifiers: untouched.
         "1.243,57 ha": "1.243,57 ha",
@@ -92,9 +96,10 @@ def test_normalize_text() -> None:
         "Cena S2B_23KNV_20260828_0_L2A": "Cena S2B_23KNV_20260828_0_L2A",
         "anos identificados: 2004, 2006, 2014, 2021.": "anos identificados: 2004, 2006, 2014, 2021.",
         "V47.2": "V47.2",
-        "Camadas: IDE:ide_2103_a_pto; IDE:ide_2103_b_pto.": "Camadas: IDE-Sisema.",
+        # T2: "IDE-Sisema" e o nome do sistema de dados do Estado de MG; nome interno nao chega ao cliente.
+        "Camadas: IDE:ide_2103_a_pto; IDE:ide_2103_b_pto.": "Camadas: base pública de Minas Gerais.",
         "Completar a consulta SNCI/INCRA quando o conector público/autenticado estiver disponível.": "Consultar a certificação do imóvel no SNCI/INCRA.",
-        "camada: IDE:ide_1502_mg_mapa_solos_pol": "camada: IDE-Sisema",
+        "camada: IDE:ide_1502_mg_mapa_solos_pol": "camada: base pública de Minas Gerais",
         "área_somada_ha: 14.804099; baixo_pct: 12.3456": "área somada (ha): 14,80; vigor baixo (%): 12,35",
         "Último arquivo processado: focos_10min_20260913_1820.csv.": "Último arquivo processado: arquivo de 10 minutos de 13/09/2026 15:20 (horário de Brasília).",
     }

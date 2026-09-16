@@ -41,6 +41,10 @@ jobs:
         env:
           RX_RELEASE: OFF
         run: PYTHONPATH=. python scripts/r1_report_ptbr_gate.py
+      - name: T2 textos do cliente (sem jargao, sigla solta, nome interno, estado tecnico ou erro cru no portal, em /novo e no PDF; escopo do cartorio fora da tabela de fontes; controles positivos por mutacao)
+        env:
+          RX_RELEASE: V8_OPERATIONAL_ZERO_COST
+        run: PYTHONPATH=. python scripts/t2_textos_cliente_gate.py
       - name: V2 small truths gate (Brasília time with the note on PDF and screen; only an empty exact SICAR answer is 404, any failure is 503 pending, on the booted report and portal chains and the PDF viewer; rules and positive controls; needs Node)
         env:
           RX_RELEASE: OFF
@@ -157,7 +161,7 @@ jobs:
           assert 'RX_IDENTITY_TITLE_GUARD_V49' in html, 'd1a identity guard missing from final portal HTML'
           assert 'd.property.name=x.name' not in html, 'd1a smart-search name injection leaked into final portal HTML'
           required=(
-              'RX_EXPERIENCE_V43','SNAPSHOT DO IMÓVEL','VER ANÁLISE COMPLETA',
+              'RX_EXPERIENCE_V43','RESUMO DO IMÓVEL','VER ANÁLISE COMPLETA',
               'body.rx43-dossier-open #map','rx43-dossier-open','rx43-full-requested',
               'RX_ACTION_RUNTIME_V25','RX_FIELD_MODE_V43','RX_MAP_VISUAL_V32',
               'RX_NAMES_ON_CLICK_ONLY_C1','RX_ADVANCED_SEARCH_V39','rxAdvTrigger','RX_IDENTITY_TITLE_GUARD_V49',
@@ -252,7 +256,8 @@ jobs:
           assert "x?.type==='cafir'" in inverse and 'CAR não vinculado automaticamente' in inverse
           assert "'panel_name_eligible':False" in inverse_runtime and "'car_code':None" in inverse_runtime
           assert 'REFERENCE_ONLY_CENTROID' in legacy_name and 'd.property.name=x.name' not in legacy_name
-          assert 'Fontes pesadas não foram disparadas' in html
+          # T2: o resumo passou a dizer a mesma coisa sem anunciar maquinaria ("fontes pesadas", "disparadas").
+          assert 'As consultas mais demoradas só começam quando você pedir a análise completa.' in html
           assert 'Imóvel rural —' in html
           assert 'z<11' in html
           assert all(uf in html for uf in ('AC','AM','BA','DF','GO','MG','MT','PA','PR','RS','SC','SP','TO'))
