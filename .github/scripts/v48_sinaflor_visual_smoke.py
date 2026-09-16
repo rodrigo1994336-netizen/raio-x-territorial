@@ -189,26 +189,28 @@ async def assert_contract(page, label, sina_source):
     await panel.locator(f'.rx45-check[data-source="sinaflor"][data-state="{expected_state}"]').wait_for(state="visible", timeout=45000)
     sina_text = await sina.inner_text()
     folded = sina_text.casefold()
-    assert "sinaflor — supressão" in folded, (label, sina_text)
+    # T2: "SINAFLOR — Supressão" era sigla solta; o cartao diz o que a autorizacao e, e de quem.
+    assert "autorização para cortar vegetação (ibama)" in folded, (label, sina_text)
+    assert "sinaflor" not in folded and " asv" not in folded, (label, "sigla_solta_na_tela", sina_text)
     assert await sina.get_attribute("data-state") == expected_state, (label, expected_state, sina_text, sina_source)
     assert await sina.get_attribute("data-answered") == ("1" if expected_answered else "0"), (label, expected_answered, sina_text, sina_source)
     first_match = (sina_source.get("matches") or [{}])[0] or {}
     if first_match.get("authorization_number"):
         assert str(first_match["authorization_number"]) in sina_text, (label, "source_identifier_not_rendered", first_match, sina_text)
-    assert "fonte: ibama/pamgia" in folded, (label, sina_text)
+    assert "fonte: ibama" in folded, (label, sina_text)
     expected_data_date, data_age_days = _source_data_date_contract(sina_source)
     if not expected_answered:
         # A query that did not answer must not claim any data date, and must offer a new attempt.
-        assert "dado:" not in folded, (label, "unanswered_sinaflor_claims_data_date", sina_text)
+        assert "dado de" not in folded, (label, "unanswered_sinaflor_claims_data_date", sina_text)
         assert "consulta pendente" in folded and "consultar de novo" in folded, (label, "unanswered_sinaflor_without_retry", sina_text)
     elif expected_data_date:
-        displayed_date = re.search(r"\bdado:\s*(\d{2}\/\d{2}\/\d{4})\b", sina_text, re.IGNORECASE)
+        displayed_date = re.search(r"\bdado de\s*(\d{2}\/\d{2}\/\d{4})\b", sina_text, re.IGNORECASE)
         assert displayed_date, (label, "sinaflor_displayed_data_date_missing", sina_text)
         assert displayed_date.group(1) == expected_data_date, (
             label, "sinaflor_source_display_date_mismatch", sina_source.get("data_date"), displayed_date.group(1), sina_text
         )
     else:
-        assert "dado: não publicada pela camada" in folded, (label, "sinaflor_missing_date_not_declared", sina_text, sina_source)
+        assert "sem data publicada" in folded, (label, "sinaflor_missing_date_not_declared", sina_text, sina_source)
     assert await sina.locator(f'.rx45-dot.{expected_state}').count() == 1, (label, expected_state, sina_text)
 
     audit = panel.locator('.rx45-audit-count')
@@ -228,7 +230,7 @@ async def assert_contract(page, label, sina_source):
     assert "pendente de implementação" not in detail_folded and "não consultada" not in detail_folded, (label, detail)
     for hidden in HIDDEN_FUTURE:
         assert hidden.casefold() not in detail_folded, (label, hidden, detail)
-    assert detail_folded.count("sinaflor — supressão") == 1, (label, detail)
+    assert detail_folded.count("autorização para cortar vegetação (ibama)") == 1, (label, detail)
     sina_status = (await sina.locator('.rx48-check-status').inner_text()).strip().casefold()
     assert sina_status in detail_folded, (label, "audit_not_reflecting_live_sinaflor_state", sina_status, detail)
     assert "sinaflor — autorização\npendente de implementação" not in detail_folded, (label, detail)

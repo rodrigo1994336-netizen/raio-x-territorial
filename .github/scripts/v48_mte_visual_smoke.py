@@ -128,10 +128,14 @@ async def assert_contract(page, label):
     assert await mte.count() == 1, (label, await mte.count(), text)
     mte_text = await mte.inner_text()
     folded = mte_text.casefold()
-    assert "mte — trabalho escravo" in folded, (label, mte_text)
-    assert "não verificada" in folded, (label, mte_text)
-    assert "cpf/cnpj" in folded and "nenhum vínculo" in folded, (label, mte_text)
-    assert "fonte: mte" in folded, (label, mte_text)
+    # T2: o rotulo e o motivo agora sao ditos em portugues de comprador; a sigla MTE saiu da tela.
+    assert "trabalho escravo (ministério do trabalho)" in folded, (label, mte_text)
+    assert "não dá para responder pelo car" in folded, (label, mte_text)
+    assert "de empregadores, não de imóveis" in folded, (label, mte_text)
+    assert "não há como responder por este imóvel" in folded, (label, mte_text)
+    # LGPD: documento de pessoa nunca aparece na tela, nem como explicacao.
+    assert "cpf" not in folded and "cnpj" not in folded, (label, mte_text)
+    assert "fonte: ministério do trabalho" in folded, (label, mte_text)
     assert "04/09/2026" in mte_text, (label, mte_text)
     assert await mte.get_attribute("data-state") == "blocked_missing_owner_identity"
     assert await mte.get_attribute("data-answered") == "0"
@@ -150,8 +154,8 @@ async def assert_contract(page, label):
     await audit_box.wait_for(state="visible", timeout=3000)
     audit_detail = await audit_box.inner_text()
     detail_folded = audit_detail.casefold()
-    assert detail_folded.count("mte — trabalho escravo") == 1, (label, audit_detail)
-    assert "não verificada" in detail_folded, (label, audit_detail)
+    assert detail_folded.count("trabalho escravo (ministério do trabalho)") == 1, (label, audit_detail)
+    assert "não dá para responder pelo car" in detail_folded, (label, audit_detail)
     assert "car / sicar" in detail_folded, (label, audit_detail)
     # F1B: the box lists only what this consultation knows; a source nobody asked is not listed and no
     # development wording reaches the client.

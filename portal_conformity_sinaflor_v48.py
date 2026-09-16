@@ -65,7 +65,9 @@ UI = r'''
 <script>
 (function(){
  const q=s=>document.querySelector(s);
- const fmtDate=v=>{if(!v)return 'não publicada pela camada';const s=String(v),m=s.match(/^(\d{4})-(\d{2})-(\d{2})/);return m?`${m[3]}/${m[2]}/${m[1]}`:s};
+ const fmtDate=v=>{const s=String(v||''),m=s.match(/^(\d{4})-(\d{2})-(\d{2})/);return m?`${m[3]}/${m[2]}/${m[1]}`:s};
+ // T2: sem data publicada, a linha dizia "dado de não publicada pela camada". Diz o que é, em português.
+ const metaData=v=>v?`dado de ${fmtDate(v)}`:'sem data publicada';
  const fmtQuery=v=>{if(!v)return 'não realizada';try{return new Date(v).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'})}catch(e){return String(v)}};
  const ha=v=>{const n=Number(v);return Number.isFinite(n)?n.toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:4}):'—'};
  function row(card){return card?.querySelector('.rx45-check[data-source="sinaflor"]')||null}
@@ -81,7 +83,7 @@ UI = r'''
    if(state==='checked_authorization_overlap'){const num=first.authorization_number?`Autorização nº ${first.authorization_number}`:'Autorização';return {state,status:SF_STATUS[state],reason:`${num} de corte de vegetação, com desenho sobre o imóvel${first.overlap_ha!=null?` (${ha(first.overlap_ha)} ha no CAR)`:''}. Se houve corte, a data dele também entra na conta para saber se estava autorizado.`}}
    if(state==='checked_authorization_overlap_unconfirmed'){const num=first.authorization_number?`Autorização nº ${first.authorization_number}: `:'';return {state,status:SF_STATUS[state],reason:`${num}o desenho cobre o imóvel, mas o prazo e a situação da autorização não foram confirmados. Não está dito que um corte de vegetação estava autorizado.`}}
    return null}
- function paint(card,e){const el=row(card),U=window.rxV48UpdateComplianceSource;if(!el||typeof U!=='function')return;if(e.phase==='checking'){U(SF_ID,{state:'checking',label:SF_LABEL,status:'CONSULTANDO',reason:'Conferindo as autorizações de corte de vegetação sobre o desenho do imóvel.',meta:'Fonte: IBAMA',answered:false},card);return}const d=e.data||{},v=e.phase==='done'?view(d):null;if(v){U(SF_ID,{state:v.state,label:SF_LABEL,status:v.status,reason:v.reason,meta:`Fonte: IBAMA · dado de ${fmtDate(d.data_date)} · consulta em ${fmtQuery(d.queried_at)}`,answered:true},card);return}
+ function paint(card,e){const el=row(card),U=window.rxV48UpdateComplianceSource;if(!el||typeof U!=='function')return;if(e.phase==='checking'){U(SF_ID,{state:'checking',label:SF_LABEL,status:'CONSULTANDO',reason:'Conferindo as autorizações de corte de vegetação sobre o desenho do imóvel.',meta:'Fonte: IBAMA',answered:false},card);return}const d=e.data||{},v=e.phase==='done'?view(d):null;if(v){U(SF_ID,{state:v.state,label:SF_LABEL,status:v.status,reason:v.reason,meta:`Fonte: IBAMA · ${metaData(d.data_date)} · consulta em ${fmtQuery(d.queried_at)}`,answered:true},card);return}
    // Not answered: no data date is claimed for a query that did not return.
    U(SF_ID,{state:'source_failed',label:SF_LABEL,status:'CONSULTA PENDENTE',reason:'A fonte oficial não respondeu agora.',meta:`Fonte: IBAMA${d.queried_at?` · consulta em ${fmtQuery(d.queried_at)}`:''}`,answered:false},card)}
  const sfPause=ms=>new Promise(res=>setTimeout(res,ms));

@@ -161,7 +161,7 @@ jobs:
           assert 'RX_IDENTITY_TITLE_GUARD_V49' in html, 'd1a identity guard missing from final portal HTML'
           assert 'd.property.name=x.name' not in html, 'd1a smart-search name injection leaked into final portal HTML'
           required=(
-              'RX_EXPERIENCE_V43','SNAPSHOT DO IMÓVEL','VER ANÁLISE COMPLETA',
+              'RX_EXPERIENCE_V43','RESUMO DO IMÓVEL','VER ANÁLISE COMPLETA',
               'body.rx43-dossier-open #map','rx43-dossier-open','rx43-full-requested',
               'RX_ACTION_RUNTIME_V25','RX_FIELD_MODE_V43','RX_MAP_VISUAL_V32',
               'RX_NAMES_ON_CLICK_ONLY_C1','RX_ADVANCED_SEARCH_V39','rxAdvTrigger','RX_IDENTITY_TITLE_GUARD_V49',
