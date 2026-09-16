@@ -56,7 +56,8 @@ Regras
                              arranque do portal e faz o cenário reprovar pelo motivo errado.
   remendo_importa_sozinho    REGRA DE FORMA, enumerada pela PROPRIEDADE do defeito e não por lista: todo
                              módulo da raiz do repositório (onde vivem os módulos do servidor) que remenda
-                             texto por string no import e LEVANTA quando a âncora não casa importa sozinho,
+                             texto por string no import e SINALIZA a âncora perdida — levantando, ou
+                             imprimindo `RX_<algo>_ANCHOR_MISSING=` quando o remendo é fail-soft — importa sozinho,
                              em processo limpo, e declara de quem herdou a âncora
                              (`import X  # noqa: F401 - dono d...`). Quatro guardas, cada uma com o seu
                              controle positivo: (0) o predicado captura a propriedade em TODAS as
@@ -1039,7 +1040,7 @@ def r_cenario_importa_sozinho():
             linhas = [x for x in saida.splitlines() if x.strip()]
             ruins.append(f"{nome} -> {linhas[-1][:200] if linhas else 'sem saída'}")
         else:
-            perdidas = [x.strip() for x in saida.splitlines() if "_ANCHOR_MISSING=" in x]
+            perdidas = [x.strip() for x in saida.splitlines() if MARCA_ANCORA_PERDIDA in x]
             if perdidas:
                 ruins.append(f"{nome} -> {perdidas[-1][:200]}")
     if ruins:
@@ -1052,9 +1053,15 @@ def r_cenario_importa_sozinho():
 # com o mesmo defeito e só UM estava nessa lista — os outros dois ficaram consertados e desprotegidos, e a
 # varredura achou mais cinco com a mesma fragilidade (portal_map_v46, portal_map_v46_anchor_state,
 # portal_map_polish_v43, portal_map_stability_v43, portal_release_v43). Daqui em diante a enumeração sai do
-# PREDICADO do defeito: todo módulo do repositório que remenda texto por string no import e LEVANTA quando a
-# âncora não casa. Quem entra no conjunto por escrever código novo entra sozinho, sem ninguém lembrar de
+# PREDICADO do defeito: todo módulo do repositório que remenda texto por string no import e SINALIZA a
+# âncora perdida. Quem entra no conjunto por escrever código novo entra sozinho, sem ninguém lembrar de
 # acrescentá-lo a lista nenhuma.
+# 16/09, o dia seguinte: o predicado nasceu escrito sobre UM canal de sinal (`raise`) e no mesmo dia, em
+# outro ramo, portal_mining_resilience_v34 trocou de canal (passou a imprimir RX_..._ANCHOR_MISSING= em vez
+# de derrubar o arranque). Os dois ramos passaram verdes separados e a main ficou vermelha junta: o módulo
+# caiu FORA do conjunto e a guarda 1 reprovou. O conserto não foi afrouxar a guarda 1 — foi o predicado
+# passar a enxergar a PROPRIEDADE inteira (sinalizar), e não um dos canais em que ela era escrita naquele
+# dia. Predicado escrito sobre um canal é lista com outro nome.
 # Marcas de remendo por string. Eram quatro grafias, e a propriedade prometia "remenda texto por string":
 # módulo que remendasse por re.sub(), .partition() ou .format() ficava FORA em silêncio — o mesmo defeito que
 # a lista tinha, um nível acima. Ampliada e MEDIDA em 16/09: com as grafias abaixo e o alcance transitivo, o
@@ -1062,6 +1069,14 @@ def r_cenario_importa_sozinho():
 # (não levanta no import, não lê estado alheio) continua de fora pelas outras duas cláusulas.
 MARCAS_REMENDO = (".count(", ".replace(", ".find(", ".index(", ".partition(", ".rpartition(",
                   ".split(", ".rsplit(", "re.sub(", "re.subn(", ".format(")
+# O segundo canal de sinalização, e a razão de a main ter ficado vermelha em 16/09: um remendo pode parar de
+# DERRUBAR o arranque quando a âncora some e passar a IMPRIMIR `RX_<algo>_ANCHOR_MISSING=<lista>` (fail-soft,
+# quando o texto remendado não chega a cliente nenhum e reprovar é tarefa de outro portão). O defeito é o
+# mesmo — âncora herdada por ordem de importação —, só o canal mudou; um predicado que só enxerga `raise`
+# deixa o módulo cair FORA do conjunto no dia em que ele vira fail-soft, e a guarda 1 reprova o portão
+# inteiro. Uma constante só para os dois lados: o estático (o literal na fonte) e o de execução (a linha na
+# saída do import limpo). Encolher esta marca é apagar os dois de uma vez, e a guarda 0 pega.
+MARCA_ANCORA_PERDIDA = "_ANCHOR_MISSING="
 # A dependência declarada tem uma forma só, para o portão poder contá-la: `import X  # noqa: F401 - dono d...`
 # Aceita também `from X import Y`, `import X as y`, o `noqa:` ausente e os três traços (-, –, —): o projeto
 # escreve travessão longo na prosa, e a grafia que não casa some da contabilidade da guarda 2 sem avisar.
@@ -1076,12 +1091,24 @@ def _donos_declarados(fonte: str) -> list[str]:
     return [por_import or por_from for por_import, por_from in DECLARA_ANCORA.findall(fonte)]
 
 
-def _levanta_no_import(arvore: ast.Module) -> bool:
-    """Tem `raise` alcançável no import: no corpo do módulo, ou no FECHO TRANSITIVO das chamadas feitas de lá.
+def _sinaliza_ancora_perdida(arvore: ast.Module) -> bool:
+    """Sinaliza, no import, que a âncora não casou — por `raise` OU pelo marcador `*_ANCHOR_MISSING=`.
 
-    Um salto só, e só por ast.Name, deixava escapar o caso comum `def _aplica(): _estoura()` chamado no nível
-    do módulo, e também a chamada por atributo (`_mod.aplica()`, `helpers.once()`). O fecho fecha os dois.
+    Alcançável quer dizer: no corpo do módulo, ou no FECHO TRANSITIVO das chamadas feitas de lá. Um salto só,
+    e só por ast.Name, deixava escapar o caso comum `def _aplica(): _estoura()` chamado no nível do módulo, e
+    também a chamada por atributo (`_mod.aplica()`, `helpers.once()`). O fecho fecha os dois.
+
+    Os dois canais são a MESMA propriedade (o remendo sabe dizer que a âncora sumiu), e é por isso que o
+    predicado tem de enxergar os dois: quando um módulo troca de canal, ele não deixa de ser um remendo com
+    âncora herdada — deixa apenas de ser visível para um predicado escrito em cima de um canal só.
     """
+
+    def sinaliza(no: ast.AST) -> bool:
+        if isinstance(no, ast.Raise):
+            return True
+        return (isinstance(no, ast.Constant) and isinstance(no.value, str)
+                and MARCA_ANCORA_PERDIDA in no.value)
+
     funcoes: dict[str, ast.AST] = {}
     for no in ast.walk(arvore):
         if isinstance(no, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -1104,7 +1131,7 @@ def _levanta_no_import(arvore: ast.Module) -> bool:
             return memoria[nome]
         corpo = funcoes[nome]
         adiante = visitados | {nome}
-        achou = any(isinstance(x, ast.Raise) for x in ast.walk(corpo)) or any(
+        achou = any(sinaliza(x) for x in ast.walk(corpo)) or any(
             funcao_levanta(chamada_para(c), adiante)
             for c in ast.walk(corpo) if isinstance(c, ast.Call))
         memoria[nome] = achou
@@ -1115,7 +1142,7 @@ def _levanta_no_import(arvore: ast.Module) -> bool:
         no = pilha.pop()
         if isinstance(no, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             continue  # corpo de função/classe não roda no import
-        if isinstance(no, ast.Raise):
+        if sinaliza(no):
             return True
         for filho in ast.iter_child_nodes(no):
             if isinstance(filho, ast.Call) and funcao_levanta(chamada_para(filho), frozenset()):
@@ -1151,7 +1178,7 @@ def modulos_de_remendo(raiz: Path | None = None) -> dict[str, list[str]]:
             arvore = ast.parse(fonte)
         except SyntaxError:
             continue
-        if not _levanta_no_import(arvore) or not _le_estado_de_outro(arvore, caminho.stem, repo):
+        if not _sinaliza_ancora_perdida(arvore) or not _le_estado_de_outro(arvore, caminho.stem, repo):
             continue
         achados[caminho.stem] = _donos_declarados(fonte)
     return achados
@@ -1187,6 +1214,25 @@ _ALCANCE_DOIS_SALTOS = (
     'import outro\n_H = outro.PORTAL_HTML\n'
     'def _estoura():\n    raise RuntimeError("âncora não casa")\n'
     'def _aplica():\n    if _H.count("A") != 1:\n        _estoura()\n_aplica()\n')
+# O canal fail-soft, nas duas formas em que ele aparece: marcador no corpo do modulo e marcador dentro de
+# funcao chamada de la. Sem estes dois sinteticos, encolher MARCA_ANCORA_PERDIDA passa despercebido enquanto
+# sobrar um modulo que ainda levanta - foi assim que o conjunto perdeu portal_mining_resilience_v34.
+_MARCADOR_NO_MODULO = (
+    'import outro\n_H = outro.PORTAL_HTML\n'
+    '_perdidas = [n for n in ("A",) if n not in _H]\n'
+    'outro.PORTAL_HTML = _H.replace("A", "B")\n'
+    'if _perdidas:\n    print("RX_SINTETICO_ANCHOR_MISSING=" + str(_perdidas), flush=True)\n')
+_MARCADOR_EM_FUNCAO = (
+    'import outro\n_H = outro.PORTAL_HTML\n'
+    'def _avisa():\n    print("RX_SINTETICO_ANCHOR_MISSING=kpi", flush=True)\n'
+    'def _aplica():\n    if _H.count("A") != 1:\n        _avisa()\n_aplica()\n')
+# Negativo do canal fail-soft: marcador de ESTADO (`...ANCHORS=casaram:1/1`) que o remendo imprime SEMPRE,
+# inclusive quando deu certo - e o que o portal_live_fix_v18 faz. Se ele entrasse pelo marcador, a leitura da
+# saida do import limpo reprovaria um modulo sao a cada execucao.
+_MARCADOR_DE_ESTADO = (
+    'import outro\n_H = outro.PORTAL_HTML\n'
+    '_ok = _H.count("A")\n'
+    'print("RX_SINTETICO_ANCHORS=casaram:%d/1" % _ok, flush=True)\n')
 _ALCANCE_POR_ATRIBUTO = (
     'import sys\nimport outro\n_H = outro.PORTAL_HTML\n'
     'def aplica():\n    if _H.count("A") != 1:\n        raise RuntimeError("âncora não casa")\n'
@@ -1211,20 +1257,27 @@ def _controle_do_predicado() -> str:
                 f'if {teste}:\n    raise RuntimeError("âncora não casa")\n',
                 encoding="utf-8", newline="\n")
         for nome, fonte in (("alcance_dois_saltos", _ALCANCE_DOIS_SALTOS),
-                            ("alcance_por_atributo", _ALCANCE_POR_ATRIBUTO)):
+                            ("alcance_por_atributo", _ALCANCE_POR_ATRIBUTO),
+                            ("marcador_no_modulo", _MARCADOR_NO_MODULO),
+                            ("marcador_em_funcao", _MARCADOR_EM_FUNCAO)):
             esperados.add(nome)
             (raiz / f"{nome}.py").write_text(fonte, encoding="utf-8", newline="\n")
         # negativo: usa a marca, mas não levanta e não lê estado alheio -> tem de ficar de FORA
         (raiz / "so_a_marca.py").write_text('TEXTO = "xAx".replace("A", "B")\n', encoding="utf-8", newline="\n")
+        # segundo negativo: marcador de ESTADO, impresso mesmo quando a ancora casa, nao e sinal de perda
+        (raiz / "marcador_de_estado.py").write_text(_MARCADOR_DE_ESTADO, encoding="utf-8", newline="\n")
 
         pego = set(modulos_de_remendo(raiz))
         faltou = sorted(esperados - pego)
         if faltou:
             fail("instrumento quebrado: o predicado NÃO captura a propriedade escrita nestas grafias ou "
                  "alcances: " + ", ".join(faltou))
-        if "so_a_marca" in pego:
-            fail("instrumento quebrado: o predicado capturou módulo que só tem a marca, sem a propriedade")
-    return f"{len(esperados)} grafias e alcances sintéticos capturados, 1 negativo fora"
+        entrou_errado = sorted({"so_a_marca", "marcador_de_estado"} & pego)
+        if entrou_errado:
+            fail("instrumento quebrado: o predicado capturou módulo SEM a propriedade (marca sem remendo, "
+                 "ou marcador de estado que o remendo imprime mesmo quando a âncora casa): "
+                 + ", ".join(entrou_errado))
+    return f"{len(esperados)} grafias, alcances e canais sintéticos capturados, 2 negativos fora"
 
 
 def _controle_do_atalho(remendos: dict[str, list[str]]) -> str:
@@ -1246,8 +1299,9 @@ def _controle_do_atalho(remendos: dict[str, list[str]]) -> str:
 
 @regra("remendo_importa_sozinho")
 def r_remendo_importa_sozinho():
-    """Todo módulo que remenda por string e levanta quando a âncora não casa importa sozinho, em processo
-    limpo, e declara de quem herdou a âncora. Ordem de carregamento não é declaração de dependência: o que
+    """Todo módulo que remenda por string e sinaliza a âncora perdida (levantando, ou imprimindo o marcador
+    `*_ANCHOR_MISSING=` quando o remendo é fail-soft) importa sozinho, em processo limpo, SEM o marcador na
+    saída, e declara de quem herdou a âncora. Ordem de carregamento não é declaração de dependência: o que
     só funciona porque o sitecustomize importou na sequência certa quebra no primeiro consumidor que não
     seja o arranque (portão, teste, script) — e o erro aparece longe da causa.
 
@@ -1309,9 +1363,18 @@ def r_remendo_importa_sozinho():
         proc = subprocess.run([sys.executable, "-c", prefixo + f"import {nome}"], cwd=str(ROOT), env=env,
                               capture_output=True, timeout=600)
         tempos.append((time.monotonic() - t0, nome))
+        saida = (proc.stdout + proc.stderr).decode("utf-8", "ignore")
         if proc.returncode:
-            linhas = [x for x in (proc.stdout + proc.stderr).decode("utf-8", "ignore").splitlines() if x.strip()]
+            linhas = [x for x in saida.splitlines() if x.strip()]
             ruins.append(f"{nome} -> {linhas[-1][:200] if linhas else 'sem saída'}")
+            continue
+        # Código 0 NAO prova âncora casada: no remendo fail-soft a perda sai pelo marcador, e só por ele.
+        # Sem esta leitura a regra "verificaria" esse módulo com uma checagem que nunca pode reprovar para
+        # ele — verde sobre o nada. O controle por mutação da linha declarada dele é o controle positivo
+        # desta leitura: apagar o import deixa o import limpo com código 0 e o marcador na saída.
+        perdidas = [x.strip() for x in saida.splitlines() if MARCA_ANCORA_PERDIDA in x]
+        if perdidas:
+            ruins.append(f"{nome} -> {perdidas[-1][:200]}")
     if ruins:
         fail("remendo não importa sozinho (a âncora depende da ordem do arranque, não declarada): "
              + "; ".join(ruins))
@@ -2781,6 +2844,12 @@ MUTATIONS = [
     ("remendo_importa_sozinho", "portal_map_v46_anchor_state.py",
      "import portal_map_v46  # noqa: F401 - dono da âncora do botão de leitura completa (V46)\n",
      "", "não importa sozinho", {"RX_M1_SOZINHO_SO": "portal_map_v46_anchor_state"}),
+    # O remendo fail-soft: apagar a linha declarada NAO derruba o import (código 0) - a âncora some em
+    # silêncio e só o marcador RX_..._ANCHOR_MISSING= denuncia. Este controle é, ao mesmo tempo, o controle
+    # positivo da leitura do marcador dentro desta regra: sem ela, a mutacao passaria com o defeito de volta.
+    ("remendo_importa_sozinho", "portal_mining_resilience_v34.py",
+     'import portal_property_tabs  # noqa: F401 - dono das âncoras kpi-servico-geologico e kpi-terras-raras\n',
+     "", "não importa sozinho", {"RX_M1_SOZINHO_SO": "portal_mining_resilience_v34"}),
     # ---- controles do PRÓPRIO portão: as guardas que sustentam a promessa central não tinham controle
     # nenhum — apagá-las amanhã manteria o verde E a mensagem continuaria dizendo "todas com controle".
     # O run_mutant executa o ARQUIVO mutado quando o alvo é este script (RX_M1_ROOT aponta a raiz real).
@@ -2789,6 +2858,10 @@ MUTATIONS = [
     ("remendo_importa_sozinho", "scripts/m1_processos_gate.py",          # guarda 0: marca apagada
      'MARCAS_REMENDO = (".count(", ' + '".replace(", ',
      'MARCAS_REMENDO = (".count(", ',
+     "NÃO captura a propriedade"),
+    ("remendo_importa_sozinho", "scripts/m1_processos_gate.py",          # guarda 0b: canal fail-soft apagado
+     'MARCA_ANCORA_PERDIDA = ' + '"_ANCHOR' + '_MISSING="',
+     'MARCA_ANCORA_PERDIDA = "_NUNCA_CASA_COM_NADA="',
      "NÃO captura a propriedade"),
     ("remendo_importa_sozinho", "scripts/m1_processos_gate.py",          # guarda 1: predicado encolhido
      '        if caminho.stem ' + '== "sitecustomize":',

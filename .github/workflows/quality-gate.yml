@@ -409,6 +409,25 @@ jobs:
           RX_RELEASE: OFF
         run: PYTHONPATH=. python scripts/o2_tela_nova_browser_gate.py
 
+  base-atualizada:
+    # Trava de processo (16/09): #78 e #79 passaram verdes cada um sobre a base de ANTES do outro e
+    # quebraram juntos. No PR reprova enquanto o ramo nao contiver a ponta da main; no push da main reprova
+    # o merge que ja entrou sobre base velha, mesmo quando os outros portoes ficam verdes por sorte.
+    # fetch-depth: 0 e obrigatorio - sem o historico o proprio portao reprova, nunca passa calado.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Base atualizada antes do merge (verde de ramo so vale sobre a base em que ele entra; regras e controles positivos)
+        env:
+          RX_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python scripts/base_atualizada_gate.py
+
   m1-processos-linux:
     runs-on: ubuntu-latest
     timeout-minutes: 25
