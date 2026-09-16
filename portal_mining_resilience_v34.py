@@ -5,6 +5,10 @@ import asyncio
 from fastapi import HTTPException, Request
 
 import portal_v8
+# Os dois KPI remendados no fim deste arquivo são escritos por portal_property_tabs. Sem declarar essa
+# dependência, o remendo só casa quando outro módulo importou as abas primeiro: em qualquer ordem
+# diferente o arranque cai com mining_resilience_anchor_missing. Importar é idempotente.
+import portal_property_tabs  # noqa: F401 - dono das âncoras kpi-servico-geologico e kpi-terras-raras
 from anm_resilient import query_anm_curl_exact
 from car_resilient import fetch_car_live_resilient
 from external_process_lifecycle import RequestDisconnected, wait_for_cancelling_processes

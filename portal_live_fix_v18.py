@@ -7,6 +7,9 @@ import httpx
 from fastapi import HTTPException, Request
 
 import portal_v8
+# A âncora pastagem-mapbiomas remendada aqui é escrita por portal_property_tabs: sem declarar a
+# dependência, o remendo depende da ordem de importação e o arranque cai com anchor_missing.
+import portal_property_tabs  # noqa: F401 - dono da âncora pastagem-mapbiomas
 import car_resilient
 from critical_minerals import query_critical_minerals
 from agropecuaria import build_agro_profile

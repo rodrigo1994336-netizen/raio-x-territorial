@@ -36,6 +36,9 @@ from fastapi import Request
 from fastapi.responses import JSONResponse
 
 import portal_pdf_v21
+# Este módulo só se enxerta depois do bloco do W1a: sem declarar a dependência, o arranque cai com
+# f1b_report_wake_anchor_missing quando a ordem de importação muda.
+import portal_share_link_w1a  # noqa: F401 - dono da marca <!-- RX_SHARE_LINK_W1A -->
 import portal_v8
 
 app = portal_v8.app
