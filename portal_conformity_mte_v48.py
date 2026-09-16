@@ -90,7 +90,9 @@ UI = r'''
  const MTE_ID='mte_slave_labor',MTE_LABEL='Trabalho escravo (Ministério do Trabalho)',MTE_SOURCE='Fonte: Ministério do Trabalho e Emprego';
  const mteMeta=d=>`Fonte: Ministério do Trabalho${d.data_date?` · lista de ${fmtDate(d.data_date)}`:''} · consulta em ${fmtQuery(d.queried_at)}`;
  // F2: same vocabulary as portal_panel_sources_f2.classify_mte — only a recognised answer leaves "pending".
- function mteView(d){if(!d||typeof d!=='object'||d.ok!==true)return null;if(d.state==='blocked_missing_owner_identity')return {state:d.state,status:'NÃO DÁ PARA RESPONDER PELO CAR',answered:false};if(d.answered===true&&d.state==='checked_clear')return {state:d.state,status:'SEM OCORRÊNCIA',answered:true};if(d.answered===true&&d.state==='checked_hit')return {state:d.state,status:'OCORRÊNCIA LOCALIZADA',answered:true};return null}
+ // T2: o título vem do servidor (portal_panel_sources_f2.status_labels) — uma fonte de verdade só.
+ const MTE_STATUS=__RX_MTE_STATUS__;
+ function mteView(d){if(!d||typeof d!=='object'||d.ok!==true)return null;if(d.state==='blocked_missing_owner_identity')return {state:d.state,status:MTE_STATUS[d.state],answered:false};if(d.answered===true&&(d.state==='checked_clear'||d.state==='checked_hit'))return {state:d.state,status:MTE_STATUS[d.state],answered:true};return null}
  const mtePause=ms=>new Promise(res=>setTimeout(res,ms));
  async function mteQuery(car,alive,attempts=2){for(let i=0;i<attempts;i++){if(i){await mtePause(4000);if(!alive())return {abandoned:true}}try{const r=await fetch(`/v1/live/conformity/mte/${encodeURIComponent(car)}`),d=await r.json();if(r.ok&&mteView(d))return {done:true,data:d}}catch(e){}}return {done:false}}
  function mtePaint(card,e){const el=card.querySelector('.rx45-check[data-source="mte_slave_labor"]');if(!el)return;if(e.phase==='checking'){setState(el,'checking',MTE_LABEL,'CONSULTANDO','Conferindo a lista oficial do Ministério do Trabalho.',MTE_SOURCE,false);return}const v=e.phase==='done'?mteView(e.data):null;if(v){setState(el,v.state,MTE_LABEL,v.status,e.data.reason,mteMeta(e.data),v.answered);return}setState(el,'source_failed',MTE_LABEL,'CONSULTA PENDENTE','A fonte oficial não respondeu agora.',MTE_SOURCE,false)}
@@ -129,6 +131,13 @@ UI = r'''
 })();
 </script>
 '''
+
+import json as _json
+
+_MTE_STATUS_TOKEN = "__RX_MTE_STATUS__"
+if _MTE_STATUS_TOKEN not in UI:  # âncora do próprio módulo: sem ela o título do cartão sairia "undefined"
+    raise RuntimeError("mte_status_token_missing")
+UI = UI.replace(_MTE_STATUS_TOKEN, _json.dumps(portal_panel_sources_f2.status_labels(portal_panel_sources_f2.MTE_ID), ensure_ascii=False))
 
 portal_panel_sources_f2.install()  # the shared per-CAR runtime must precede the row scripts
 if "RX_CONFORMITY_MTE_V48" not in portal_v8.PORTAL_HTML:

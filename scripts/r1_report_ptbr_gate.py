@@ -96,9 +96,10 @@ def test_normalize_text() -> None:
         "Cena S2B_23KNV_20260828_0_L2A": "Cena S2B_23KNV_20260828_0_L2A",
         "anos identificados: 2004, 2006, 2014, 2021.": "anos identificados: 2004, 2006, 2014, 2021.",
         "V47.2": "V47.2",
-        "Camadas: IDE:ide_2103_a_pto; IDE:ide_2103_b_pto.": "Camadas: IDE-Sisema.",
+        # T2: "IDE-Sisema" e o nome do sistema de dados do Estado de MG; nome interno nao chega ao cliente.
+        "Camadas: IDE:ide_2103_a_pto; IDE:ide_2103_b_pto.": "Camadas: base pública de Minas Gerais.",
         "Completar a consulta SNCI/INCRA quando o conector público/autenticado estiver disponível.": "Consultar a certificação do imóvel no SNCI/INCRA.",
-        "camada: IDE:ide_1502_mg_mapa_solos_pol": "camada: IDE-Sisema",
+        "camada: IDE:ide_1502_mg_mapa_solos_pol": "camada: base pública de Minas Gerais",
         "área_somada_ha: 14.804099; baixo_pct: 12.3456": "área somada (ha): 14,80; vigor baixo (%): 12,35",
         "Último arquivo processado: focos_10min_20260913_1820.csv.": "Último arquivo processado: arquivo de 10 minutos de 13/09/2026 15:20 (horário de Brasília).",
     }

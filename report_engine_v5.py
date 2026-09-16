@@ -171,7 +171,7 @@ def build_premium_property_report_v5(path:str|Path,payload:dict[str,Any])->str:
     # 4 — CAR e fundiário
     story += _section('CAR, cadastro e situação fundiária','CAR, SIGEF e matrícula respondem perguntas diferentes. O relatório não mistura cadastro ambiental com propriedade registral.')
     story.append(_info(car.get('fields') or [],[60*mm,105*mm],['Campo','Resultado']))
-    story += [Spacer(1,5*mm),Paragraph('Certificação do INCRA e registro em cartório',S['h2']),_info(land.get('certifications') or [],[28*mm,35*mm,24*mm,78*mm],['Base','Situação','Registros','Leitura'])]
+    story += [Spacer(1,5*mm),Paragraph('Certificação do imóvel no INCRA',S['h2']),_info(land.get('certifications') or [],[28*mm,35*mm,24*mm,78*mm],['Base','Situação','Registros','Leitura'])]
     if land.get('matrix'): story += [Spacer(1,4*mm),_info(land.get('matrix'),[35*mm,40*mm,28*mm,62*mm],['Base/campo','Resultado','Área','O que isso significa'])]
     ev=land.get('evidence') or {}; story += [Spacer(1,4*mm),_callout('EVIDÊNCIA DOMINIAL',f"{_s(ev.get('score'),'NÃO CLASSIFICADA')} — {_s(ev.get('text'),'')}",'attention'),PageBreak()]
 

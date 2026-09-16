@@ -127,12 +127,15 @@ def comprehensive_truth_guard(payload:dict[str,Any],result:dict[str,Any],base_gu
     }
     ready=[k for k,v in checks.items() if v];missing=[k for k,v in checks.items() if not v]
     con['coverage']={'consulted_core_count':len(ready),'core_count':len(checks),'consulted_core':ready,'unavailable_core':missing}
+    # T2: "núcleos técnicos" e "integrações registrais/restritas" são vocabulário de dentro do código — e a
+    # segunda frase falava de linhas que o cliente não vê mais. O limite do cartório é dito na linha de escopo.
     if len(ready)>=12:
-        con['verdict']=(f'Raio-X público ampliado executado: {len(ready)}/{len(checks)} núcleos técnicos responderam nesta emissão. '
-                        'As integrações registrais/restritas permanecem claramente separadas e não são substituídas por inferência.')
+        con['verdict']=(f'{len(ready)} das {len(checks)} consultas públicas responderam nesta emissão. '
+                        'Matrícula, ônus e titularidade saem por certidão do cartório de registro de imóveis, pedida à parte.')
     else:
-        con['verdict']=(f'Raio-X executado com {len(ready)}/{len(checks)} núcleos técnicos respondendo. '
-                        f'Pontos cegos desta emissão: {", ".join(missing) if missing else "nenhum núcleo público principal"}.')
+        con['verdict']=(f'{len(ready)} das {len(checks)} consultas públicas responderam nesta emissão. '
+                        + (f'Ficaram pendentes: {", ".join(missing)}; pendente não quer dizer que não existe ocorrência.'
+                           if missing else 'Nenhuma consulta pública principal ficou pendente.'))
 
     # Priorities become due diligence, not a stale development checklist.
     priorities=[]

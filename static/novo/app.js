@@ -932,7 +932,7 @@
     }
     if (entry.phase === 'failed') {
       status.innerHTML = '';
-      box.innerHTML = '<div class="estado pendente"><span class="selo pendente" aria-hidden="true"></span><div><p><strong>Consulta pendente.</strong> As fontes oficiais não responderam agora; nada foi presumido.</p><button type="button" class="botao secundario" data-acao="ler-de-novo">Consultar de novo</button></div></div>';
+      box.innerHTML = '<div class="estado pendente"><span class="selo pendente" aria-hidden="true"></span><div><p><strong>Consulta pendente.</strong> As fontes oficiais não responderam agora.</p><button type="button" class="botao secundario" data-acao="ler-de-novo">Consultar de novo</button></div></div>';
       return;
     }
     var baseWhen = readingWhen(entry), topWhen = isNum(baseWhen) ? dateTime(baseWhen) : baseWhen;

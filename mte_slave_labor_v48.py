@@ -141,7 +141,7 @@ def query_mte_slave_labor(owner_document: str | None = None, owner_name: str | N
             "answered": False,
             "state": "source_failed",
             "match_count": None,
-            "reason": "A fonte oficial do MTE não respondeu de forma utilizável; nenhuma ausência foi presumida.",
+            "reason": "A lista oficial do Ministério do Trabalho não respondeu agora.",
             "detail": source.get("detail"),
         }
 
@@ -177,10 +177,11 @@ def query_mte_slave_labor(owner_document: str | None = None, owner_name: str | N
         "state": "checked_hit" if matches else "checked_clear",
         "match_count": len(matches),
         "matches": public_matches,
+        # T2: texto impresso no cartão do cliente. Sem sigla solta e sem citar documento de pessoa.
         "reason": (
-            f"{len(matches)} registro(s) com correspondência exata de CPF/CNPJ no Cadastro de Empregadores."
+            f"{len(matches)} registro(s) do dono informado na lista de empregadores do Ministério do Trabalho."
             if matches
-            else "Nenhuma correspondência exata de CPF/CNPJ foi localizada no Cadastro de Empregadores consultado."
+            else "Nenhum registro do dono informado foi localizado na lista de empregadores do Ministério do Trabalho."
         ),
     }
 

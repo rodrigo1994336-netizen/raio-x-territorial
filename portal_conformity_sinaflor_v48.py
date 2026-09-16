@@ -70,12 +70,16 @@ UI = r'''
  const ha=v=>{const n=Number(v);return Number.isFinite(n)?n.toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:4}):'—'};
  function row(card){return card?.querySelector('.rx45-check[data-source="sinaflor"]')||null}
  const SF_ID='sinaflor',SF_LABEL='Autorização para cortar vegetação (IBAMA)';
+ // T2: o título vem do servidor (portal_panel_sources_f2.status_labels) — uma fonte de verdade só.
+ // Escrito nos dois lugares, o texto divergiu: o Python dizia uma coisa e o JS outra.
+ const SF_STATUS=__RX_SF_STATUS__;
  // F2: same vocabulary as portal_panel_sources_f2.classify_sinaflor — only an answer the source marked as answered leaves "pending".
  function view(d){if(!d||typeof d!=='object'||d.ok!==true||d.answered!==true)return null;const first=(d.matches||[])[0]||{},state=d.state;
-   if(state==='checked_clear')return {state,status:'NENHUMA AUTORIZAÇÃO SOBRE O IMÓVEL',reason:d.reason};
-   if(state==='checked_spatial_record_unconfirmed'){const num=first.authorization_number?`Autorização nº ${first.authorization_number}: `:'';return {state,status:'REGISTRO NA REGIÃO, SEM LIGAÇÃO COM O IMÓVEL',reason:`${num}o desenho publicado dessa autorização de corte de vegetação cobre esta região, mas é largo e não identifica este imóvel. Não dá para dizer que a autorização é dele.`}}
-   if(state==='checked_authorization_overlap'){const num=first.authorization_number?`Autorização nº ${first.authorization_number}`:'Autorização';return {state,status:'AUTORIZAÇÃO SOBRE O IMÓVEL',reason:`${num} de corte de vegetação, com desenho sobre o imóvel${first.overlap_ha!=null?` (${ha(first.overlap_ha)} ha no CAR)`:''}. Se houve corte, a data dele também entra na conta para saber se estava autorizado.`}}
-   if(state==='checked_authorization_overlap_unconfirmed'){const num=first.authorization_number?`Autorização nº ${first.authorization_number}: `:'';return {state,status:'AUTORIZAÇÃO SOBRE O IMÓVEL, PRAZO NÃO CONFIRMADO',reason:`${num}o desenho cobre o imóvel, mas o prazo e a situação da autorização não foram confirmados. Não está dito que um corte de vegetação estava autorizado.`}}
+   // T2: a razão do servidor traz ASV, UAS, SINAFLOR e "intersectando" — o cartão escreve a dele, em português de comprador.
+   if(state==='checked_clear')return {state,status:SF_STATUS[state],reason:'Nenhuma autorização de corte de vegetação com desenho sobre este imóvel foi localizada na base pública do IBAMA. Autorização dada por órgão do Estado pode não aparecer aqui.'};
+   if(state==='checked_spatial_record_unconfirmed'){const num=first.authorization_number?`Autorização nº ${first.authorization_number}: `:'';return {state,status:SF_STATUS[state],reason:`${num}o desenho publicado dessa autorização de corte de vegetação cobre esta região, mas é largo e não identifica este imóvel. Não dá para dizer que a autorização é dele — nem que não é.`}}
+   if(state==='checked_authorization_overlap'){const num=first.authorization_number?`Autorização nº ${first.authorization_number}`:'Autorização';return {state,status:SF_STATUS[state],reason:`${num} de corte de vegetação, com desenho sobre o imóvel${first.overlap_ha!=null?` (${ha(first.overlap_ha)} ha no CAR)`:''}. Se houve corte, a data dele também entra na conta para saber se estava autorizado.`}}
+   if(state==='checked_authorization_overlap_unconfirmed'){const num=first.authorization_number?`Autorização nº ${first.authorization_number}: `:'';return {state,status:SF_STATUS[state],reason:`${num}o desenho cobre o imóvel, mas o prazo e a situação da autorização não foram confirmados. Não está dito que um corte de vegetação estava autorizado.`}}
    return null}
  function paint(card,e){const el=row(card),U=window.rxV48UpdateComplianceSource;if(!el||typeof U!=='function')return;if(e.phase==='checking'){U(SF_ID,{state:'checking',label:SF_LABEL,status:'CONSULTANDO',reason:'Conferindo as autorizações de corte de vegetação sobre o desenho do imóvel.',meta:'Fonte: IBAMA',answered:false},card);return}const d=e.data||{},v=e.phase==='done'?view(d):null;if(v){U(SF_ID,{state:v.state,label:SF_LABEL,status:v.status,reason:v.reason,meta:`Fonte: IBAMA · dado de ${fmtDate(d.data_date)} · consulta em ${fmtQuery(d.queried_at)}`,answered:true},card);return}
    // Not answered: no data date is claimed for a query that did not return.
@@ -91,6 +95,13 @@ UI = r'''
 })();
 </script>
 '''
+
+import json as _json
+
+_SF_STATUS_TOKEN = "__RX_SF_STATUS__"
+if _SF_STATUS_TOKEN not in UI:  # âncora do próprio módulo: sem ela o título do cartão sairia "undefined"
+    raise RuntimeError("sinaflor_status_token_missing")
+UI = UI.replace(_SF_STATUS_TOKEN, _json.dumps(portal_panel_sources_f2.status_labels(portal_panel_sources_f2.SINAFLOR_ID), ensure_ascii=False))
 
 portal_panel_sources_f2.install()  # idempotent; MTE normally injected it already
 if "RX_CONFORMITY_SINAFLOR_V48" not in portal_v8.PORTAL_HTML:

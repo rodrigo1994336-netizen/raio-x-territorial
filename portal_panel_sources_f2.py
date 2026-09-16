@@ -27,17 +27,32 @@ PENDING_STATUS = "CONSULTA PENDENTE"
 PENDING_REASON = "A fonte oficial não respondeu agora."
 
 # Only an answer the source itself marked as answered can become found/not_found.
+#
+# T2 (correção): o título é o que o comprador lê. Um estado "não confirmado" NUNCA vira, no título,
+# a afirmação de que não existe; e um estado "limpo" diz em que base nada foi localizado, porque a
+# própria razão logo abaixo lembra que outra base pode ter emitido a autorização. Zero não é ausência.
+# Estes rótulos são a ÚNICA fonte de verdade: os módulos de tela leem este dicionário (o texto já esteve
+# escrito duas vezes, em Python e no JS, e as duas cópias divergiram).
 _MTE_ANSWERED = {
-    "checked_clear": ("not_found", "SEM OCORRÊNCIA"),
+    "checked_clear": ("not_found", "NENHUMA OCORRÊNCIA NESTA LISTA"),
     "checked_hit": ("found", "OCORRÊNCIA LOCALIZADA"),
 }
 _MTE_BLOCKED = {"blocked_missing_owner_identity": ("blocked", "NÃO DÁ PARA RESPONDER PELO CAR")}
 _SINAFLOR_ANSWERED = {
-    "checked_clear": ("not_found", "NENHUMA AUTORIZAÇÃO SOBRE O IMÓVEL"),
-    "checked_spatial_record_unconfirmed": ("found", "REGISTRO NA REGIÃO, SEM LIGAÇÃO COM O IMÓVEL"),
+    "checked_clear": ("not_found", "NENHUMA AUTORIZAÇÃO LOCALIZADA NESTA BASE"),
+    "checked_spatial_record_unconfirmed": ("found", "REGISTRO NA REGIÃO · LIGAÇÃO COM O IMÓVEL NÃO CONFIRMADA"),
     "checked_authorization_overlap": ("found", "AUTORIZAÇÃO SOBRE O IMÓVEL"),
-    "checked_authorization_overlap_unconfirmed": ("found", "AUTORIZAÇÃO SOBRE O IMÓVEL, PRAZO NÃO CONFIRMADO"),
+    "checked_authorization_overlap_unconfirmed": ("found", "AUTORIZAÇÃO SOBRE O IMÓVEL · PRAZO NÃO CONFIRMADO"),
 }
+
+
+def status_labels(source_id: str) -> dict[str, str]:
+    """Estado interno -> título que o cliente lê. Lido pelos módulos de tela; não duplicar em JS."""
+    if source_id == MTE_ID:
+        return {state: status for state, (_kind, status) in {**_MTE_ANSWERED, **_MTE_BLOCKED}.items()}
+    if source_id == SINAFLOR_ID:
+        return {state: status for state, (_kind, status) in _SINAFLOR_ANSWERED.items()}
+    raise KeyError(source_id)
 
 
 def _pending(source_id: str, response: Any) -> dict[str, Any]:

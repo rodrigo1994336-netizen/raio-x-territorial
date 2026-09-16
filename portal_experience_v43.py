@@ -148,7 +148,7 @@ body.rx43-dossier-open .toast{z-index:13000!important}
    const back=q('#back');if(back)back.onclick=close;
    const oldRender=(typeof renderAnalysis==='function')?renderAnalysis:null;
    if(oldRender&&!window.__rx43RenderWrapped){window.__rx43RenderWrapped=true;window.renderAnalysis=renderAnalysis=function(d){oldRender(d);document.body.classList.add('rx43-full-ready')}}
-   const panel=q('#panel');if(panel)panel.setAttribute('aria-label','Snapshot e análise do imóvel');
+   const panel=q('#panel');if(panel)panel.setAttribute('aria-label','Resumo e análise do imóvel');
  }
  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',install);else install();
  window.rx43CloseDossier=close;

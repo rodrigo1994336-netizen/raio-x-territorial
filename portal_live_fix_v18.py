@@ -83,13 +83,39 @@ async def agropecuaria_v18(car_code:str):
     return profile
 
 # Final HTML corrections after tabs are loaded.
+#
+# Remendo por string que não casa é silencioso: str.replace() devolve o texto igual e ninguém percebe.
+# Duas âncoras daqui morreram num commit que reescreveu o texto original e a tela seguiu sem a correção.
+# Agora cada remendo é conferido: um que não casa derruba o arranque (RX_PORTAL_V46_EXTENSION=failed),
+# que é como este repositório enxerga âncora quebrada — e o CI pega antes de chegar ao cliente.
+_UI_FIXES=[
+    ("persistencia-inclui-operacional",
+     "const active=d.persistence==='durable'",
+     "const active=['durable','operational_nonpersistent'].includes(d.persistence)"),
+    ("pastagem-mapbiomas",
+     "Pastagem/vigor MapBiomas só exibirá percentuais quando o worker raster devolver métricas reais do polígono.",
+     "${d.pasture?.state==='ready'?`Pastagem MapBiomas ${d.pasture.year||''}: <b>${fmt(d.pasture.pasture_area_ha,2)} ha</b> (${fmt(d.pasture.pasture_share_pct,1)}% do CAR). Vegetação nativa: ${fmt(d.pasture.native_vegetation_share_pct,1)}%.`:'MapBiomas não respondeu nesta consulta; isso não significa ausência de pastagem.'}"),
+]
+# Saíram daqui, no mesmo commit em que perderam a razão de existir:
+#  * o rótulo "PERSISTENTE — PRONTO / AGUARDANDO VÍNCULO DO BANCO" — portal_v8 já escreve
+#    "${active?'DISPONÍVEL':'AINDA NÃO DISPONÍVEL'}", que com a correção acima dá exatamente o mesmo texto;
+#  * "Fontes restritas permanecem preparadas — OFF até habilitação." — portal_property_tabs passou a
+#    escrever "Alguns documentos ainda não estão disponíveis por aqui.", que já é o texto de cliente certo;
+#  * um replace cuja busca era igual ao substituto (remendo de si mesmo, sem efeito nenhum).
+
 def install_ui_fixes():
     html=portal_v8.PORTAL_HTML
-    html=html.replace("const active=d.persistence==='durable'","const active=['durable','operational_nonpersistent'].includes(d.persistence)")
-    html=html.replace("${active?'PERSISTENTE — PRONTO':'AGUARDANDO VÍNCULO DO BANCO'}","${d.persistence==='durable'?'DISPONÍVEL':(active?'DISPONÍVEL':'AINDA NÃO DISPONÍVEL')}")
-    html=html.replace("Pastagem/vigor MapBiomas só exibirá percentuais quando o worker raster devolver métricas reais do polígono.","${d.pasture?.state==='ready'?`Pastagem MapBiomas ${d.pasture.year||''}: <b>${fmt(d.pasture.pasture_area_ha,2)} ha</b> (${fmt(d.pasture.pasture_share_pct,1)}% do CAR). Vegetação nativa: ${fmt(d.pasture.native_vegetation_share_pct,1)}%.`:'MapBiomas não respondeu nesta consulta; isso não significa ausência de pastagem.'}")
-    html=html.replace("Fontes restritas permanecem preparadas — OFF até habilitação.","Fontes públicas são consultadas automaticamente. Serviços cadastrais/registrários pagos aparecem abaixo apenas como integrações opcionais que exigem credencial ou contratação.")
-    html=html.replace("<span class=\"rx-pill\">${x.ready?'DISPONÍVEL':'AINDA NÃO DISPONÍVEL'}</span>","<span class=\"rx-pill\">${x.ready?'DISPONÍVEL':'AINDA NÃO DISPONÍVEL'}</span>")
+    casaram=[]
+    perdidas=[]
+    for nome,busca,troca in _UI_FIXES:
+        if busca not in html:
+            perdidas.append(nome)
+            continue
+        html=html.replace(busca,troca)
+        casaram.append(nome)
+    print(f'RX_PORTAL_LIVE_FIX_ANCHORS=casaram:{len(casaram)}/{len(_UI_FIXES)}'+(f' perdidas:{",".join(perdidas)}' if perdidas else ''),flush=True)
+    if perdidas:
+        raise RuntimeError('portal_live_fix_anchor_missing:'+','.join(perdidas))
     portal_v8.PORTAL_HTML=html
 
 install_ui_fixes()

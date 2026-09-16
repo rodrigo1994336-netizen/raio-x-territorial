@@ -46,11 +46,20 @@ _ISO_D = re.compile(r"(?<![\w/])(20\d{2})-(\d{2})-(\d{2})(?![\w:])")
 _COMPACT_D = re.compile(r"(?<![\w/])(20\d{2})(\d{2})(\d{2})(?![\w/])")
 # T2: o rabo técnico da mensagem (classe de erro, comando curl, endereço do serviço) nunca é texto de cliente.
 # "TimeoutExpired" e "CalledProcessError" não terminavam em fronteira de palavra depois de "Timeout"/"Error",
-# então o comando inteiro do curl chegava impresso no PDF; o endereço http também passava sem classe de erro.
-# O endereço só conta como rabo técnico quando está solto no texto: dentro de um atributo
-# (``<link href="https://…">``) cortar aqui partiria a marcação do parágrafo.
+# então o comando inteiro do curl chegava impresso no PDF.
+#
+# T2 (correção): endereço em prosa NÃO é rabo técnico. A única prosa do relatório com endereço é a
+# atribuição obrigatória da licença Creative Commons ("…sob a mesma licença (https://creativecommons.org/…)"):
+# cortar ali apaga o link exigido pela licença e deixa "(." na cara do cliente. Só é cortado o endereço
+# que tem assinatura de chamada de serviço (geoserver, /wfs, /arcgis, ?service=…) — que é o que de fato
+# vazava junto do detalhe do erro.
+_SERVICE_URL = (
+    r"https?://\S*?(?:geoserver|geoservice|geoportal|/ows|/wfs|/wms|/wcs|/arcgis|/rest/services|"
+    r"FeatureServer|MapServer|[?&](?:service|request|typename|typeName|outputFormat|bbox|f)=)\S*"
+)
 _TECH_TAIL = re.compile(
-    r"\s*[:—-]?\s*(?:[A-Za-z]*(?:Error|Exception|Timeout)[A-Za-z]*\b|Traceback\b|Command\s*'?\[|(?<![\w\"'=/])https?://).*$",
+    r"\s*[:—-]?\s*(?:[A-Za-z]*(?:Error|Exception|Timeout)[A-Za-z]*\b|Traceback\b|Command\s*'?\[|"
+    r"(?<![\w\"'=/])" + _SERVICE_URL + r").*$",
     re.S,
 )
 _OFF = re.compile(r"\s*[—-]\s*OFF\b")
@@ -71,10 +80,25 @@ _CODES = {
     "NAO CONSULTADO": "CONSULTA PENDENTE",
     "NÃO CONSULTADO NESTA FONTE": "CONSULTA PENDENTE",
     "NÃO EXECUTADA": "CONSULTA PENDENTE",
-    "RESTRITA": "CONSULTA PENDENTE",
+    # T2 (correção): fonte restrita não é pendência. Ela depende de habilitação legal (SNCR/CCIR, ONR) e
+    # NÃO é refeita com sucesso na emissão seguinte — chamar de "consulta pendente" prometia repetição.
+    "RESTRITA": "DEPENDE DE HABILITAÇÃO OFICIAL",
     "NÃO CLASSIFICADO": "SEM CLASSIFICAÇÃO",
     "NÃO CLASSIFICADA": "SEM CLASSIFICAÇÃO",
 }
+# O mesmo estado dito em minúscula no rabo de uma célula "escopo · estado" (report_engine_v6._agro_property_rows).
+_CELL_STATE = {
+    "indisponível": "consulta pendente", "indisponivel": "consulta pendente",
+    "não consultada": "consulta pendente", "nao consultada": "consulta pendente",
+    "não consultado": "consulta pendente", "nao consultado": "consulta pendente",
+    "não executada": "consulta pendente", "nao executada": "consulta pendente",
+    "parcial": "respondeu em parte", "parcialmente": "respondeu em parte",
+    "restrita": "depende de habilitação oficial",
+}
+_CELL_STATE_RX = re.compile(
+    r"(·\s*)(" + "|".join(sorted((re.escape(k) for k in _CELL_STATE), key=len, reverse=True)) + r")(\s*)$",
+    re.I,
+)
 _MONTHS = {
     "JAN": "JAN", "FEB": "FEV", "MAR": "MAR", "APR": "ABR", "MAY": "MAI", "JUN": "JUN",
     "JUL": "JUL", "AUG": "AGO", "SEP": "SET", "OCT": "OUT", "NOV": "NOV", "DEC": "DEZ",
@@ -98,7 +122,7 @@ _PHRASES = {
     "A reconciliação final remove placeholders antigos quando o conector efetivamente respondeu; um dado só permanece indisponível/restrito quando essa é a situação real desta emissão.":
         "Cada fonte é consultada de novo a cada emissão; uma consulta pendente é refeita na emissão seguinte.",
     "CONSULTADA, PARCIAL, INDISPONÍVEL, RESTRITA ou NÃO EXECUTADA":
-        "CONSULTADA, RESPONDEU EM PARTE ou CONSULTA PENDENTE",
+        "CONSULTADA, RESPONDEU EM PARTE, CONSULTA PENDENTE ou DEPENDE DE HABILITAÇÃO OFICIAL",
     "Cadastro Ambiental Rural consultado via WFS público.":
         "Cadastro Ambiental Rural consultado na base pública oficial.",
     "Camadas PRODES consultadas por WFS e intersectadas geometricamente com o CAR.":
@@ -139,6 +163,16 @@ _INTERNAL_NAMES = (
     (re.compile(r"\bWFS(?:\s+público)?\b"), "base pública oficial"),
     (re.compile(r"\bGeoServer\b|\bgeoserver\b"), "base pública oficial"),
     (re.compile(r"\bCamada\s+IDE-Sisema;\s*"), ""),
+    # T2 (correção): "IDE-Sisema" é o nome do sistema de dados do Estado de Minas Gerais, não diz nada a
+    # quem compra terra — e sobrava 7 vezes no relatório de MG, como nome de fonte.
+    (re.compile(r"\bIDE-Sisema\s*[/–-]\s*"), ""),
+    (re.compile(r"\s*[/–-]\s*IDE-Sisema\b"), ""),
+    (re.compile(r"\bIDE-Sisema\b"), "base pública de Minas Gerais"),
+    # T2 (correção): SGB é o Serviço Geológico do Brasil; GeoSGB e SIAGAS são os nomes internos dos sistemas dele.
+    (re.compile(r"\bSGB\s*/\s*GeoSGB(?:\s*[/–-]?\s*WMS)?\b"), "Serviço Geológico do Brasil"),
+    (re.compile(r"\bSGB\s*/\s*SIAGAS\b"), "cadastro de poços do Serviço Geológico do Brasil"),
+    (re.compile(r"\bServiço Geológico do Brasil\s*\(GeoSGB\)"), "Serviço Geológico do Brasil"),
+    (re.compile(r"\bGeoSGB\b"), "Serviço Geológico do Brasil"),
 )
 _INPE_FILE = re.compile(r"focos_10min_(20\d{2})(\d{2})(\d{2})_(\d{2})(\d{2})\.csv")
 
@@ -245,8 +279,22 @@ _LICENSE_VERSION = re.compile(r"\bCC[ -]BY(?:[ -](?:SA|NC|ND))*[ -]\d+\.\d+")
 _KEPT = re.compile(r"(\d+)")
 
 
+def _state_label(raw: str) -> str | None:
+    """Estado técnico dito em português, com ou sem caixa-alta. None quando não é estado."""
+    key = raw.strip()
+    if key in _CODES:
+        return _CODES[key]
+    low = key.lower()
+    if low in _CELL_STATE:
+        return _CELL_STATE[low].upper() if key.isupper() else _CELL_STATE[low]
+    return None
+
+
 def _normalize_segment(out: str, zone: dict | None = None) -> str:
     out = _OFF.sub("", out)
+    # T2 (correção): a célula "escopo · estado" (ex.: "raio 50 km · indisponível") não é só o estado,
+    # então o dicionário de célula inteira não a alcançava e o estado técnico ficava impresso em minúscula.
+    out = _CELL_STATE_RX.sub(lambda m: m.group(1) + (_state_label(m.group(2)) or m.group(2)) + m.group(3), out)
     out = out.replace("INTEGRAÇÃO PREPARADA", "NÃO ATIVADA NESTA VERSÃO").replace("INTEGRAÇÃO RESTRITA", "NÃO ATIVADA NESTA VERSÃO")
     out = re.sub(r"\bClimatologia (JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\b", lambda m: "Climatologia " + _MONTHS[m.group(1)], out)
     out = _KEY_VALUE_RX.sub(_key_value, out)
@@ -298,8 +346,9 @@ def normalize_text(text):
     if not isinstance(text, str) or not text:
         return text
     stripped = text.strip()
-    if stripped in _CODES:
-        return text.replace(stripped, _CODES[stripped])
+    whole_cell = _state_label(stripped)
+    if whole_cell is not None:
+        return text.replace(stripped, whole_cell)
     out = text
     marker = out.find("Não respondeu nesta emissão")
     if marker >= 0:
@@ -313,6 +362,12 @@ def normalize_text(text):
 
 
 _PENDING_TEXT = "Esta fonte não respondeu nesta emissão; a consulta é refeita na próxima."
+# T2 (correção): fonte que depende de habilitação legal não é refeita com sucesso na emissão seguinte.
+# Prometer nova tentativa nesse caso é informação errada; aqui o texto diz o que de fato acontece.
+_RESTRICTED_TEXT = (
+    "Esta base só responde a quem tem habilitação legal para consultá-la; o Raio-X não a inclui."
+)
+_RESTRICTED_STATUS = "DEPENDE DE HABILITAÇÃO OFICIAL"
 # F2: a count taken from the PAMGIA mirror envelope is never the property's certification.
 _LAND_SUMMARY = (
     "Certificação SIGEF e SNCI (INCRA): consulta pendente. "
@@ -357,6 +412,7 @@ def client_payload(payload: dict) -> dict:
     import copy
 
     out = copy.deepcopy(payload or {})
+    scope_removed = False
     sources = []
     for src in out.get("sources") or []:
         if not isinstance(src, dict):
@@ -366,8 +422,13 @@ def client_payload(payload: dict) -> dict:
             continue
         # T2: fonte que o produto não consulta sai da tabela e vira a linha de escopo (SCOPE_NOTE).
         if is_out_of_scope(src.get("name")):
+            scope_removed = True
             continue
         status = str(src.get("status") or "").upper()
+        if status.startswith("RESTRITA"):
+            src = {**src, "status": _RESTRICTED_STATUS, "level": "neutral", "description": _RESTRICTED_TEXT}
+            sources.append(src)
+            continue
         if status.startswith(("NÃO CONSULTAD", "NAO CONSULTAD")):
             # Não é escopo (o de escopo já saiu acima). Se a fonte respondeu e só faltou parte,
             # o texto dela explica o que veio e o que não veio; senão é pendência, dita baixo.
@@ -383,7 +444,6 @@ def client_payload(payload: dict) -> dict:
         sources.append(src)
     if "sources" in out:
         out["sources"] = sources
-        out["sources_scope_note"] = SCOPE_NOTE
     # Último ponto: uma frase montada rio acima pode citar a fonte fora de escopo como base que
     # "não entregou". O escopo é dito em linha própria; aqui essa frase sai.
     for block in ("narrative", "conclusion"):
@@ -427,12 +487,16 @@ def client_payload(payload: dict) -> dict:
         for key in ("certifications", "matrix"):
             rows = land.get(key)
             if isinstance(rows, list):
-                land[key] = [
-                    r for r in rows
-                    if not (isinstance(r, (list, tuple)) and len(r) > 1 and _not_activated(r[1]))
+                kept = []
+                for r in rows:
+                    if isinstance(r, (list, tuple)) and len(r) > 1 and _not_activated(r[1]):
+                        continue
                     # T2: matrícula e detentor/titular não são pendência do Raio-X — são escopo (SCOPE_NOTE).
-                    and not (isinstance(r, (list, tuple)) and r and is_out_of_scope(r[0]))
-                ]
+                    if isinstance(r, (list, tuple)) and r and is_out_of_scope(r[0]):
+                        scope_removed = True
+                        continue
+                    kept.append(r)
+                land[key] = kept
         evidence = land.get("evidence")
         if isinstance(evidence, dict):
             land["evidence"] = {
@@ -453,7 +517,58 @@ def client_payload(payload: dict) -> dict:
         # F2 + H1: a summary built from the PAMGIA mirror (with or without a parcel count) is never the certification.
         if "permanecem preparadas para ativação" in summary or re.search(r"\d+ parcela\(s\) candidata", summary) or summary.startswith("SIGEF público: consulta pendente"):
             land["summary"] = _LAND_SUMMARY
+    _clean_screening(out)
+    # T2 (correção): a linha de escopo é gravada SEMPRE que alguma linha de escopo foi removida — e não
+    # só quando o payload tem bloco de fontes. Sem isso, um payload sem "sources" perdia a matrícula da
+    # matriz de vínculo e não ganhava a linha de escopo no lugar: o limite do cartório sumia do relatório.
+    if scope_removed:
+        out["sources_scope_note"] = SCOPE_NOTE
     return out
+
+
+_ZERO_VALUE = re.compile(r"^0(?:[.,]0+)?(?:\D|$)")
+_NOT_ANSWERED = ("indispon", "não consultad", "nao consultad", "não executad", "nao executad", "pendente", "restrita")
+_SCREENING_PENDING = "A fonte não respondeu nesta consulta."
+
+
+def _has_content(value) -> bool:
+    """False quando o valor é vazio ou um zero que a fonte nunca confirmou."""
+    if value is None:
+        return False
+    if isinstance(value, dict):
+        return any(v not in (None, 0, "", "0") for v in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(_has_content(v) for v in value)
+    text = str(value).strip()
+    if not text or text in ("—", "-", "sem série utilizável"):
+        return False
+    return not _ZERO_VALUE.match(text)
+
+
+def _clean_screening(out: dict) -> None:
+    """Triagem do imóvel: estado técnico em português e zero que ninguém respondeu não vira número.
+
+    "Aeródromos · 0 aeródromo(s) · raio 50 km · indisponível" dizia zero ao lado de indisponível —
+    zero não é ausência. Sem resposta, o número não aparece.
+    """
+    agro = out.get("agropecuaria")
+    if not isinstance(agro, dict):
+        return
+    screening = agro.get("property_screening")
+    if not isinstance(screening, dict) or not isinstance(screening.get("checks"), list):
+        return
+    checks = []
+    for item in screening["checks"]:
+        if not isinstance(item, dict):
+            checks.append(item)
+            continue
+        status = str(item.get("status") or "")
+        if any(term in status.lower() for term in _NOT_ANSWERED):
+            item = {**item, "status": _state_label(status) or "consulta pendente"}
+            if not _has_content(item.get("value")):
+                item["value"] = _SCREENING_PENDING
+        checks.append(item)
+    screening["checks"] = checks
 
 
 _INSTALLED = False
