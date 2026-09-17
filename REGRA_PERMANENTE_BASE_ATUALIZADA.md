@@ -152,8 +152,10 @@ na saída do programa), porque a linha que traduz falha em código de saída é 
 
 **O que isto ainda não cobre, dito em voz alta:** tirar a redundância do segundo canal não mata controle
 nenhum enquanto o primeiro funciona — redundância não se prova sozinha, ela aparece quando a outra linha é
-mutada. E o custo subiu: o portão passou de ~9 s para ~48 s no Windows, porque ele agora roda a si mesmo
-cinco vezes (o job tem `timeout-minutes: 5`, e o teto de cada filho é 180 s, abaixo dele).
+mutada. E o custo subiu, mas só na máquina de desenvolvimento: o portão passou de ~9 s para ~48 s no Windows,
+porque ele agora roda a si mesmo cinco vezes e cada processo novo é caro ali. **No CI, medido no job
+`base-atualizada` do commit `cab41b1`: 2 s** (o job inteiro, com checkout e Python, levou 10 s). O job tem
+`timeout-minutes: 5` e o teto de cada filho é 180 s, abaixo dele.
 
 ## O que o gate NÃO promete
 
