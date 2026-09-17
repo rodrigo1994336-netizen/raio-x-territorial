@@ -43,6 +43,25 @@ arquivo, todo ponto que reprova ou que declara "nao conferido" e exige que algum
 levantado NAQUELE ponto. N controles verdes convive com zero guardas cobertas - foi assim que o unico
 `fail()` que justifica esta trava (o merge sobre base velha) ficou sem controle nenhum ate a revisao do #81:
 tres controles se chamavam `merge_nao_stale <- ...` e chamavam o ajudante `_merge_stale()`.
+
+E a cobertura das guardas ainda deixava uma camada inteira de fora (segunda revisao do #81). Guarda que
+levanta so vale o que a camada acima faz com ela, e essa camada nao levanta nada: ela SOMA e devolve um
+codigo de saida. Por isso cinco edicoes de uma linha passavam com todos os controles verdes - a pior delas
+trocava o `return 1` por `return 0` e o portao imprimia a MESMA linha FALHA saindo com codigo 0, ou seja,
+check verde no CI. Controle em processo nao alcanca isso, porque em processo se le o valor de uma funcao e
+o CI le OUTRA coisa. Quem cobre e o bloco ponta a ponta: o portao executa A SI MESMO em subprocesso contra
+repositorios sinteticos e cobra o CODIGO DE SAIDA junto com a linha PASSA/FALHA/SEM CONFERENCIA daquele
+caso. A populacao da cobertura passou a ter duas partes - os pontos que LEVANTAM (pelo AST dos `fail()`) e
+os pontos em que o resultado se INVERTE (pelo AST dos `return` de `main()`), cada `return` exigindo ter sido
+observado pelo codigo de saida de um controle verde.
+
+Duas coisas fecham a volta em torno do proprio bloco, e nenhuma delas sozinha: ele roda FORA do
+`--sem-controles`, senao a mesma linha que desliga os controles em processo desligaria o unico observador
+que le o portao de fora; e a chamada dele mora no `main()` antes de `controles()`, para que a cobertura do
+veredito - conferida la dentro - fique vermelha se essa chamada sumir. A recursao e barrada por duas travas
+com motivo no ambiente (a variavel que o pai poe em todo filho e o contador de profundidade que todo filho
+propaga), e uma delas tem controle proprio: sem as duas variaveis, a suspensao nao pode existir - suspensao
+sem motivo seria chave de desligar.
 """
 from __future__ import annotations
 
@@ -84,6 +103,52 @@ MARCA_JOB_CONDICIONAL = "condicao `if:` no job"
 MARCA_NC_EM_PR = "quem confere e pr_base_atualizada"
 MARCA_NC_UM_PAI = "tem um pai so"
 MARCA_NC_FORA_PR = "fora de PR"
+
+# ---- camada de VEREDITO: a que traduz o que foi levantado em codigo de saida, e que nao levanta nada
+# A cobertura pelo AST enumera os pontos que REPROVAM. A soma que vira `return 0`/`return 1` nao esta entre
+# eles, e por isso cinco mutacoes de uma linha sobreviviam aos 26 controles verdes (revisao do #81): trocar
+# o `return 1` por `return 0`, nao executar o bloco de controles, contar NaoConferido como regra conferida,
+# acrescentar uma regra que sempre passa a REGRAS_DE_BASE, e tirar o decorador que registra a regra. Nenhum
+# controle em processo alcanca essa camada, porque em processo se le o valor de uma funcao e o CI le OUTRA
+# coisa: o codigo de saida. Quem cobre e o bloco ponta a ponta - o portao roda A SI MESMO em subprocesso,
+# contra repositorios sinteticos, e cobra o codigo de saida junto com a linha PASSA/FALHA correspondente.
+VAR_FILHO = "RX_BASE_ATU_FILHO"                  # "1": execucao filha de um controle - nao repetir o bloco
+VAR_PROFUNDIDADE = "RX_BASE_ATU_PROFUNDIDADE"    # teto duro, propagado por TODO filho: ninguem desce alem
+PROFUNDIDADE_MAX = 2
+MARCA_E2E = "PONTA A PONTA <-"                   # prefixo do titulo de todo controle deste bloco
+MARCA_E2E_SUSPENSO = "PONTA A PONTA: suspenso"   # a linha que a execucao filha imprime no lugar do bloco
+# linha que SO a suite em processo (`controles()`) imprime. E por ela que o filho prova que o bloco de
+# controles foi executado: procurar "CONTROLE_OK" solto nao serve, porque o proprio ponta a ponta imprime
+# CONTROLE_OK de fora do interruptor - a primeira versao deste controle aceitou essa evidencia errada e a
+# mutacao `if "--sem-controles" not in args:` -> `if False:` sobreviveu.
+MARCA_SUITE = "COBERTURA: toda guarda deste arquivo tem controle"
+
+# O que o bloco precisa ter OBSERVADO para a camada de veredito estar coberta. Nomes com o motivo escrito, e
+# nao uma contagem: numero congelado registra o tamanho da divida, nunca a razao dela.
+VEREDITOS_EXIGIDOS: dict[str, str] = {
+    "saida 1 no merge atrasado": (
+        "e a unica observacao que mata `return 1` -> `return 0`: com a mutacao, a MESMA linha FALHA sai e o "
+        "CI ve verde"),
+    "saida 0 no repositorio em dia": (
+        "fecha o lado oposto (`return 0` -> `return 1`), que transformaria a trava em vermelho permanente"),
+    "saida 0 com SEM CONFERENCIA na ponta de um pai so": (
+        "mata as duas mutacoes da classificacao: contar NaoConferido como regra conferida, e acrescentar a "
+        "REGRAS_DE_BASE uma regra que sempre passa - as duas apagam a linha SEM CONFERENCIA"),
+    "o bloco de controles e executado pelo portao": (
+        "mata `if \"--sem-controles\" not in args:` -> `if False:`, que apaga do CI a auto-verificacao "
+        "inteira sem mudar nenhum veredito de regra"),
+    "sem a variavel de suspensao o portao roda tudo": (
+        "prova que VAR_FILHO nao e chave de desligar: a suspensao existe para o filho nao chamar a si mesmo "
+        "sem fim, e fora dela o bloco roda"),
+}
+_VEREDITOS_VISTOS: set[str] = set()   # nomes acima registrados por controle ponta a ponta VERDE
+_SAIDAS_VISTAS: set[int] = set()      # codigos de saida observados por controle ponta a ponta VERDE
+_VERMELHOS: list[str] = []            # segundo canal do vermelho ate o CI (ver o fim do arquivo)
+# As duas que rodam a SUITE INTEIRA num subprocesso so sao exigidas na execucao de cima: repetidas em cada
+# nivel, o custo do portao multiplicaria por nivel sem cobrir nada de novo. A execucao filha diz isso na
+# saida, em vez de calar - e a de cima continua exigindo as duas.
+VEREDITOS_SO_NO_TOPO = frozenset({"o bloco de controles e executado pelo portao",
+                                  "sem a variavel de suspensao o portao roda tudo"})
 
 
 class Reprova(AssertionError):
@@ -641,8 +706,7 @@ def _controles_de_cobertura() -> list[tuple[str, bool, str]]:
                              f"{sorted(por_grafia - inicios)}"))
 
     sem_controle, isentas = _cobertura(sitios, _COBERTAS, linhas)
-    saida.append(("COBERTURA: toda guarda deste arquivo tem controle que reprova pela mensagem DELA",
-                  not sem_controle,
+    saida.append((f"{MARCA_SUITE} que reprova pela mensagem DELA", not sem_controle,
                   f"{len(sitios)} guardas: {len(sitios) - len(sem_controle) - len(isentas)} mortas por "
                   f"controle, {len(isentas)} isentas declaradas" if not sem_controle
                   else f"SEM CONTROLE NENHUM: {sem_controle}"))
@@ -661,6 +725,70 @@ def _controles_de_cobertura() -> list[tuple[str, bool, str]]:
         ok = any(f"linha {alvo[0]} " in f"{x} " for x in acusadas)
         saida.append((f"COBERTURA <- apagar o controle da guarda da linha {alvo[0]} (tem de ACUSAR)", ok,
                       f"acusou {acusadas}"[:190] if ok else f"NAO acusou: {acusadas}"[:190]))
+
+    saida.extend(_controles_de_cobertura_do_veredito(fonte))
+    return saida
+
+
+def _veredito_no_fonte(fonte: str) -> list[tuple[int, int]]:
+    """(linha, valor) de cada `return <inteiro>` de main() - os pontos em que o resultado se INVERTE.
+
+    A outra populacao, a das guardas, enumera os pontos que LEVANTAM. Sao populacoes diferentes, e foi por
+    enumerar so a primeira que a camada de veredito ficou inteira fora da cobertura.
+    """
+    for no in ast.walk(ast.parse(fonte)):
+        if isinstance(no, ast.FunctionDef) and no.name == "main":
+            return sorted((r.lineno, r.value.value) for r in ast.walk(no)
+                          if isinstance(r, ast.Return) and isinstance(r.value, ast.Constant)
+                          and isinstance(r.value.value, int) and not isinstance(r.value.value, bool))
+    return []
+
+
+def _controles_de_cobertura_do_veredito(fonte: str) -> list[tuple[str, bool, str]]:
+    saida: list[tuple[str, bool, str]] = []
+    suspenso = _ponta_a_ponta_suspensa()
+    if suspenso:
+        saida.append((f"COBERTURA DO VEREDITO: nao exigida nesta execucao ({suspenso})", True,
+                      "esta execucao e filha de um controle ponta a ponta e por isso nao roda o bloco que "
+                      "observa codigo de saida; quem exige a cobertura do veredito e a execucao de cima"))
+        return saida
+
+    retornos = _veredito_no_fonte(fonte)
+    # segunda contagem, por outro caminho: zero aqui seria "nao perguntei", e a cobertura do veredito sairia
+    # verde sem ter olhado ponto nenhum. A grafia e so a conferencia - quem enumera e o AST
+    por_grafia = {i + 1 for i, ln in enumerate(fonte.splitlines())
+                  if re.match(r"^\s+return \d+\s*$", ln)}
+    linhas_ast = {ln for ln, _valor in retornos}
+    ok = bool(retornos) and bool(por_grafia) and por_grafia <= linhas_ast
+    saida.append(("INSTRUMENTO: o AST enxerga os pontos de veredito que a grafia enxerga", ok,
+                  f"{len(retornos)} retornos constantes em main(): {retornos}" if ok else
+                  f"AST={sorted(linhas_ast)}, grafia={sorted(por_grafia)}, so na grafia: "
+                  f"{sorted(por_grafia - linhas_ast)} - zero nao e ausencia"))
+
+    descobertos = [f"linha {ln} (return {valor})" for ln, valor in retornos if valor not in _SAIDAS_VISTAS]
+    saida.append(("COBERTURA DO VEREDITO: todo `return` de main() foi observado pelo CODIGO DE SAIDA de um "
+                  "controle ponta a ponta verde", bool(retornos) and not descobertos,
+                  f"{len(retornos)} pontos de veredito, codigos observados {sorted(_SAIDAS_VISTAS)}"
+                  if retornos and not descobertos else f"SEM OBSERVACAO: {descobertos}"))
+
+    exigidas = {n: m for n, m in VEREDITOS_EXIGIDOS.items()
+                if not (_profundidade() and n in VEREDITOS_SO_NO_TOPO)}
+    adiadas = sorted(set(VEREDITOS_EXIGIDOS) - set(exigidas))
+    if adiadas:
+        saida.append((f"COBERTURA DO VEREDITO: {len(adiadas)} observacoes ficam para a execucao de cima "
+                      f"({VAR_PROFUNDIDADE}={_profundidade()})", True, f"adiadas nesta execucao: {adiadas}"))
+    # simetrica de proposito: "falta observacao" acusa controle apagado, e "observacao a mais" acusa a lista
+    # de exigencias esvaziada - uma lista vazia conferida contra si mesma daria verde sem exigir nada
+    faltando = sorted(set(exigidas) - _VEREDITOS_VISTOS)
+    sobrando = sorted(_VEREDITOS_VISTOS - set(exigidas))
+    saida.append(("COBERTURA DO VEREDITO: o que o bloco ponta a ponta observou e exatamente o que a lista de "
+                  "exigencias declara", bool(exigidas) and not faltando and not sobrando,
+                  f"{len(exigidas)} observacoes exigidas, todas registradas por controle verde"
+                  if exigidas and not faltando and not sobrando else
+                  f"faltando={faltando} sobrando={sobrando} exigidas={len(exigidas)}"))
+    for nome, motivo in exigidas.items():
+        saida.append((f"COBERTURA DO VEREDITO exige `{nome}`, e o motivo", nome in _VEREDITOS_VISTOS,
+                      motivo if nome in _VEREDITOS_VISTOS else f"NAO observada. Existe porque: {motivo}"))
     return saida
 
 
@@ -725,6 +853,166 @@ def _insere_no_job(texto: str, linha_nova: str) -> str:
     if ini == 0:
         return texto
     return "\n".join(linhas[:ini + 1] + [linha_nova] + linhas[ini + 1:]) + "\n"
+
+
+# --------------------------------------------- ponta a ponta: o portao rodando A SI MESMO, pelo codigo de saida
+def _profundidade() -> int:
+    bruto = (os.environ.get(VAR_PROFUNDIDADE) or "0").strip()
+    try:
+        return max(0, int(bruto))
+    except ValueError:
+        return 0                  # valor estragado nao vale como teto: quem limita de verdade e o VAR_FILHO
+
+
+def _ponta_a_ponta_suspensa() -> str:
+    """Motivo pelo qual ESTA execucao nao roda o bloco ponta a ponta - vazio quando ela roda.
+
+    Sem suspensao o portao chamaria a si mesmo sem fim. Sao duas travas, nao uma: a variavel que o pai poe
+    em todo filho, e o contador de profundidade que TODO filho propaga - o contador continua valendo mesmo
+    para o filho que roda de proposito sem a variavel (o controle que prova que ela nao e chave de desligar).
+    """
+    prof = _profundidade()
+    if prof >= PROFUNDIDADE_MAX:
+        return f"teto de recursao ({VAR_PROFUNDIDADE}={prof}, maximo {PROFUNDIDADE_MAX})"
+    if (os.environ.get(VAR_FILHO) or "").strip() == "1":
+        return f"{VAR_FILHO}=1, execucao filha de um controle ponta a ponta"
+    return ""
+
+
+def _roda_o_portao(repo: Path, *args: str, filho: bool = True,
+                   segundos: int = 180) -> tuple[int | None, str]:
+    """Executa ESTE arquivo em subprocesso, apontado para um repositorio sintetico. (codigo de saida, saida).
+
+    E a MESMA interface que o CI consome: `python scripts/base_atualizada_gate.py` e o numero que ele devolve.
+    Chamar `main()` em processo nao serviria - em processo se le o valor de uma funcao, e quem decide o check
+    e o codigo de saida.
+    """
+    env = dict(os.environ)
+    for k in ("RX_PR_HEAD_SHA", "RX_PR_BASE_SHA"):
+        env.pop(k, None)                       # variavel de PR do ambiente de fora mudaria o caso do filho
+    env["RX_BASE_ATU_ROOT"] = str(repo)
+    env["RX_BASE_ATU_WORKFLOW"] = str(WORKFLOW)
+    env["PYTHONIOENCODING"] = "utf-8"          # no Windows a saida canalizada cairia no codepage do console
+    env[VAR_PROFUNDIDADE] = str(_profundidade() + 1)
+    env.pop(VAR_FILHO, None)
+    if filho:
+        env[VAR_FILHO] = "1"
+    try:
+        # o teto fica ABAIXO do `timeout-minutes` do job: filho pendurado tem de virar controle vermelho com
+        # mensagem, nunca job morto pelo GitHub - job morto nao diz o que aconteceu
+        proc = subprocess.run([sys.executable, str(Path(__file__).resolve()), *args], cwd=str(repo),
+                              capture_output=True, timeout=segundos, env=env)
+    except subprocess.TimeoutExpired:
+        return None, f"o portao filho nao terminou em {segundos}s (possivel recursao: a suspensao falhou)"
+    return proc.returncode, (proc.stdout + proc.stderr).decode("utf-8", "ignore")
+
+
+def _exige_saida(nome: str, codigo: int | None, saida: str, esperado: int, *exigidos: str,
+                 proibidos: tuple[str, ...] = ()) -> tuple[bool, str]:
+    """Cobra do filho o codigo de saida E as linhas daquele caso. So o verde registra a observacao `nome`."""
+    if codigo is None:
+        return False, saida
+    problemas = [] if codigo == esperado else [f"codigo de saida {codigo}, esperado {esperado}"]
+    problemas += [f"a saida do filho nao tem {t!r}" for t in exigidos if t not in saida]
+    problemas += [f"a saida do filho tem {t!r}, que nao podia aparecer" for t in proibidos if t in saida]
+    veredito = next((ln for ln in reversed(saida.splitlines())
+                     if ln.startswith("RX_BASE_ATUALIZADA_GATE=")), "sem linha de veredito")
+    if problemas:
+        return False, f"{'; '.join(problemas)} | {veredito}"
+    _VEREDITOS_VISTOS.add(nome)
+    _SAIDAS_VISTAS.add(codigo)
+    return True, f"saiu com codigo {codigo}, que e o que o CI le | {veredito}"
+
+
+def _controles_ponta_a_ponta() -> list[tuple[str, bool, str]]:
+    """Roda SEMPRE, mesmo com `--sem-controles`: se dependesse dessa linha, a mesma edicao que desliga os
+    controles em processo desligaria tambem o unico observador que enxerga o portao de fora."""
+    saida: list[tuple[str, bool, str]] = []
+    _VEREDITOS_VISTOS.clear()
+    _SAIDAS_VISTAS.clear()
+
+    # a suspensao tem de ter MOTIVO no ambiente: sem as duas variaveis ela nao pode existir, senao seria uma
+    # chave de desligar o bloco inteiro - e essa conferencia roda antes da propria suspensao, de proposito
+    with _aponta(**{VAR_FILHO: None, VAR_PROFUNDIDADE: None}):
+        sem_motivo = _ponta_a_ponta_suspensa()
+    saida.append(("INSTRUMENTO: sem as duas variaveis a suspensao do ponta a ponta nao tem motivo (ela "
+                  "existe contra recursao, nao para desligar o bloco)", sem_motivo == "",
+                  f"com {VAR_FILHO} e {VAR_PROFUNDIDADE} fora do ambiente, o bloco roda" if not sem_motivo
+                  else f"SUSPENSO mesmo sem as variaveis: {sem_motivo}"))
+
+    # quem julga o ponta a ponta tambem e codigo, e seria o unico sem controle: entregar a ele casos FALSOS
+    # e exigir o veredito falso. Sem isto, afrouxar `_exige_saida` - parar de comparar o codigo de saida, por
+    # exemplo - nao mataria controle nenhum. O nome `_probe` nao esta em VEREDITOS_EXIGIDOS de proposito: se
+    # uma dessas chamadas ficasse verde, ela se registraria e a conferencia simetrica acusaria "sobrando".
+    probas = [("codigo de saida errado", _exige_saida("_probe", 0, "RX_BASE_ATUALIZADA_GATE=PASS", 1)),
+              ("linha exigida ausente", _exige_saida("_probe", 1, "RX_BASE_ATUALIZADA_GATE=FALHA", 1,
+                                                     "linha que o filho nunca imprimiu")),
+              ("linha proibida presente", _exige_saida("_probe", 0, "SEM CONFERENCIA", 0,
+                                                       proibidos=("SEM CONFERENCIA",))),
+              ("filho que nao terminou", _exige_saida("_probe", None, "estourou o tempo", 0))]
+    vivas = [nome for nome, (ok, _detalhe) in probas if ok]
+    saida.append(("INSTRUMENTO: quem julga o ponta a ponta (_exige_saida) reprova os quatro casos falsos",
+                  not vivas, f"os {len(probas)} casos falsos reprovaram" if not vivas
+                  else f"ACEITOU como verde: {vivas}"))
+
+    suspenso = _ponta_a_ponta_suspensa()
+    if suspenso:
+        saida.append((f"{MARCA_E2E_SUSPENSO} nesta execucao: {suspenso}", True,
+                      "quem exige o codigo de saida e a execucao de cima, que criou este filho de proposito"))
+        return saida
+    with tempfile.TemporaryDirectory(prefix="rx_base_atu_e2e_") as td:
+        saida.extend(_ponta_a_ponta_nos_repos(Path(td)))
+    return saida
+
+
+def _ponta_a_ponta_nos_repos(raiz: Path) -> list[tuple[str, bool, str]]:
+    saida: list[tuple[str, bool, str]] = []
+    atrasado = _repo_sintetico(raiz, em_dia=False)
+    em_dia = _repo_sintetico(raiz, em_dia=True)
+
+    cod, txt = _roda_o_portao(atrasado, "--sem-controles")
+    ok, detalhe = _exige_saida("saida 1 no merge atrasado", cod, txt, 1,
+                               "FALHA merge_nao_stale", MARCA_MERGE_STALE, "RX_BASE_ATUALIZADA_GATE=FALHA",
+                               proibidos=("RX_BASE_ATUALIZADA_GATE=PASS",))
+    saida.append((f"{MARCA_E2E} repositorio com merge atrasado (codigo 1 E a linha FALHA; imprimir a linha "
+                  "e sair 0 e o defeito)", ok, detalhe))
+
+    cod, txt = _roda_o_portao(em_dia, "--sem-controles")
+    ok, detalhe = _exige_saida("saida 0 no repositorio em dia", cod, txt, 0,
+                               "PASSA merge_nao_stale", "RX_BASE_ATUALIZADA_GATE=PASS",
+                               proibidos=("RX_BASE_ATUALIZADA_GATE=FALHA", "SEM CONFERENCIA"))
+    saida.append((f"{MARCA_E2E} repositorio em dia (codigo 0 E a linha PASSA)", ok, detalhe))
+
+    cod, txt = _roda_o_portao(_repo_um_pai(raiz), "--sem-controles")
+    ok, detalhe = _exige_saida("saida 0 com SEM CONFERENCIA na ponta de um pai so", cod, txt, 0,
+                               "SEM CONFERENCIA", "conferidas=['ci_roda_a_trava']", "regras=3",
+                               "NAO_CONFERIDO merge_nao_stale", "NAO_CONFERIDO pr_base_atualizada",
+                               "PASSA ci_roda_a_trava")
+    saida.append((f"{MARCA_E2E} ponta com um pai so (codigo 0, linha SEM CONFERENCIA, e as tres regras "
+                  "executadas com NaoConferido FORA de `conferidas`)", ok, detalhe))
+
+    if _profundidade():
+        saida.append((f"{MARCA_E2E_SUSPENSO} a parte que roda o portao INTEIRO, porque esta execucao ja e "
+                      f"filha ({VAR_PROFUNDIDADE}={_profundidade()})", True,
+                      "cada um desses dois controles roda a suite inteira num subprocesso; repeti-los em "
+                      "cada nivel multiplicaria o custo do portao sem cobrir nada de novo"))
+        return saida
+
+    cod, txt = _roda_o_portao(em_dia)
+    ok, detalhe = _exige_saida("o bloco de controles e executado pelo portao", cod, txt, 0,
+                               f"CONTROLE_OK {MARCA_SUITE}", MARCA_E2E_SUSPENSO,
+                               "RX_BASE_ATUALIZADA_GATE=PASS",
+                               proibidos=("CONTROLE_FALHOU", MARCA_E2E))
+    saida.append((f"{MARCA_E2E} o portao INTEIRO com {VAR_FILHO}=1 (a suite em processo roda - tem de sair "
+                  f"a linha `{MARCA_SUITE}` - e so o ponta a ponta fica suspenso)", ok, detalhe))
+
+    cod, txt = _roda_o_portao(em_dia, filho=False)
+    ok, detalhe = _exige_saida("sem a variavel de suspensao o portao roda tudo", cod, txt, 0,
+                               f"CONTROLE_OK {MARCA_SUITE}", MARCA_E2E, "RX_BASE_ATUALIZADA_GATE=PASS",
+                               proibidos=("CONTROLE_FALHOU",))
+    saida.append((f"{MARCA_E2E} o portao INTEIRO SEM {VAR_FILHO} (tem de rodar tambem o ponta a ponta: a "
+                  "suspensao e contra recursao, nao chave de desligar)", ok, detalhe))
+    return saida
 
 
 def controles() -> list[tuple[str, bool, str]]:
@@ -841,15 +1129,20 @@ def main() -> int:
         except Exception as exc:  # noqa: BLE001
             print(f"FALHA {nome}: {type(exc).__name__}: {exc}", flush=True)
             falhas.append(nome)
+    # o bloco ponta a ponta roda ANTES e FORA do `--sem-controles`, por dois motivos que ja foram defeito:
+    # fora, porque a linha que desliga os controles em processo nao pode desligar tambem o unico observador
+    # que le o portao de fora (pelo codigo de saida); antes, porque e a cobertura do veredito - conferida la
+    # dentro de `controles()` - que acusa quando ESTA chamada some daqui.
+    controlados = _controles_ponta_a_ponta()
     if "--sem-controles" not in args:
-        controlados = controles()
-        if not controlados:
-            print("FALHA controles: nenhum controle rodou (instrumento quebrado)", flush=True)
-            falhas.append("controles:vazio")
-        for titulo, ok, detalhe in controlados:
-            print(f"{'CONTROLE_OK' if ok else 'CONTROLE_FALHOU'} {titulo}: {detalhe[:200]}", flush=True)
-            if not ok:
-                falhas.append(f"controle:{titulo}")
+        controlados += controles()
+    if not controlados:
+        print("FALHA controles: nenhum controle rodou (instrumento quebrado)", flush=True)
+        falhas.append("controles:vazio")
+    for titulo, ok, detalhe in controlados:
+        print(f"{'CONTROLE_OK' if ok else 'CONTROLE_FALHOU'} {titulo}: {detalhe[:200]}", flush=True)
+        if not ok:
+            falhas.append(f"controle:{titulo}")
     # concluir e passar OU reprovar: quem reprovou conferiu e achou defeito. Fica de fora so a regra que
     # nao teve o que conferir - e quando NENHUMA das duas teve, o relatorio diz isso em vez de calar.
     if not [n for n in conferidas + falhas if n in REGRAS_DE_BASE]:
@@ -857,6 +1150,7 @@ def main() -> int:
               f"({', '.join(nao_conferidas) or 'nenhuma saida'}). Isto NAO e um verde sobre a base - e a "
               "ausencia de conferencia, dita em voz alta. Quem fecha o buraco e a protecao de branch do "
               "GitHub com 'require branches to be up to date before merging'.", flush=True)
+    _VERMELHOS.extend(falhas)
     if falhas:
         print(f"RX_BASE_ATUALIZADA_GATE=FALHA {falhas}", flush=True)
         return 1
@@ -866,4 +1160,8 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # dois caminhos independentes do vermelho ate o CI, e e de proposito que sejam dois. A linha que
+    # traduz falha em codigo de saida e ela mesma uma linha editavel: trocar o `return 1` por `return 0`
+    # deixaria o relatorio cheio de CONTROLE_FALHOU e o check VERDE, que e o defeito desta branch uma
+    # camada acima. Com o segundo canal, uma edicao de UMA linha nao fecha os dois.
+    sys.exit(1 if (main() or _VERMELHOS) else 0)

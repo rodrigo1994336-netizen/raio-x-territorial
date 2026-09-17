@@ -89,7 +89,7 @@ relatório diz isso na própria saída.
 
 ### Controles positivos — cada um cobra a mensagem da sua guarda, e a cobertura é medida
 
-26 controles montados na hora. Duas regras de escrita, as duas nascidas de defeito real:
+Controles montados na hora. Duas regras de escrita, as duas nascidas de defeito real:
 
 1. **todo controle chama a REGRA registrada** — a função que o `main()` executa —, nunca um ajudante abaixo
    dela. Um controle é uma afirmação sobre a função que ele **chama**, não sobre a que ele **nomeia**: até a
@@ -110,6 +110,50 @@ Conferido por mutação, uma guarda por vez, sobre uma **cópia** do arquivo —
 importam: apagar a reprovação do merge sobre base velha mata três controles, e **reescrever os controles para
 chamar o ajudante em vez da regra — o defeito exato do #81 — deixa todos os controles verdes e mata a
 COBERTURA**.
+
+### A camada do veredito — o portão rodando a si mesmo, e cobrando o código de saída
+
+Segunda revisão do #81. Medir cobertura pelos pontos que **levantam** mede o detector e declara o detector
+inteiro; a camada que **traduz** o que foi levantado em veredito não levanta nada — ela soma e devolve um
+número. Ficou inteira fora da população, e cinco edições de **uma linha** passavam com todos os controles
+verdes. A pior: trocar `return 1` por `return 0` fazia o portão imprimir a **mesma** linha
+`FALHA merge_nao_stale … merge sobre base desatualizada` e sair com código **0** — check verde no CI. É o
+defeito do #81 (verde que não encosta no ponto que decide) repetido uma camada acima.
+
+Controle em processo não alcança isso, porque **em processo se lê o valor de uma função e o CI lê outra
+coisa**. Quem cobre é o bloco **ponta a ponta**: o portão executa **a si mesmo** em subprocesso
+(`python scripts/base_atualizada_gate.py`) contra repositórios sintéticos e cobra o **código de saída** junto
+com a linha correspondente:
+
+| caso | o que é exigido | que mutação mata |
+|---|---|---|
+| repositório com merge atrasado | código **1** e a linha `FALHA merge_nao_stale … base desatualizada` | `return 1` → `return 0` |
+| repositório em dia | código **0** e a linha `PASSA merge_nao_stale` | `return 0` → `return 1` |
+| ponta com um pai só | código **0**, a linha `SEM CONFERENCIA`, as três regras executadas e `conferidas=['ci_roda_a_trava']` | contar `NÃO CONFERIDO` como conferida; pôr uma regra que sempre passa em `REGRAS_DE_BASE`; tirar o decorador que registra a regra |
+| o portão inteiro, com a variável de suspensão | código 0 e a linha da COBERTURA na saída do filho | `if "--sem-controles" not in args:` → `if False:` |
+| o portão inteiro, **sem** a variável | código 0 e as linhas `PONTA A PONTA` na saída do filho | a suspensão virar chave de desligar |
+
+A população da cobertura passou a ter **duas partes**: os pontos que levantam (pelo AST dos `fail()`) e os
+pontos em que o resultado **se inverte** (pelo AST dos `return` de `main()`), cada `return` exigindo ter sido
+observado pelo código de saída de um controle verde.
+
+Três coisas fecham a volta em torno do próprio bloco, e nenhuma sozinha:
+
+1. ele roda **fora** do `--sem-controles` — senão a mesma linha que desliga os controles em processo
+   desligaria também o único observador que lê o portão de fora;
+2. a chamada dele fica **antes** de `controles()`, para que a cobertura do veredito — conferida lá dentro —
+   fique vermelha se essa chamada sumir;
+3. a recursão é barrada por **duas** travas com motivo no ambiente (a variável que o pai põe em todo filho e
+   o contador de profundidade que todo filho propaga), e há controle provando que **sem** as variáveis a
+   suspensão não existe: suspensão sem motivo seria chave de desligar.
+
+E o vermelho chega ao CI por **dois caminhos independentes** (o `return` de `main()` e um segundo canal lido
+na saída do programa), porque a linha que traduz falha em código de saída é ela mesma uma linha editável.
+
+**O que isto ainda não cobre, dito em voz alta:** tirar a redundância do segundo canal não mata controle
+nenhum enquanto o primeiro funciona — redundância não se prova sozinha, ela aparece quando a outra linha é
+mutada. E o custo subiu: o portão passou de ~9 s para ~48 s no Windows, porque ele agora roda a si mesmo
+cinco vezes (o job tem `timeout-minutes: 5`, e o teto de cada filho é 180 s, abaixo dele).
 
 ## O que o gate NÃO promete
 
