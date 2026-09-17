@@ -9,34 +9,45 @@ dois CIs podia ver o defeito: ele so existe na combinacao, e nenhum dos dois rod
 O que esta trava reprova, e o que ela NAO promete:
   * `merge_nao_stale` - no commit que esta na `main` agora: se for merge, o ramo mesclado tinha de CONTER o
     commit que era a ponta da `main` antes do merge. Se nao continha, o verde daquele ramo era sobre outra
-    arvore: reprova, nomeia os dois commits e diz o que fazer. Isto pega o erro no ato em que ele entra,
-    mesmo quando todos os outros portoes ficam verdes por sorte - que e o caso silencioso e o pior deles.
+    arvore: reprova, nomeia os dois commits e diz o que fazer.
   * `pr_base_atualizada` - num PR: a ponta da `main` de AGORA tem de estar contida no head do PR. Enquanto
     o ramo estiver atrasado, o check fica vermelho no proprio PR, antes do merge.
-  * `ci_roda_a_trava` - o fluxo de trabalho tem de chamar esta trava nos dois momentos E no job que a chama
-    o checkout tem de trazer o historico inteiro (`fetch-depth: 0`). Portao que some do CI vira arquivo
-    morto sem ninguem notar; portao que roda sem historico e pior, porque continua imprimindo verde.
+  * `ci_roda_a_trava` - o fluxo de trabalho tem de EXECUTAR esta trava (num passo `run:`/`uses:`, nao em
+    qualquer linha do job), nos dois gatilhos, sem filtro que impeca o gatilho de disparar na base, sem
+    `if:` no job, e com `fetch-depth: 0` em TODO checkout daquele job.
 NAO promete impedir o merge: o check do PR e uma fotografia do instante em que rodou, e ninguem re-roda o CI
 de um PR parado quando outro PR entra. Quem IMPEDE e a protecao de branch do GitHub com "require branches to
 be up to date before merging" (ligar e decisao do dono, porque muda quem consegue mesclar). Ate la a ordem
 escrita vale: atualizar o ramo com a main, esperar o CI novo, e so entao mesclar.
 
-Historico raso e o caso silencioso desta trava (conserto de 16/09). Num `clone --depth 1` o commit da ponta
-vira enxerto e reporta ZERO pais: sem guarda, a leitura dos pais concluiria "nao e merge, nada a conferir" e
-o portao imprimiria PASSA exatamente no caso que ele existe para pegar. Por isso a primeira coisa que as
-regras de historico fazem e recusar o clone raso, com a mensagem do `fetch-depth: 0` - antes de qualquer
-conclusao. E a regra do CI passou a EXIGIR a linha no job, porque guarda que depende de configuracao
-externa some numa edicao e deixa o portao verde para sempre.
+Tres saidas por regra, e a do meio e a que faltava (conserto de 16/09, revisao do PR #81). PASSA = conferiu
+e esta certo. FALHA = conferiu e esta errado. NAO CONFERIDO = nao tinha o que conferir nesta execucao, dito
+em voz alta. A trava nasceu de um PASS que nao tinha olhado nada (clone raso); consertar so a porta por onde
+aquele caso entrou deixaria a sala aberta, porque a MESMA conclusao "nada a conferir" sai tambem de um merge
+por squash/rebase (um pai so, sem rastro no historico) e de qualquer execucao fora de push e de PR (no
+projeto, o `workflow_dispatch` que roda o CI de PR empilhado). Nenhuma dessas tem evidencia: viraram
+NAO CONFERIDO, e quando nenhuma das duas regras de base confere, a linha SEM CONFERENCIA diz isso.
 
-Controles positivos por construcao: cada regra e exercitada num repositorio git sintetico montado na hora,
-na configuracao em que ela vai rodar, e cada controle cobra a MENSAGEM daquela guarda - controle que aceita
-"levantou alguma coisa" mede o otimismo do autor, nao a guarda. Entre eles, um `git clone --depth 1` de
-verdade do repositorio atrasado (tem de REPROVAR pelo clone raso), o mesmo repositorio clonado inteiro (tem
-de passar pela guarda de raso e ainda acusar o atraso), e as mutacoes do YAML que tiram a chamada, a linha
-`fetch-depth: 0` e o gatilho `pull_request` (cada uma tem de REPROVAR com a sua marca).
+Historico raso e o caso silencioso desta trava. Num `clone --depth 1` o commit da ponta vira enxerto e
+`git rev-list --parents` reporta ZERO pais: sem guarda, a leitura concluiria "nao e merge, nada a conferir"
+e o portao imprimiria PASSA exatamente no caso que ele existe para pegar. Duas coisas fecham isso, nao uma:
+a guarda que recusa o clone raso antes de qualquer conclusao, e a leitura dos pais no PROPRIO objeto do
+commit (`git cat-file commit`), que nao caminha no grafo e por isso nao aceita o enxerto como verdade - com
+ela, historico cortado sem o marcador `shallow` tambem reprova pela guarda, em vez de virar erro cru.
+
+Controles positivos por construcao: cada controle chama a REGRA registrada (a funcao que o `main()`
+executa), nunca um ajudante abaixo dela - um controle e uma afirmacao sobre a funcao que ele CHAMA, nao
+sobre a que ele NOMEIA -, exercita um repositorio git sintetico montado na hora e cobra a MENSAGEM daquela
+guarda. E a cobertura nao se le pela contagem de controles verdes: o proprio portao enumera, pelo AST do seu
+arquivo, todo ponto que reprova ou que declara "nao conferido" e exige que algum controle verde tenha
+levantado NAQUELE ponto. N controles verdes convive com zero guardas cobertas - foi assim que o unico
+`fail()` que justifica esta trava (o merge sobre base velha) ficou sem controle nenhum ate a revisao do #81:
+tres controles se chamavam `merge_nao_stale <- ...` e chamavam o ajudante `_merge_stale()`.
 """
 from __future__ import annotations
 
+import ast
+import fnmatch
 import os
 import re
 import subprocess
@@ -49,6 +60,7 @@ WORKFLOW = Path(os.environ.get("RX_BASE_ATU_WORKFLOW") or (ROOT / ".github/workf
 BASE_REF = os.environ.get("RX_BASE_REF", "main")
 CHAMADA = "scripts/base_atualizada_gate.py"
 RULES: dict[str, callable] = {}
+REGRAS_DE_BASE = ("merge_nao_stale", "pr_base_atualizada")   # as que respondem por base atualizada
 
 # Marcas de cada guarda. O controle positivo cobra a marca da guarda que ele diz exercitar: sem isso um
 # controle fica verde com QUALQUER erro anterior - inclusive o erro que prova o contrario do que se quer
@@ -56,18 +68,44 @@ RULES: dict[str, callable] = {}
 MARCA_RASO = "clone e raso"
 MARCA_FETCH_DEPTH = "fetch-depth: 0"
 MARCA_PAI_AUSENTE = "nao esta no clone"
+MARCA_OBJETO_VAZIO = "objeto do commit veio vazio"
+MARCA_MERGE_STALE = "merge sobre base desatualizada"
 MARCA_PR_ATRASADO = "ramo do PR atrasado"
 MARCA_HEAD_PR = "RX_PR_HEAD_SHA"
+MARCA_SEM_FLUXO = "fluxo de trabalho nao encontrado"
+MARCA_SEM_JOBS = "nenhum job separado"
 MARCA_SEM_CHAMADA = "o CI nao chama"
+MARCA_SEM_EXECUCAO = "nenhum passo executa"
 MARCA_SEM_GATILHO = "nao dispara em"
+MARCA_GATILHO_FILTRADO = "filtro de gatilho"
+MARCA_JOB_CONDICIONAL = "condicao `if:` no job"
+# Marcas das saidas que NAO conferem nada. Tambem sao enumeradas e tambem precisam de controle: uma saida
+# que afirma "nada a conferir" e a forma exata de um PASS falso.
+MARCA_NC_EM_PR = "quem confere e pr_base_atualizada"
+MARCA_NC_UM_PAI = "tem um pai so"
+MARCA_NC_FORA_PR = "fora de PR"
 
 
 class Reprova(AssertionError):
     pass
 
 
+class NaoConferido(Exception):
+    """A regra nao teve o que conferir nesta execucao. Nao e sucesso: e ausencia de conferencia."""
+
+
+_ULTIMA_GUARDA = [0]      # linha do fail()/nao_conferido() que levantou por ultimo - e assim que a
+_COBERTAS: set[int] = set()   # cobertura sabe QUAL guarda cada controle verde matou
+
+
 def fail(msg: str):
+    _ULTIMA_GUARDA[0] = sys._getframe(1).f_lineno
     raise Reprova(msg)
+
+
+def nao_conferido(msg: str):
+    _ULTIMA_GUARDA[0] = sys._getframe(1).f_lineno
+    raise NaoConferido(msg)
 
 
 def regra(nome: str):
@@ -126,14 +164,35 @@ def repo_raso(repo: Path) -> bool:
 def exige_historico_completo(repo: Path) -> None:
     """Reprova ANTES de qualquer conclusao quando o clone e raso.
 
-    Num clone raso o `git` responde com meia-verdade: o commit da ponta e um enxerto e reporta zero pais.
-    Sem esta guarda a leitura dos pais concluiria "nao e merge, nada a conferir" e o portao imprimiria
-    PASSA justamente no caso que ele existe para pegar - o pior jeito de falhar, porque parece sucesso.
+    Num clone raso o `git` responde com meia-verdade: para quem caminha no grafo, o commit da ponta e um
+    enxerto e reporta zero pais. Sem esta guarda a leitura concluiria "nao e merge, nada a conferir" e o
+    portao imprimiria PASSA justamente no caso que ele existe para pegar - o pior jeito de falhar.
     """
     if repo_raso(repo):
         fail(f"instrumento quebrado: o {MARCA_RASO} (historico cortado no enxerto). Sem o historico "
              "completo esta trava nao ve os pais do merge e passaria calada justamente no caso que ela "
              f"existe para pegar. O passo precisa de actions/checkout com {MARCA_FETCH_DEPTH}.")
+
+
+def _pais_do_objeto(repo: Path, commit: str) -> tuple[str, list[str]]:
+    """(sha, pais) lidos do PROPRIO objeto do commit.
+
+    `git cat-file commit` nao caminha no grafo: responde os pais reais mesmo quando eles nao estao no clone,
+    que e exatamente o que distingue "ponta com um pai so" de "historico cortado". A leitura que caminha
+    (`rev-list --parents`, `log`) faz o oposto: no clone raso mente zero pais, e no clone sem o marcador
+    `shallow` levanta erro cru, sem a mensagem que diz o que fazer.
+    """
+    sha = git("rev-parse", f"{commit}^{{commit}}", cwd=repo)
+    bruto = git("cat-file", "commit", sha, cwd=repo)
+    if not bruto.strip():
+        fail(f"instrumento quebrado: o {MARCA_OBJETO_VAZIO} para a ponta {sha[:12]}")
+    pais: list[str] = []
+    for ln in bruto.splitlines():
+        if not ln.strip():
+            break                 # o cabecalho acaba na primeira linha em branco; depois vem a mensagem
+        if ln.startswith("parent "):
+            pais.append(ln.split()[1])
+    return sha, pais
 
 
 def _merge_stale(repo: Path, commit: str = "HEAD") -> tuple[str, str, list[str], bool]:
@@ -143,12 +202,9 @@ def _merge_stale(repo: Path, commit: str = "HEAD") -> tuple[str, str, list[str],
     segunda chamada de git, que e como a guarda deixava de ser alcancada.
     """
     exige_historico_completo(repo)
-    campos = git("rev-list", "--parents", "-n", "1", commit, cwd=repo).split()
-    if not campos:
-        fail("instrumento quebrado: `git rev-list --parents` nao devolveu commit nenhum para a ponta")
-    sha, pais = campos[0], campos[1:]
+    sha, pais = _pais_do_objeto(repo, commit)
     if len(pais) < 2:
-        return sha, "", [], False                        # nao e merge: nada a conferir
+        return sha, "", [], False                        # ponta com um pai so: quem decide e a regra
     for p in pais:
         if not existe_commit(p, repo):
             fail(f"instrumento quebrado: o commit pai {p[:12]} {MARCA_PAI_AUSENTE} (historico incompleto). "
@@ -162,23 +218,27 @@ def r_merge_nao_stale() -> str:
     """O merge que esta na ponta entrou sobre a base em que o CI do ramo rodou (ou sobre uma mais nova)."""
     head_pr = (os.environ.get("RX_PR_HEAD_SHA") or "").strip()
     if head_pr:
-        # Em PR o checkout entrega o merge automatico do GitHub (base + head), e quem responde por ele e a
-        # regra do PR, com a ponta da base lida ao vivo. O desvio so vale se o head do PR existir MESMO
-        # neste clone: senao uma variavel solta num push desligaria esta regra sem ninguem notar.
+        # Em PR o checkout entrega o merge automatico do GitHub (base + head), que nao e o commit que vai
+        # para a `main`. O desvio so vale se o head do PR existir MESMO neste clone: senao uma variavel
+        # solta num push desligaria esta regra sem ninguem notar.
         if not existe_commit(head_pr):
             fail(f"instrumento quebrado: {MARCA_HEAD_PR}={head_pr[:12]} nao e um commit deste clone. Ou o "
                  "checkout veio sem o head do PR, ou a variavel foi definida fora de um PR - nos dois "
                  "casos esta regra ficaria desligada em silencio.")
-        return "em PR: quem confere e pr_base_atualizada"
+        nao_conferido("em PR a ponta e o merge automatico do GitHub, que nao e o commit que vai para a "
+                      f"`{BASE_REF}`: {MARCA_NC_EM_PR}, com a ponta da base lida ao vivo")
     sha, base, atrasados, e_merge = _merge_stale(ROOT)
     if atrasados:
-        fail(f"merge sobre base desatualizada: {sha[:12]} juntou um ramo que NAO continha {base[:12]}, a "
-             f"ponta da `{BASE_REF}` de antes do merge ({', '.join(p[:12] for p in atrasados)}). O verde "
-             "daquele ramo foi medido em outra arvore e nao vale para esta. Antes de mesclar: atualizar o "
-             f"ramo com a `{BASE_REF}`, esperar o CI novo, mesclar so entao.")
+        fail(f"{MARCA_MERGE_STALE}: {sha[:12]} juntou um ramo que NAO continha {base[:12]}, a ponta da "
+             f"`{BASE_REF}` de antes do merge ({', '.join(p[:12] for p in atrasados)}). O verde daquele "
+             "ramo foi medido em outra arvore e nao vale para esta. Antes de mesclar: atualizar o ramo "
+             f"com a `{BASE_REF}`, esperar o CI novo, mesclar so entao.")
     if not e_merge:
-        return f"{sha[:12]} nao e merge (nada a conferir)"
-    return f"{sha[:12]} e merge e o ramo continha a ponta anterior da `{BASE_REF}`"
+        nao_conferido(f"a ponta {sha[:12]} {MARCA_NC_UM_PAI}: no historico, push direto e merge por "
+                      "squash/rebase sao indistinguiveis, e num squash/rebase o verde do ramo foi medido "
+                      "em outra arvore sem deixar rastro. Esta regra nao tem como ver isso; quem pega e o "
+                      "check do PR (pr_base_atualizada) e a protecao de branch do GitHub.")
+    return f"{sha[:12]} e merge e o ramo continha a ponta anterior da `{BASE_REF}` ({base[:12]})"
 
 
 @regra("pr_base_atualizada")
@@ -186,7 +246,8 @@ def r_pr_base_atualizada() -> str:
     """No PR: o head tem de conter a ponta ATUAL da base. Fora de PR, nao ha o que conferir."""
     head = (os.environ.get("RX_PR_HEAD_SHA") or "").strip()
     if not head:
-        return "fora de PR (sem RX_PR_HEAD_SHA)"
+        nao_conferido(f"{MARCA_NC_FORA_PR} (sem {MARCA_HEAD_PR}): nesta execucao quem responde pela base e "
+                      "merge_nao_stale, sobre o commit que esta na ponta")
     # num clone raso o `merge-base` responde sobre um historico cortado: a resposta nao vale como verde
     exige_historico_completo(ROOT)
     base_sha = (os.environ.get("RX_PR_BASE_SHA") or "").strip()
@@ -202,6 +263,10 @@ def r_pr_base_atualizada() -> str:
 
 
 # ------------------------------------------------------------------ leitura da estrutura do fluxo de CI
+def _indent(ln: str) -> int:
+    return len(ln) - len(ln.lstrip())
+
+
 def _bloco_top(texto: str, chave: str) -> str:
     """Corpo de uma chave de primeiro nivel do YAML (tudo indentado abaixo dela). Sem dependencia externa:
     o job que roda esta trava so tem o Python de base, e portao nao pode depender de pip para existir."""
@@ -215,6 +280,37 @@ def _bloco_top(texto: str, chave: str) -> str:
             break
         corpo.append(ln)
     return "\n".join(corpo)
+
+
+def _chave(texto: str, chave: str, indent: int) -> tuple[str | None, str]:
+    """(valor na mesma linha, corpo indentado abaixo) da chave NAQUELE nivel. Valor None = chave ausente."""
+    linhas = texto.splitlines()
+    for i, ln in enumerate(linhas):
+        if _indent(ln) != indent or not re.match(rf"^\s*{re.escape(chave)}:(\s|$)", ln):
+            continue
+        inline = ln.split(":", 1)[1].strip()
+        if inline.startswith("#"):
+            inline = ""
+        corpo = []
+        for prox in linhas[i + 1:]:
+            if prox.strip() and _indent(prox) <= indent:
+                break
+            corpo.append(prox)
+        return inline, "\n".join(corpo)
+    return None, ""
+
+
+def _lista(inline: str, corpo: str) -> list[str]:
+    itens: list[str] = []
+    if inline.startswith("["):
+        itens += [x.strip().strip("'\"") for x in inline.strip("[]").split(",") if x.strip()]
+    elif inline:
+        itens.append(inline.strip("'\""))
+    for ln in corpo.splitlines():
+        m = re.match(r"^\s*-\s*(.+?)\s*$", ln)
+        if m:
+            itens.append(m.group(1).strip("'\""))
+    return itens
 
 
 def _chaves_indent2(bloco: str) -> list[str]:
@@ -238,32 +334,116 @@ def _jobs(texto: str) -> dict[str, str]:
     return saida
 
 
+def _passos(corpo_job: str) -> list[str]:
+    """Cada item da lista `steps:` do job, como texto. Um passo e a unidade que EXECUTA alguma coisa; o
+    corpo inteiro do job nao e - foi por ler o corpo inteiro que a regra dizia PASSA com o `run:` virado
+    comentario e com `fetch-depth: 0` num passo que nao era o checkout."""
+    inline, corpo = _chave(corpo_job, "steps", 4)
+    if inline is None:
+        return []
+    passos: list[str] = []
+    atual: list[str] | None = None
+    ind: int | None = None
+    for ln in corpo.splitlines():
+        m = re.match(r"^(\s*)-\s", ln)
+        if m and (ind is None or len(m.group(1)) == ind):
+            ind = len(m.group(1))
+            if atual is not None:
+                passos.append("\n".join(atual))
+            atual = [ln]
+            continue
+        if atual is not None:
+            atual.append(ln)
+    if atual is not None:
+        passos.append("\n".join(atual))
+    return passos
+
+
+def _valor_no_passo(passo: str, chave: str) -> str | None:
+    """Valor de uma chave do passo (inclusive escalar em bloco, `run: |`). Linha comentada nao conta."""
+    linhas = passo.splitlines()
+    padrao = re.compile(rf"^(\s*(?:-\s+)?){re.escape(chave)}:(\s.*|)$")
+    for i, ln in enumerate(linhas):
+        m = padrao.match(ln)
+        if not m:
+            continue
+        col = len(m.group(1))
+        valor = [m.group(2).strip()]
+        for prox in linhas[i + 1:]:
+            if prox.strip() and _indent(prox) <= col:
+                break
+            valor.append(prox.strip())
+        return "\n".join(v for v in valor if v)
+    return None
+
+
+def _passo_executa(passo: str, alvo: str) -> bool:
+    return any(alvo in (_valor_no_passo(passo, k) or "") for k in ("run", "uses"))
+
+
+def _e_checkout(passo: str) -> bool:
+    return "actions/checkout" in (_valor_no_passo(passo, "uses") or "")
+
+
 @regra("ci_roda_a_trava")
 def r_ci_roda_a_trava() -> str:
-    """O fluxo chama esta trava nos dois momentos, e o job que a chama traz o historico inteiro."""
+    """O fluxo EXECUTA esta trava nos dois momentos, sem filtro nem condicao, e com o historico inteiro."""
     if not WORKFLOW.exists():
-        fail(f"instrumento quebrado: fluxo de trabalho nao encontrado em {WORKFLOW}")
+        fail(f"instrumento quebrado: {MARCA_SEM_FLUXO} em {WORKFLOW}")
     texto = WORKFLOW.read_text(encoding="utf-8", errors="ignore")
-    gatilhos = _chaves_indent2(_bloco_top(texto, "on"))
+    bloco_on = _bloco_top(texto, "on")
+    gatilhos = _chaves_indent2(bloco_on)
     faltando = [g for g in ("push", "pull_request") if g not in gatilhos]
     if faltando:
         fail(f"o fluxo de trabalho {MARCA_SEM_GATILHO} {', '.join(faltando)}: a trava so vale se rodar no "
              "PR (ramo atrasado) e no push da base (merge ja feito sobre base velha)")
+    problemas: list[str] = []
+    for g in ("push", "pull_request"):
+        _inl, corpo_g = _chave(bloco_on, g, 2)
+        inl_b, corpo_b = _chave(corpo_g, "branches", 4)
+        if inl_b is not None:
+            ramos = _lista(inl_b, corpo_b)
+            if not any(fnmatch.fnmatch(BASE_REF, p) for p in ramos):
+                problemas.append(f"`{g}` so dispara em {ramos}, que nao alcanca `{BASE_REF}`")
+        inl_i, corpo_i = _chave(corpo_g, "branches-ignore", 4)
+        if inl_i is not None and any(fnmatch.fnmatch(BASE_REF, p) for p in _lista(inl_i, corpo_i)):
+            problemas.append(f"`{g}` ignora `{BASE_REF}`")
+        for chave in ("paths", "paths-ignore"):
+            if _chave(corpo_g, chave, 4)[0] is not None:
+                problemas.append(f"`{g}` tem `{chave}`: a trava passaria a depender do diff do commit")
+    if problemas:
+        fail(f"{MARCA_GATILHO_FILTRADO}: {'; '.join(problemas)}. Gatilho que nao dispara nao deixa check "
+             "vermelho nenhum - some em silencio, que e o contrario do que uma trava faz.")
     jobs = _jobs(texto)
     if not jobs:
-        fail("instrumento quebrado: nenhum job separado do fluxo de trabalho. O leitor de estrutura desta "
+        fail(f"instrumento quebrado: {MARCA_SEM_JOBS} do fluxo de trabalho. O leitor de estrutura desta "
              "regra parou de enxergar o arquivo e responderia sobre um YAML vazio - zero nao e ausencia")
-    donos = [n for n, corpo in jobs.items() if CHAMADA in corpo]
+    donos = [n for n, corpo in jobs.items() if any(_passo_executa(p, CHAMADA) for p in _passos(corpo))]
     if not donos:
+        if CHAMADA in texto:
+            fail(f"{MARCA_SEM_EXECUCAO} `{CHAMADA}`: o caminho aparece no fluxo de trabalho, mas em nenhum "
+                 "passo `run:`/`uses:` - comentario, nome de passo ou texto solto nao roda portao nenhum")
         fail(f"{MARCA_SEM_CHAMADA} {CHAMADA} em job nenhum: a trava de base atualizada sairia do caminho "
              "sem ninguem notar")
-    sem_historico = [n for n in donos if not re.search(r"(?m)^\s*fetch-depth:\s*0\s*(#.*)?$", jobs[n])]
-    if sem_historico:
-        fail(f"o job `{', '.join(sem_historico)}` chama a trava sem `{MARCA_FETCH_DEPTH}` no checkout: com "
+    condicionais = [n for n in donos if re.search(r"(?m)^    if:", jobs[n])]
+    if condicionais:
+        fail(f"{MARCA_JOB_CONDICIONAL} `{', '.join(condicionais)}`: job que nao roda nao produz check "
+             "vermelho, entao uma condicao ali desliga metade da trava sem deixar sinal. A trava roda "
+             "sempre; quem decide o que conferir em cada evento sao as regras, que dizem NAO CONFERIDO.")
+    sem_checkout = [n for n in donos if not any(_e_checkout(p) for p in _passos(jobs[n]))]
+    rasos = [n for n in donos if any(_e_checkout(p) and not
+                                     re.search(r"(?m)^\s*fetch-depth:\s*0\s*(#.*)?$", p)
+                                     for p in _passos(jobs[n]))]
+    if sem_checkout or rasos:
+        alvo = ", ".join(sorted(set(sem_checkout + rasos)))
+        fail(f"o job `{alvo}` executa a trava sem `{MARCA_FETCH_DEPTH}` em TODO passo de checkout: com "
              "historico raso o commit da ponta reporta zero pais e a trava nao consegue conferir merge "
-             "nenhum. A linha faz parte da trava, nao e detalhe do checkout.")
-    return (f"{WORKFLOW.name}: job `{', '.join(donos)}` chama a trava com {MARCA_FETCH_DEPTH}; dispara em "
-            f"{', '.join(g for g in gatilhos if g in ('push', 'pull_request'))}")
+             "nenhum. A linha faz parte da trava, nao e detalhe do checkout - e ter a linha em outro "
+             "passo nao vale, porque quem traz o historico e o checkout.")
+    return (f"{WORKFLOW.name}: job `{', '.join(donos)}` executa a trava, com {MARCA_FETCH_DEPTH} no "
+            f"checkout, sem `if:` no job, e o fluxo dispara em push e pull_request sobre `{BASE_REF}` sem "
+            "filtro. Esta regra le a configuracao: ela nao prova que o job rodou - job que nunca dispara "
+            "nao deixa vermelho nenhum -, so que a configuracao continua plausivel.")
 
 
 # ------------------------------------------------------------------ controles positivos por construcao
@@ -294,14 +474,23 @@ class _aponta:
         return False
 
 
-def _repo_sintetico(td: Path, em_dia: bool) -> Path:
-    """Monta base + ramo e mescla. `em_dia=False` reproduz o caso do #78/#79: ramo que nao contem a ponta."""
-    _SEQ[0] += 1
-    repo = td / f"{'em_dia' if em_dia else 'atrasado'}_{_SEQ[0]}"
+def _sem_pr(repo: Path) -> _aponta:
+    """Repositorio sintetico e nenhuma variavel de PR no ambiente: e assim que a regra roda num push."""
+    return _aponta(repo=repo, RX_PR_HEAD_SHA=None, RX_PR_BASE_SHA=None)
+
+
+def _git_novo(repo: Path) -> None:
     repo.mkdir(parents=True)
     git("init", "-q", "-b", BASE_REF, cwd=repo)
     git("config", "user.email", "gate@example.invalid", cwd=repo)
     git("config", "user.name", "gate", cwd=repo)
+
+
+def _repo_sintetico(td: Path, em_dia: bool) -> Path:
+    """Monta base + ramo e mescla. `em_dia=False` reproduz o caso do #78/#79: ramo que nao contem a ponta."""
+    _SEQ[0] += 1
+    repo = td / f"{'em_dia' if em_dia else 'atrasado'}_{_SEQ[0]}"
+    _git_novo(repo)
     (repo / "a.txt").write_text("1\n", encoding="utf-8", newline="\n")
     git("add", "a.txt", cwd=repo)
     git("commit", "-q", "-m", "base", cwd=repo)
@@ -321,6 +510,18 @@ def _repo_sintetico(td: Path, em_dia: bool) -> Path:
     return repo
 
 
+def _repo_um_pai(td: Path) -> Path:
+    """Ponta com UM pai so - o que um push direto e um merge por squash/rebase produzem igualzinho."""
+    _SEQ[0] += 1
+    repo = td / f"um_pai_{_SEQ[0]}"
+    _git_novo(repo)
+    for n in ("1", "2"):
+        (repo / f"{n}.txt").write_text(f"{n}\n", encoding="utf-8", newline="\n")
+        git("add", f"{n}.txt", cwd=repo)
+        git("commit", "-q", "-m", f"commit {n}", cwd=repo)
+    return repo
+
+
 def _clona(origem: Path, destino: Path, raso: bool) -> Path:
     """Clone de verdade. `file://` e obrigatorio: em clone local por caminho o git IGNORA o --depth."""
     args = ["clone", "-q"] + (["--depth", "1"] if raso else []) + [origem.as_uri(), str(destino)]
@@ -331,6 +532,7 @@ def _clona(origem: Path, destino: Path, raso: bool) -> Path:
 def _reprova_com(fn, *marcas: str) -> tuple[bool, str]:
     """Exige Reprova COM as marcas daquela guarda. Qualquer outra excecao NAO conta como reprovacao: um
     controle que aceita 'levantou alguma coisa' fica verde com o erro que prova o contrario do esperado."""
+    _ULTIMA_GUARDA[0] = 0
     try:
         saida = fn()
     except Reprova as exc:
@@ -338,118 +540,304 @@ def _reprova_com(fn, *marcas: str) -> tuple[bool, str]:
         falta = [m for m in marcas if m not in msg]
         if falta:
             return False, f"reprovou pela mensagem errada, sem {falta}: {msg[:150]}"
+        if not _ULTIMA_GUARDA[0]:
+            return False, "Reprova levantada fora de fail(): a cobertura nao sabe qual guarda foi exercida"
+        _COBERTAS.add(_ULTIMA_GUARDA[0])
         return True, f"reprovou pela guarda certa: {msg[:130]}"
+    except NaoConferido as exc:
+        return False, f"disse NAO CONFERIDO em vez de reprovar: {str(exc)[:130]}"
     except Exception as exc:                                             # noqa: BLE001
         return False, (f"levantou {type(exc).__name__} ANTES da guarda (o controle nao chegou a exercita-la)"
                        f": {str(exc)[:130]}")
     return False, f"PASSOU em silencio: {str(saida)[:130]}"
 
 
+def _nao_confere(fn, *marcas: str) -> tuple[bool, str]:
+    """Exige a saida do meio: nao conferiu, e disse por que. PASSAR aqui e afirmar sucesso sem evidencia."""
+    _ULTIMA_GUARDA[0] = 0
+    try:
+        saida = fn()
+    except NaoConferido as exc:
+        msg = str(exc)
+        falta = [m for m in marcas if m not in msg]
+        if falta:
+            return False, f"nao conferiu, mas pela mensagem errada, sem {falta}: {msg[:150]}"
+        if not _ULTIMA_GUARDA[0]:
+            return False, "NaoConferido levantado fora de nao_conferido(): a cobertura nao sabe a origem"
+        _COBERTAS.add(_ULTIMA_GUARDA[0])
+        return True, f"nao conferiu, e disse por que: {msg[:130]}"
+    except Reprova as exc:
+        return False, f"reprovou em vez de dizer NAO CONFERIDO: {str(exc)[:130]}"
+    except Exception as exc:                                             # noqa: BLE001
+        return False, f"levantou {type(exc).__name__}: {str(exc)[:130]}"
+    return False, f"AFIRMOU SUCESSO sem ter o que conferir: {str(saida)[:130]}"
+
+
 def _passa(fn) -> tuple[bool, str]:
     try:
         return True, f"passou: {str(fn())[:130]}"
+    except NaoConferido as exc:
+        return False, f"nao conferiu (aqui era para conferir e passar): {str(exc)[:130]}"
     except Exception as exc:                                             # noqa: BLE001
         return False, f"reprovou sem motivo: {type(exc).__name__}: {str(exc)[:130]}"
 
 
+# ------------------------------------------------------------------ cobertura: toda guarda tem um controle
+# Guarda sem controle so pode ficar aqui com o motivo escrito. Numero congelado sem motivo por item registra
+# o tamanho da divida, nunca a razao dela - e divida sem razao volta a crescer na revisao seguinte.
+ISENTAS: dict[str, str] = {
+    # a chave e o NOME da constante como ele aparece no fonte da guarda, nao o texto dela: o que o AST
+    # devolve e o codigo (`{MARCA_...}`), e nao a mensagem depois de formatada
+    "MARCA_OBJETO_VAZIO": (
+        "instrumento quebrado inalcancavel por entrada: `git cat-file commit` de um sha ja resolvido por "
+        "`rev-parse ^{commit}` ou devolve o objeto ou sai com codigo de erro (que vira RuntimeError antes "
+        "daqui). Nenhum repositorio sintetico produz saida vazia com codigo 0. Fica declarada, com motivo, "
+        "em vez de virar um controle de mentira."),
+}
+
+
+def _guardas_no_fonte(fonte: str) -> list[tuple[int, int, str]]:
+    """(primeira linha, ultima linha, nome) de cada chamada a fail()/nao_conferido() NESTE arquivo, pelo
+    AST - nao pela grafia, que conta comentario e docstring junto e da um numero que ninguem confere."""
+    saida: list[tuple[int, int, str]] = []
+    for no in ast.walk(ast.parse(fonte)):
+        if (isinstance(no, ast.Call) and isinstance(no.func, ast.Name)
+                and no.func.id in ("fail", "nao_conferido")):
+            saida.append((no.lineno, no.end_lineno or no.lineno, no.func.id))
+    return sorted(saida)
+
+
+def _cobertura(sitios, cobertas: set[int], linhas: list[str]) -> tuple[list[str], list[str]]:
+    """(guardas sem controle, isentas declaradas). Funcao unica: o controle da cobertura chama ESTA, nao
+    uma copia do raciocinio dela."""
+    sem_controle: list[str] = []
+    isentas: list[str] = []
+    for ini, fim, nome in sitios:
+        if any(ini <= linha <= fim for linha in cobertas):
+            continue
+        texto = " ".join(linhas[ini - 1:fim])
+        motivo = next((m for chave, m in ISENTAS.items() if chave in texto), None)
+        if motivo:
+            isentas.append(f"linha {ini} ({nome}): {motivo}")
+            continue
+        sem_controle.append(f"linha {ini} ({nome})")
+    return sem_controle, isentas
+
+
+def _controles_de_cobertura() -> list[tuple[str, bool, str]]:
+    saida: list[tuple[str, bool, str]] = []
+    fonte = Path(__file__).read_text(encoding="utf-8", errors="ignore")
+    linhas = fonte.splitlines()
+    sitios = _guardas_no_fonte(fonte)
+
+    # o instrumento que enumera as guardas nao pode responder vazio: zero aqui seria "nao perguntei", e a
+    # cobertura sairia verde sem ter olhado guarda nenhuma. Segunda contagem, por outro caminho.
+    por_grafia = {i + 1 for i, ln in enumerate(linhas) if re.match(r"^\s*(fail|nao_conferido)\(", ln)}
+    inicios = {i for i, _f, _n in sitios}
+    ok = bool(sitios) and bool(por_grafia) and por_grafia <= inicios
+    saida.append(("INSTRUMENTO: o AST enxerga todas as guardas que a grafia enxerga", ok,
+                  f"AST={len(sitios)} guardas, grafia={len(por_grafia)} chamadas em posicao de comando"
+                  if ok else f"AST={len(sitios)}, grafia={len(por_grafia)}, so na grafia: "
+                             f"{sorted(por_grafia - inicios)}"))
+
+    sem_controle, isentas = _cobertura(sitios, _COBERTAS, linhas)
+    saida.append(("COBERTURA: toda guarda deste arquivo tem controle que reprova pela mensagem DELA",
+                  not sem_controle,
+                  f"{len(sitios)} guardas: {len(sitios) - len(sem_controle) - len(isentas)} mortas por "
+                  f"controle, {len(isentas)} isentas declaradas" if not sem_controle
+                  else f"SEM CONTROLE NENHUM: {sem_controle}"))
+    for texto in isentas:
+        saida.append((f"COBERTURA isenta declarada, {texto.split(':')[0]}", True, texto.split(": ", 1)[-1]))
+
+    # a guarda que exige cobertura tambem precisa do seu proprio controle: tirar UMA guarda do conjunto
+    # coberto tem de ser acusado por ESTA funcao, a mesma que o portao usa
+    alvo = next((s for s in sitios if any(s[0] <= linha <= s[1] for linha in _COBERTAS)), None)
+    if alvo is None:
+        saida.append(("COBERTURA <- controle da propria cobertura", False,
+                      "nenhuma guarda coberta para mutar: o controle da cobertura nao pode ser escrito"))
+    else:
+        menos_uma = {linha for linha in _COBERTAS if not (alvo[0] <= linha <= alvo[1])}
+        acusadas, _isentas = _cobertura(sitios, menos_uma, linhas)
+        ok = any(f"linha {alvo[0]} " in f"{x} " for x in acusadas)
+        saida.append((f"COBERTURA <- apagar o controle da guarda da linha {alvo[0]} (tem de ACUSAR)", ok,
+                      f"acusou {acusadas}"[:190] if ok else f"NAO acusou: {acusadas}"[:190]))
+    return saida
+
+
+# ------------------------------------------------------------------ mutacoes do YAML, uma por guarda
+def _mutacoes_do_yaml(texto: str) -> list[tuple[str, str, tuple[str, ...]]]:
+    """(nome, YAML mutado, marcas exigidas). Cada linha que sustenta a trava, apagada, tem de REPROVAR."""
+    saida: list[tuple[str, str, tuple[str, ...]]] = []
+    saida.append(("chamada trocada por um caminho que nao existe",
+                  texto.replace(CHAMADA, "scripts/nao_existe.py"), (MARCA_SEM_CHAMADA,)))
+    saida.append(("`run:` da trava virou comentario (o caminho continua no corpo do job)",
+                  re.sub(rf"(?m)^([ \t]*)(run:.*{re.escape(CHAMADA)}.*)$", r"\1# \2", texto),
+                  (MARCA_SEM_EXECUCAO,)))
+    sem_fd = re.sub(r"(?m)^[ \t]*fetch-depth:[ \t]*0[ \t]*(#.*)?\n", "", texto)
+    saida.append(("`fetch-depth: 0` apagado do checkout", sem_fd, (MARCA_FETCH_DEPTH,)))
+    saida.append(("`fetch-depth: 0` mudado para um passo que nao e checkout",
+                  _insere_passo(sem_fd, ["- name: ruido que cita fetch-depth sem ser checkout",
+                                         "  with:", "    fetch-depth: 0", "  run: echo ok"]),
+                  (MARCA_FETCH_DEPTH,)))
+    saida.append(("`if:` no job que executa a trava",
+                  _insere_no_job(texto, "    if: github.event_name == 'push'"), (MARCA_JOB_CONDICIONAL,)))
+    saida.append(("gatilho `pull_request` removido", texto.replace("\n  pull_request:", "\n  pull_request_x:"),
+                  (MARCA_SEM_GATILHO,)))
+    bloco_on = _bloco_top(texto, "on")
+    saida.append(("`push` filtrado para um ramo que nao e a base",
+                  texto.replace(bloco_on, re.sub(r"(?m)^(    branches:).*$", r"\1 [ nao-existe ]",
+                                                 bloco_on, count=1), 1), (MARCA_GATILHO_FILTRADO,)))
+    bloco_jobs = _bloco_top(texto, "jobs")
+    saida.append(("bloco `jobs:` sem job nenhum", texto.replace(bloco_jobs, "", 1), (MARCA_SEM_JOBS,)))
+    return saida
+
+
+def _linha_da_execucao(texto: str) -> int:
+    """Linha do passo `run:` que executa a trava - e dela que as mutacoes do YAML se penduram."""
+    for i, ln in enumerate(texto.splitlines()):
+        if CHAMADA in ln and re.match(r"^(?:-\s+)?run:", ln.strip()):
+            return i
+    return -1
+
+
+def _insere_passo(texto: str, bloco: list[str]) -> str:
+    """Insere um passo novo imediatamente ANTES do passo que executa a trava."""
+    linhas = texto.splitlines()
+    alvo = _linha_da_execucao(texto)
+    if alvo < 0:
+        return texto
+    ini = alvo
+    while ini > 0 and not re.match(r"^\s*-\s", linhas[ini]):
+        ini -= 1
+    ind = " " * _indent(linhas[ini])
+    return "\n".join(linhas[:ini] + [ind + ln for ln in bloco] + linhas[ini:]) + "\n"
+
+
+def _insere_no_job(texto: str, linha_nova: str) -> str:
+    """Insere uma chave logo abaixo da chave do job que executa a trava."""
+    linhas = texto.splitlines()
+    alvo = _linha_da_execucao(texto)
+    if alvo < 0:
+        return texto
+    ini = alvo
+    while ini > 0 and not re.match(r"^  [A-Za-z0-9_.-]+:\s*(#.*)?$", linhas[ini]):
+        ini -= 1
+    if ini == 0:
+        return texto
+    return "\n".join(linhas[:ini + 1] + [linha_nova] + linhas[ini + 1:]) + "\n"
+
+
 def controles() -> list[tuple[str, bool, str]]:
     saida: list[tuple[str, bool, str]] = []
+    _COBERTAS.clear()
     with tempfile.TemporaryDirectory(prefix="rx_base_atu_") as td:
         raiz = Path(td)
 
-        # 1-2. merge_nao_stale sobre repositorio completo: atrasado reprova, em dia passa
-        for em_dia in (False, True):
-            repo = _repo_sintetico(raiz, em_dia)
-            try:
-                _sha, _base, atrasados, _m = _merge_stale(repo)
-                erro = ""
-            except Reprova as exc:
-                atrasados, erro = ["<reprovou>"], str(exc)
-            if em_dia:
-                ok = not atrasados and not erro
-                saida.append(("merge_nao_stale <- ramo em dia (tem de PASSAR)", ok,
-                              erro or ("passou" if ok else f"reprovou sem motivo: {atrasados}")))
-            else:
-                ok = bool(atrasados) and not erro
-                saida.append(("merge_nao_stale <- ramo atrasado (tem de REPROVAR)", ok,
-                              erro or (f"reprovou: {[p[:12] for p in atrasados]}" if ok
-                                       else "PASSOU com o defeito posto")))
+        # ---- merge_nao_stale, sempre PELA REGRA (nunca pelo ajudante `_merge_stale`, que foi o furo do #81)
+        atrasado = _repo_sintetico(raiz, em_dia=False)
+        with _sem_pr(atrasado):
+            ok, detalhe = _reprova_com(r_merge_nao_stale, MARCA_MERGE_STALE)
+        saida.append(("merge_nao_stale <- merge sobre base velha (tem de REPROVAR: e o unico fail que "
+                      "justifica esta trava)", ok, detalhe))
 
-        # 3-5. clone raso DE VERDADE do mesmo repositorio atrasado: a armadilha existe, a guarda pega,
-        #      e o clone completo do mesmo repositorio nao e confundido com ela (controle negativo).
-        origem = _repo_sintetico(raiz, em_dia=False)
-        raso = _clona(origem, raiz / "clone_raso", raso=True)
-        cheio = _clona(origem, raiz / "clone_cheio", raso=False)
-        pais_no_raso = git("rev-list", "--parents", "-n", "1", "HEAD", cwd=raso).split()[1:]
-        saida.append(("clone raso apaga os pais do merge (a armadilha que a guarda existe para pegar)",
-                      not pais_no_raso,
-                      "o enxerto reporta zero pais - sem guarda a trava diria 'nao e merge'" if not
-                      pais_no_raso else f"clone nao ficou raso: pais={[p[:12] for p in pais_no_raso]}"))
-        ok, detalhe = _reprova_com(lambda: _merge_stale(raso), MARCA_RASO, MARCA_FETCH_DEPTH)
-        saida.append(("merge_nao_stale <- clone --depth 1 (tem de REPROVAR pelo historico raso)", ok,
-                      detalhe))
-        try:
-            _sha, _base, atrasados_cheio, _m = _merge_stale(cheio)
-            erro_cheio = ""
-        except Exception as exc:                                         # noqa: BLE001
-            atrasados_cheio, erro_cheio = [], f"{type(exc).__name__}: {exc}"
-        ok = bool(atrasados_cheio) and not erro_cheio
-        saida.append(("NEGATIVO: clone completo do MESMO repositorio nao cai na guarda de raso e ainda "
-                      "acusa o atraso", ok,
-                      erro_cheio or (f"acusou o atraso: {[p[:12] for p in atrasados_cheio]}" if ok
-                                     else "nao acusou o atraso")))
+        em_dia = _repo_sintetico(raiz, em_dia=True)
+        with _sem_pr(em_dia):
+            ok, detalhe = _passa(r_merge_nao_stale)
+        saida.append(("merge_nao_stale <- merge com o ramo atualizado antes (tem de PASSAR)", ok, detalhe))
 
-        # 6-7. pr_base_atualizada exercitada PELA REGRA (nao por um atalho que nunca entra nela)
-        repo = _repo_sintetico(raiz, em_dia=False)
-        head_atrasado = git("rev-parse", "ramo", cwd=repo)
-        base_atual = git("rev-parse", BASE_REF, cwd=repo)
-        with _aponta(repo=repo, RX_PR_HEAD_SHA=head_atrasado, RX_PR_BASE_SHA=base_atual):
-            ok, detalhe = _reprova_com(r_pr_base_atualizada, MARCA_PR_ATRASADO)
-        saida.append(("pr_base_atualizada <- head atrasado (tem de REPROVAR)", ok, detalhe))
-        repo_ok = _repo_sintetico(raiz, em_dia=True)
-        with _aponta(repo=repo_ok, RX_PR_HEAD_SHA=git("rev-parse", "ramo", cwd=repo_ok),
-                     RX_PR_BASE_SHA=git("rev-parse", BASE_REF + "~1", cwd=repo_ok)):
-            ok, detalhe = _passa(r_pr_base_atualizada)
-        saida.append(("pr_base_atualizada <- head em dia (tem de PASSAR)", ok, detalhe))
+        with _sem_pr(_repo_um_pai(raiz)):
+            ok, detalhe = _nao_confere(r_merge_nao_stale, MARCA_NC_UM_PAI)
+        saida.append(("merge_nao_stale <- ponta com um pai so (tem de dizer NAO CONFERIDO, nunca PASSA)",
+                      ok, detalhe))
 
-        # 8-9. o desvio "estou em PR" nao pode virar chave de desligar o merge_nao_stale
-        with _aponta(repo=repo, RX_PR_HEAD_SHA="0" * 40):
+        # ---- historico incompleto: a armadilha existe, e as duas leituras respondem diferente sobre ela
+        raso = _clona(atrasado, raiz / "clone_raso", raso=True)
+        cheio = _clona(atrasado, raiz / "clone_cheio", raso=False)
+        pelo_grafo = git("rev-list", "--parents", "-n", "1", "HEAD", cwd=raso).split()[1:]
+        _sha_obj, pelo_objeto = _pais_do_objeto(raso, "HEAD")
+        saida.append(("a armadilha: no clone raso a leitura pelo grafo diz ZERO pais e o objeto do commit "
+                      "diz 2", not pelo_grafo and len(pelo_objeto) == 2,
+                      f"grafo={[p[:12] for p in pelo_grafo]} objeto={[p[:12] for p in pelo_objeto]} - por "
+                      "isso a trava le o objeto E recusa o clone raso antes de concluir"))
+        with _sem_pr(raso):
+            ok, detalhe = _reprova_com(r_merge_nao_stale, MARCA_RASO, MARCA_FETCH_DEPTH)
+        saida.append(("merge_nao_stale <- `git clone --depth 1` de verdade (tem de REPROVAR pelo raso)",
+                      ok, detalhe))
+
+        sem_marcador = _clona(atrasado, raiz / "clone_sem_marcador", raso=True)
+        (_dir_git(sem_marcador) / "shallow").unlink()      # historico cortado, sem o aviso de que esta
+        with _sem_pr(sem_marcador):
+            ok, detalhe = _reprova_com(r_merge_nao_stale, MARCA_PAI_AUSENTE, MARCA_FETCH_DEPTH)
+        saida.append(("merge_nao_stale <- historico cortado SEM o marcador `shallow` (tem de REPROVAR pelo "
+                      "pai ausente)", ok, detalhe))
+
+        with _sem_pr(cheio):
+            ok, detalhe = _reprova_com(r_merge_nao_stale, MARCA_MERGE_STALE)
+        saida.append(("NEGATIVO: clone completo do MESMO repositorio passa pela guarda de raso e reprova "
+                      "pelo merge velho", ok, detalhe))
+
+        # ---- o desvio "estou em PR" nao pode virar chave de desligar o merge_nao_stale
+        head_atrasado = git("rev-parse", "ramo", cwd=atrasado)
+        with _aponta(repo=atrasado, RX_PR_HEAD_SHA="0" * 40, RX_PR_BASE_SHA=None):
             ok, detalhe = _reprova_com(r_merge_nao_stale, MARCA_HEAD_PR)
         saida.append(("merge_nao_stale <- RX_PR_HEAD_SHA que nao existe no clone (tem de REPROVAR)", ok,
                       detalhe))
-        with _aponta(repo=repo, RX_PR_HEAD_SHA=head_atrasado):
-            ok, detalhe = _passa(r_merge_nao_stale)
-        saida.append(("merge_nao_stale <- head de PR real (desvia para a regra do PR)", ok, detalhe))
+        with _aponta(repo=atrasado, RX_PR_HEAD_SHA=head_atrasado, RX_PR_BASE_SHA=None):
+            ok, detalhe = _nao_confere(r_merge_nao_stale, MARCA_NC_EM_PR)
+        saida.append(("merge_nao_stale <- head de PR real (tem de dizer NAO CONFERIDO e apontar quem "
+                      "confere)", ok, detalhe))
 
-        # 10-12. mutacoes do YAML: cada linha que sustenta a trava, apagada, tem de REPROVAR com a sua marca
+        # ---- pr_base_atualizada
+        base_atual = git("rev-parse", BASE_REF, cwd=atrasado)
+        with _aponta(repo=atrasado, RX_PR_HEAD_SHA=head_atrasado, RX_PR_BASE_SHA=base_atual):
+            ok, detalhe = _reprova_com(r_pr_base_atualizada, MARCA_PR_ATRASADO)
+        saida.append(("pr_base_atualizada <- head atrasado (tem de REPROVAR)", ok, detalhe))
+        with _aponta(repo=em_dia, RX_PR_HEAD_SHA=git("rev-parse", "ramo", cwd=em_dia),
+                     RX_PR_BASE_SHA=git("rev-parse", BASE_REF + "~1", cwd=em_dia)):
+            ok, detalhe = _passa(r_pr_base_atualizada)
+        saida.append(("pr_base_atualizada <- head em dia (tem de PASSAR)", ok, detalhe))
+        with _sem_pr(atrasado):
+            ok, detalhe = _nao_confere(r_pr_base_atualizada, MARCA_NC_FORA_PR)
+        saida.append(("pr_base_atualizada <- fora de PR (tem de dizer NAO CONFERIDO, nunca PASSA)", ok,
+                      detalhe))
+
+        # ---- ci_roda_a_trava: o YAML de verdade passa, e cada mutacao reprova pela marca dela
+        ok, detalhe = _passa(r_ci_roda_a_trava)
+        saida.append(("NEGATIVO: ci_roda_a_trava <- o fluxo de trabalho de verdade (tem de PASSAR)", ok,
+                      detalhe))
+        with _aponta(workflow=raiz / "fluxo_que_nao_existe.yml"):
+            ok, detalhe = _reprova_com(r_ci_roda_a_trava, MARCA_SEM_FLUXO)
+        saida.append(("ci_roda_a_trava <- fluxo de trabalho ausente (tem de REPROVAR)", ok, detalhe))
+
         texto = WORKFLOW.read_text(encoding="utf-8", errors="ignore") if WORKFLOW.exists() else ""
-        mutacoes = (
-            ("chamada removida", texto.replace(CHAMADA, "scripts/nao_existe.py"), (MARCA_SEM_CHAMADA,)),
-            ("fetch-depth: 0 removido", re.sub(r"(?m)^[ \t]*fetch-depth:[ \t]*0[ \t]*(#.*)?\n", "", texto),
-             (MARCA_FETCH_DEPTH,)),
-            ("gatilho pull_request removido", texto.replace("\n  pull_request:", "\n  pull_request_x:"),
-             (MARCA_SEM_GATILHO,)),
-        )
-        for nome, mutado_txt, marcas in mutacoes:
-            if mutado_txt == texto:
+        for nome, mutado, marcas in _mutacoes_do_yaml(texto):
+            if mutado == texto:
                 saida.append((f"ci_roda_a_trava <- {nome}", False,
                               "mutacao nao mudou o arquivo: a ancora da mutacao nao casa mais com o YAML"))
                 continue
             # nome do arquivo saneado: ":" num caminho do Windows vira fluxo alternativo em vez de arquivo
-            alvo = raiz / f"quality-gate_{re.sub(r'[^a-z0-9]+', '-', nome.lower()).strip('-')}.yml"
-            alvo.write_text(mutado_txt, encoding="utf-8", newline="\n")
+            alvo = raiz / f"quality-gate_{re.sub(r'[^a-z0-9]+', '-', nome.lower()).strip('-')[:60]}.yml"
+            alvo.write_text(mutado, encoding="utf-8", newline="\n")
             with _aponta(workflow=alvo):
                 ok, detalhe = _reprova_com(r_ci_roda_a_trava, *marcas)
             saida.append((f"ci_roda_a_trava <- {nome} (tem de REPROVAR)", ok, detalhe))
+
+    saida.extend(_controles_de_cobertura())
     return saida
 
 
 def main() -> int:
     args = sys.argv[1:]
     falhas: list[str] = []
+    conferidas: list[str] = []
+    nao_conferidas: list[str] = []
     for nome, fn in RULES.items():
         try:
             print(f"PASSA {nome}: {fn()}", flush=True)
+            conferidas.append(nome)
+        except NaoConferido as exc:
+            print(f"NAO_CONFERIDO {nome}: {exc}", flush=True)
+            nao_conferidas.append(nome)
         except Exception as exc:  # noqa: BLE001
             print(f"FALHA {nome}: {type(exc).__name__}: {exc}", flush=True)
             falhas.append(nome)
@@ -462,10 +850,18 @@ def main() -> int:
             print(f"{'CONTROLE_OK' if ok else 'CONTROLE_FALHOU'} {titulo}: {detalhe[:200]}", flush=True)
             if not ok:
                 falhas.append(f"controle:{titulo}")
+    # concluir e passar OU reprovar: quem reprovou conferiu e achou defeito. Fica de fora so a regra que
+    # nao teve o que conferir - e quando NENHUMA das duas teve, o relatorio diz isso em vez de calar.
+    if not [n for n in conferidas + falhas if n in REGRAS_DE_BASE]:
+        print(f"SEM CONFERENCIA: nesta execucao nenhuma regra de base atualizada conferiu coisa alguma "
+              f"({', '.join(nao_conferidas) or 'nenhuma saida'}). Isto NAO e um verde sobre a base - e a "
+              "ausencia de conferencia, dita em voz alta. Quem fecha o buraco e a protecao de branch do "
+              "GitHub com 'require branches to be up to date before merging'.", flush=True)
     if falhas:
         print(f"RX_BASE_ATUALIZADA_GATE=FALHA {falhas}", flush=True)
         return 1
-    print(f"RX_BASE_ATUALIZADA_GATE=PASS regras={len(RULES)}", flush=True)
+    print(f"RX_BASE_ATUALIZADA_GATE=PASS regras={len(RULES)} conferidas={conferidas} "
+          f"nao_conferidas={nao_conferidas}", flush=True)
     return 0
 
 
