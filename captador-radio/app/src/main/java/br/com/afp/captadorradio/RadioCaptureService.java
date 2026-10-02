@@ -40,6 +40,8 @@ public class RadioCaptureService extends Service {
     private PowerManager.WakeLock wakeLock;
     private String lastFinal = "";
     private long lastFinalAt = 0L;
+    private final StringBuilder pendingCommunication = new StringBuilder();
+    private final Runnable flushCommunication = this::flushPendingCommunication;
 
     @Override
     public void onCreate() {
@@ -71,7 +73,10 @@ public class RadioCaptureService extends Service {
         recognizer = SpeechRecognizer.createSpeechRecognizer(this);
         recognizer.setRecognitionListener(new RecognitionListener() {
             @Override public void onReadyForSpeech(Bundle params) { broadcastState("Microfone ativo — aguardando rádio"); }
-            @Override public void onBeginningOfSpeech() { broadcastState("Comunicação detectada"); }
+            @Override public void onBeginningOfSpeech() {
+                main.removeCallbacks(flushCommunication);
+                broadcastState("Comunicação detectada");
+            }
             @Override public void onRmsChanged(float rmsdB) {}
             @Override public void onBufferReceived(byte[] buffer) {}
             @Override public void onEndOfSpeech() { broadcastState("Processando comunicação"); }
@@ -119,14 +124,33 @@ public class RadioCaptureService extends Service {
         if (clean.equalsIgnoreCase(lastFinal) && now - lastFinalAt < 8000) return;
         lastFinal = clean;
         lastFinalAt = now;
-        broadcastTranscript(clean, true);
+
+        synchronized (pendingCommunication) {
+            if (pendingCommunication.length() > 0) pendingCommunication.append(" ");
+            pendingCommunication.append(clean);
+        }
+
+        broadcastTranscript(clean, false);
+        main.removeCallbacks(flushCommunication);
+        main.postDelayed(flushCommunication, 4000L);
+    }
+
+    private void flushPendingCommunication() {
+        final String complete;
+        synchronized (pendingCommunication) {
+            complete = pendingCommunication.toString().trim().replaceAll("\\s+", " ");
+            pendingCommunication.setLength(0);
+        }
+        if (complete.length() < 4) return;
+
+        broadcastTranscript(complete, true);
 
         SharedPreferences p = getSharedPreferences("captador_prefs", MODE_PRIVATE);
         String company = p.getString("company", "220ª Cia");
 
         io.execute(() -> {
             try {
-                DispatchRecord d = DispatchParser.parse(clean, company);
+                DispatchRecord d = DispatchParser.parse(complete, company);
                 AppDb db = new AppDb(getApplicationContext());
                 db.insert(d);
 
@@ -161,6 +185,7 @@ public class RadioCaptureService extends Service {
     }
 
     private void stopCapture() {
+        flushPendingCommunication();
         running = false;
         main.removeCallbacksAndMessages(null);
         if (recognizer != null) {
