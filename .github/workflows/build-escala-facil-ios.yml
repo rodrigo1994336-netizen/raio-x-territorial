@@ -1,0 +1,59 @@
+name: Build Escala Facil iOS
+
+on:
+  push:
+    branches:
+      - feature/escala-facil-ios
+    paths:
+      - "escala-facil-ios/**"
+      - ".github/workflows/build-escala-facil-ios.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Xcode version
+        run: xcodebuild -version
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate project
+        working-directory: escala-facil-ios
+        run: xcodegen generate
+
+      - name: Build unsigned iPhone app
+        working-directory: escala-facil-ios
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project EscalaFacil.xcodeproj \
+            -scheme EscalaFacil \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build | tee build.log
+
+      - name: Package unsigned app
+        working-directory: escala-facil-ios
+        run: |
+          mkdir -p Payload
+          cp -R build/Build/Products/Release-iphoneos/EscalaFacil.app Payload/
+          zip -r EscalaFacil-unsigned.ipa Payload
+          shasum -a 256 EscalaFacil-unsigned.ipa > EscalaFacil-unsigned.sha256
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: EscalaFacil-iOS-unsigned
+          path: |
+            escala-facil-ios/EscalaFacil-unsigned.ipa
+            escala-facil-ios/EscalaFacil-unsigned.sha256
+            escala-facil-ios/build.log
