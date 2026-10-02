@@ -7,8 +7,7 @@ on:
     paths:
       - "captador-radio/**"
       - ".github/workflows/build-captador-radio.yml"
-    paths-ignore:
-      - "captador-radio/CaptadorRadio-debug.apk"
+      - "!captador-radio/CaptadorRadio-debug.apk"
   workflow_dispatch:
 
 permissions:
