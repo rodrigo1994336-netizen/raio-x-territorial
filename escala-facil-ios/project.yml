@@ -1,0 +1,25 @@
+name: EscalaFacil
+options:
+  bundleIdPrefix: br.com.afp
+  deploymentTarget:
+    iOS: "26.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    SWIFT_STRICT_CONCURRENCY: minimal
+targets:
+  EscalaFacil:
+    type: application
+    platform: iOS
+    sources:
+      - EscalaFacil
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: br.com.afp.escalafacil
+        INFOPLIST_FILE: EscalaFacil/Info.plist
+        TARGETED_DEVICE_FAMILY: "1"
+        CURRENT_PROJECT_VERSION: "1"
+        MARKETING_VERSION: "1.0"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    scheme:
+      testTargets: []
