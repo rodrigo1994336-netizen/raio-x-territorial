@@ -2692,19 +2692,18 @@ def pagina_6(c, L: Leitura, grade: bool) -> float:
                   "quer dizer que não há registro no cadastro consultado.", "corpo", G.leitura)
         blocos.append(Bloco("sem_outorga", t.altura, lambda c, x, y, h, t=t: t.desenhar(c, x, y), espaco=1, prioridade=5))
 
-    # --- outorgas na vizinhança e pivôs -------------------------------------------------------------
+    # --- outorgas na vizinhança e pivô achado -------------------------------------------------------
+    # O pivô que NÃO apareceu já está na tabela "o que foi consultado", com o alcance: repetir aqui
+    # era dizer a mesma ausência duas vezes na mesma folha.
     linhas_extra = []
     vizinhas = L.fato("outorga").get("vizinhas_5km") or {}
     if vizinhas.get("texto"):
         linhas_extra.append(("Na vizinhança", str(vizinhas["texto"])))
-    if L.estado("pivo") in ("encontrado", "nao_encontrado"):
-        v = L.valor("pivo") or {}
-        n = v.get("quantidade") or 0
-        if n:
-            linhas_extra.append(("Pivô central", f"{f_inteiro(n)} {'pivô mapeado' if n == 1 else 'pivôs mapeados'} "
-                                                 f"no imóvel" + alcance(L, "pivo", ", ") + "."))
-        else:
-            linhas_extra.append(("Pivô central", "Nenhum pivô central" + alcance(L, "pivo", " ") + "."))
+    if L.estado("pivo") == "encontrado":
+        n = (L.valor("pivo") or {}).get("quantidade") or 0
+        linhas_extra.append(("Pivô central",
+                             f"{f_inteiro(n)} {'pivô mapeado' if n == 1 else 'pivôs mapeados'} no imóvel"
+                             + alcance(L, "pivo", ", ") + "."))
     if linhas_extra:
         alt, des = tabela([("Tema", 40 * mm), ("O que a consulta mostra", 130 * mm)],
                           [[a, b] for a, b in linhas_extra])
