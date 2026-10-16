@@ -18,9 +18,22 @@ Regras
 Controles positivos (sempre rodam): cada regra é desligada por mutação e tem de reprovar
 pelo motivo dela.
 
+**Este portão mede o desenho ANTIGO do PDF de propósito** (``RX_RELATORIO_LIVRO=off``, fixado
+abaixo). As regras R2, R3 e R4 falam das seções do gerador V10 — "armazéns CONAB", "outorga com
+vazão" — que são o jeito do motor antigo de mostrar o que as frentes F2 apuraram. O que este portão
+protege é a ligação das frentes ao relatório, e ela continua a mesma.
+As mesmas respostas no desenho novo são conferidas pelo portão do livro
+(``scripts/livro_v10_gate.py``, regra 8): sem aquela regra lá, trocar o formato apagaria esta
+proteção em silêncio.
+
   PYTHONPATH=. python scripts/f2_relatorio_v20_gate.py
 """
 from __future__ import annotations
+
+import os as _os
+
+# fixado antes de qualquer import do runtime: o sitecustomize lê esta variável ao carregar o livro
+_os.environ["RX_RELATORIO_LIVRO"] = "off"
 
 import asyncio
 import copy
