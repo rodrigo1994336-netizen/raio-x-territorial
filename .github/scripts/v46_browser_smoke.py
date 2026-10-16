@@ -1095,7 +1095,28 @@ CLICK_LAYOUTS = {
         [[(700, -60), (1000, -60), (1000, 60), (700, 60)]],
         [[(-100, -520), (100, -520), (100, -400), (-100, -400)]],
     ],
+    # The 15/09 flake itself, as a timing case instead of a geometry one: the cell at the centre answers
+    # at once with parcels that are 8 px slivers, so set_dense returns (parcels ARE in view) while no
+    # pixel of theirs survives the 5 px neighbour test and the pan refuses them (under 4*pad); the
+    # parcels that can be clicked sit in a cell that only answers later. Nothing but the wait inside
+    # click_first_parcel can rescue this one. Slivers 0-1 belong to the centre cell (lon -44.24..-44.16,
+    # lat -18.48..-18.40 at step 0.08) and parcels 2-3 to the cell west of it, inside the free area.
+    "slow": [
+        [[(20, -4), (300, -4), (300, 4), (20, 4)]],
+        [[(20, 120), (300, 120), (300, 128), (20, 128)]],
+        [[(-570, -70), (-430, -70), (-430, 70), (-570, 70)]],
+        [[(-400, -70), (-260, -70), (-260, 70), (-400, 70)]],
+    ],
 }
+# Layouts the plain run exercises, with every cell answering at once. "slow" is not one of them: served
+# that way its parcels are clickable from the first probe, so it would assert nothing about the wait.
+CLICK_PLAIN_LAYOUTS = ("concave", "edge")
+# Late-cell scenario. `early` = how many leading features the cell at the DENSE centre returns at once;
+# every other cell answers only `delay_ms` after set_dense. `short_ms` is its positive control: with a
+# deadline below the delay the same fixture MUST turn red at NO_CLICKABLE_PARCEL — that is what proves
+# the green run came from waiting for the late cell, and not from a fixture clickable all along.
+CLICK_SLOW = {"layout": "slow", "early": 2, "delay_ms": 9000, "short_ms": 4000}
+PARCEL_CARS_JS = """()=>{const o=[];if(typeof map==='undefined'||!map)return o;map.eachLayer(l=>{const c=l.feature?.properties?.cod_imovel;if(c)o.push(c)});return o}"""
 CLICK_MUTATIONS = {
     "click_ignored": ("CLICK_NO_CARD", "l.on('click',e=>{if(e.originalEvent){try{e.originalEvent.__rx46ParcelClick=true",
                       "l.on('dblclick',e=>{if(e.originalEvent){try{e.originalEvent.__rx46ParcelClick=true"),
@@ -1127,11 +1148,19 @@ def click_layout_features(layout: str) -> list[dict]:
     return feats
 
 
-async def click_fixture_run(browser, layout: str, mutation: str | None = None, timeout_ms: int = 30000) -> list[dict]:
+async def open_after(event: asyncio.Event, ms: int) -> None:
+    await asyncio.sleep(ms / 1000)
+    event.set()
+
+
+async def click_fixture_run(browser, layout: str, mutation: str | None = None, timeout_ms: int = 30000,
+                            late_ms: int = 0, early: int = 0) -> list[dict]:
     context = await browser.new_context(viewport={"width": 1440, "height": 900})
     page = await context.new_page()
     feats = click_layout_features(layout)
     applied = []
+    early_cars = {f["properties"]["cod_imovel"] for f in feats[:early]}
+    gate, late_cells, route_errors, opener = asyncio.Event(), [], [], None
 
     async def cells(route):
         q = parse_qs(urlparse(route.request.url).query)
@@ -1142,8 +1171,19 @@ async def click_fixture_run(browser, layout: str, mutation: str | None = None, t
             ys = [c[1] for c in f["geometry"]["coordinates"][0]]
             if min(xs) < e and max(xs) > w and min(ys) < n and max(ys) > s:
                 hit.append(f)
-        await route.fulfill(json={"type": "FeatureCollection", "features": hit, "uf": "MG", "ufs": ["MG"], "truncated": False,
-                                  "partial_failures": 0, "cached": True, "fetched_at": round(time.time(), 3)})
+        body = {"type": "FeatureCollection", "features": hit, "uf": "MG", "ufs": ["MG"], "truncated": False,
+                "partial_failures": 0, "cached": True, "fetched_at": round(time.time(), 3)}
+        # The cell holding the DENSE centre is the one that had answered in the flake; every other cell
+        # waits for the gate, so only the early features are on the map while the deadline runs.
+        if late_ms and not (w <= DENSE["lon"] <= e and s <= DENSE["lat"] <= n):
+            late_cells.append(route.request.url)
+            await gate.wait()
+            try:
+                await route.fulfill(json=body)
+            except Exception as exc:  # released by the gate into a context already closing
+                route_errors.append(f"{route.request.url}: {exc}")  # reported, never dropped
+            return
+        await route.fulfill(json=body)
 
     async def mutate(route):
         if route.request.resource_type not in ("document", "script"):
@@ -1168,10 +1208,23 @@ async def click_fixture_run(browser, layout: str, mutation: str | None = None, t
         await page.goto(BASE, wait_until="domcontentloaded", timeout=30000)
         await wait_runtime(page)
         assert not mutation or applied, ("CLICK_MUTATION_NOT_APPLIED", mutation)
+        if late_ms:
+            opener = asyncio.ensure_future(open_after(gate, late_ms))
         await set_dense(page)
         cars = {f["properties"]["cod_imovel"] for f in feats}
+        if late_ms:
+            # Premise of the scenario, read from the map and not assumed: parcels are in view (set_dense
+            # returned) and they are only the early slivers, so no click is possible yet.
+            drawn = set(await js(page, PARCEL_CARS_JS))
+            assert drawn == early_cars, ("SLOW_PREMISE_EARLY_ONLY: only the cell at the centre may have answered by now",
+                                         sorted(drawn), sorted(early_cars), len(late_cells))
         first = await click_first_parcel(page, timeout_ms=timeout_ms)
         assert first["car"] in cars, first
+        if late_ms:
+            first["late_cells"], first["route_errors"] = len(late_cells), route_errors
+            assert first["car"] not in early_cars, ("SLOW_PREMISE_LATE_CAR: the click must land on a parcel from the late cell", first)
+            assert not first["pans"], ("SLOW_PREMISE_NO_PAN: the slivers must be too small for the pan, so only the wait can rescue this click", first)
+            assert first["waited_ms"] >= late_ms * 0.6, ("SLOW_PREMISE_WAITED: the click must have waited for the late cell", first, late_ms)
         # Same sequence as viewport_flow: close on an empty pixel, then click the OTHER parcel.
         empty = await proven_empty_map_point(page)
         assert empty, "no provably empty map pixel found"
@@ -1181,16 +1234,34 @@ async def click_fixture_run(browser, layout: str, mutation: str | None = None, t
         assert second["car"] in cars and second["car"] != first["car"], (first, second)
         return [first, second]
     finally:
+        gate.set()  # no cell handler may hang while the context closes
+        if opener and not opener.done():
+            opener.cancel()
         await context.close()
 
 
 async def click_controls(browser) -> None:
-    report = {"layouts": {}, "mutations": {}}
-    for layout in CLICK_LAYOUTS:
+    report = {"layouts": {}, "mutations": {}, "slow_cells": {}}
+    for layout in CLICK_PLAIN_LAYOUTS:
         clicked = await click_fixture_run(browser, layout)
         assert layout != "edge" or all(c["pans"] for c in clicked), ("edge layout must need the pan on both clicks (premise)", clicked)
         report["layouts"][layout] = clicked
         print("RX_V46_CLICK_LAYOUT", layout, "PASS")
+    # The 15/09 flake as a timing case: the clickable parcels only arrive with a cell that answers late.
+    waited = await click_fixture_run(browser, CLICK_SLOW["layout"], late_ms=CLICK_SLOW["delay_ms"], early=CLICK_SLOW["early"])
+    report["slow_cells"]["waited"] = waited
+    print("RX_V46_CLICK_SLOW_CELLS", json.dumps(waited[0], ensure_ascii=False))
+    # Its positive control: with a deadline below the delay the SAME fixture has to fail at
+    # NO_CLICKABLE_PARCEL. Without this the green run above could just mean nothing arrived late.
+    try:
+        await click_fixture_run(browser, CLICK_SLOW["layout"], late_ms=CLICK_SLOW["delay_ms"],
+                                early=CLICK_SLOW["early"], timeout_ms=CLICK_SLOW["short_ms"])
+        control = "passed"
+    except AssertionError as exc:
+        msg = str(exc)
+        control = "caught" if "NO_CLICKABLE_PARCEL" in msg and "SLOW_PREMISE_" not in msg else "other: " + msg[:300]
+    report["slow_cells"]["control"] = control
+    print("RX_V46_CLICK_SLOW_CONTROL", CLICK_SLOW["short_ms"], control)
     missed = []
     for name, (tag, _, _) in CLICK_MUTATIONS.items():
         try:
@@ -1205,6 +1276,8 @@ async def click_controls(browser) -> None:
             missed.append(name)
     (OUT / "v46-click-controls.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     assert not missed, ("parcel click mutations not caught at their tag", missed)
+    assert control == "caught", ("a deadline below the cell delay must fail at NO_CLICKABLE_PARCEL;"
+                                " without it the late-cell run proves nothing about the wait", control)
     print("RX_V46_CLICK_CONTROLS=PASS")
 
 
