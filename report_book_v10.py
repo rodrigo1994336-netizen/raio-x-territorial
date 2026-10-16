@@ -2885,9 +2885,17 @@ def pagina_8(c, L: Leitura, grade: bool) -> float:
     ate_8 = sum(Decimal(str(x.get("pct") or 0)) for x in classes
                 if x.get("classe") in ("plano", "suave ondulado"))
     mediana = rel.get("inclinacao_mediana_pct")
-    resposta = (f"A maior parte do imóvel é plana ou pouco inclinada: {f_pct(ate_8)} da área tem até 8% de "
-                f"inclinação. A inclinação típica é de {f_pct(mediana)}." if mediana is not None else
-                f"{f_pct(ate_8)} da área tem até 8% de inclinação.",
+    # A frase SEGUE o número: dizer "a maior parte é plana" com 38% seria transmitir o contrário do
+    # que a medida mostra. Os três degraus saem do próprio percentual, nunca de um texto fixo.
+    if ate_8 >= 70:
+        abertura = f"A maior parte do imóvel é plana ou pouco inclinada: {f_pct(ate_8)} da área tem até 8% de inclinação."
+    elif ate_8 >= 45:
+        abertura = f"Boa parte do imóvel é plana ou pouco inclinada: {f_pct(ate_8)} da área tem até 8% de inclinação."
+    elif ate_8 >= 20:
+        abertura = f"O imóvel inclina mais do que é plano: {f_pct(ate_8)} da área tem até 8% de inclinação."
+    else:
+        abertura = f"O imóvel é inclinado: só {f_pct(ate_8)} da área tem até 8% de inclinação."
+    resposta = (abertura + (f" A inclinação típica é de {f_pct(mediana)}." if mediana is not None else ""),
                 f"{f_pct(ate_8)} do imóvel tem até 8% de inclinação.")
     abrir_capitulo(L, "terra_chao", "relevo", resposta, nota_de_fonte(L, "relevo"), blocos)
 

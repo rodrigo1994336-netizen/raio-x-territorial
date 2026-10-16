@@ -444,6 +444,29 @@ def regra_terra_verdade(texto: str) -> list[str]:
     return problemas
 
 
+# ---------------------------------------------------------------------------------------------
+# 10 · a frase concorda com o número que ela mesma traz
+# ---------------------------------------------------------------------------------------------
+# Defeito achado olhando a folha: "A maior parte do imóvel é plana: 38% da área...". O texto era
+# fixo e o número vinha do dado, então a frase afirmava o contrário da medida.
+QUANTIFICADORES = (
+    (r"(?:a\s+)?maior parte[^.]{0,60}?(\d{1,3}(?:,\d)?)\s*%", 50.0, "mais da metade"),
+    (r"(?:em\s+)?todo o im[óo]vel[^.]{0,40}?(\d{1,3}(?:,\d)?)\s*%", 99.0, "praticamente tudo"),
+    (r"quase toda a [áa]rea[^.]{0,60}?(\d{1,3}(?:,\d)?)\s*%", 85.0, "quase tudo"),
+)
+
+
+def regra_quantificador(texto: str) -> list[str]:
+    problemas = []
+    plano = " ".join(texto.split())
+    for padrao, piso, nome in QUANTIFICADORES:
+        for achado in re.finditer(padrao, plano, re.IGNORECASE):
+            valor = float(achado.group(1).replace(",", "."))
+            if valor < piso:
+                problemas.append(f"a frase diz '{nome}' com {valor}%: {achado.group()[:90]}")
+    return problemas
+
+
 def regra_ligacao_em(fonte_patch: str, fonte_site: str) -> list[str]:
     """O livro é o padrão e ``RX_RELATORIO_LIVRO=off`` devolve o gerador antigo.
 
@@ -520,6 +543,7 @@ def main() -> int:
             ("6 ocupação das folhas", regra_ocupacao(log, folhas_corpo)),
             ("7 ligação ao serviço", regra_ligacao()),
             ("9 decisões da camada T1 no livro", regra_terra_verdade(texto)),
+            ("10 a frase concorda com o número", regra_quantificador(texto)),
     ):
         if problemas:
             for p in problemas:
@@ -535,7 +559,8 @@ def main() -> int:
     log2 = buffer2.getvalue().splitlines()
     corpo2 = next((int(l.split("=", 1)[1]) for l in log2 if l.startswith("RX_BOOK_FOLHAS_CORPO=")), 0)
     for nome, problemas in (("5 português do cliente (com achado)", regra_portugues(texto2, problemas2)),
-                            ("6 ocupação das folhas (com achado)", regra_ocupacao(log2, corpo2))):
+                            ("6 ocupação das folhas (com achado)", regra_ocupacao(log2, corpo2)),
+                            ("10 a frase concorda com o número (com achado)", regra_quantificador(texto2))):
         if problemas:
             for p in problemas:
                 falhar(nome, p)
@@ -748,6 +773,20 @@ def main() -> int:
             livro.significado_agua = original
 
     controle("chuva recente comparada ao normal", com_chuva_comparada)
+
+    def com_frase_que_contradiz_o_numero():
+        """O defeito real: texto fixo "a maior parte" com um número que diz o contrário."""
+        return regra_quantificador(
+            "A maior parte do imóvel é plana ou pouco inclinada: 38% da área tem até 8% de inclinação.")
+
+    controle("frase que contradiz o próprio número", com_frase_que_contradiz_o_numero)
+
+    def com_frase_que_concorda():
+        """Controle negativo: com 74%, a mesma frase é verdadeira e a regra não pode reprovar."""
+        return regra_quantificador(
+            "A maior parte do imóvel é plana ou pouco inclinada: 74% da área tem até 8% de inclinação.")
+
+    controle("frase que concorda com o número", com_frase_que_concorda, deve_reprovar=False)
 
     def com_ligacao_quebrada():
         return regra_ligacao_em(
