@@ -41,6 +41,11 @@ jobs:
         env:
           RX_RELEASE: OFF
         run: PYTHONPATH=. python scripts/r1_report_ptbr_gate.py
+      - name: R2 relatorio-livro v10 (contrato dos fatos, zero com alcance, fonte caida nunca vira ausencia, nada inventado, portugues do cliente pelo lint do R1, ocupacao das folhas, livro como formato padrao com volta por RX_RELATORIO_LIVRO=off; controles positivos por mutacao em cada regra)
+        env:
+          RX_RELEASE: OFF
+          RX_LIVRO_IMAGEM: "off"
+        run: PYTHONPATH=. python scripts/livro_v10_gate.py
       - name: T2 textos do cliente (sem jargao, sigla solta, nome interno, estado tecnico ou erro cru no portal, em /novo e no PDF; escopo do cartorio fora da tabela de fontes; controles positivos por mutacao)
         env:
           RX_RELEASE: V8_OPERATIONAL_ZERO_COST

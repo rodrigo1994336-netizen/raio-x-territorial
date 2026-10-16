@@ -27,6 +27,9 @@ def _load_report_after_report_api():
                 import core_retry_fast_v29  # noqa: F401
                 import report_v19_patch  # noqa: F401
                 import report_v20_patch  # noqa: F401
+                # O livro entra DEPOIS do V20: ele troca só o desenho do PDF, no fim da cadeia.
+                # Volta pelo formato antigo com RX_RELATORIO_LIVRO=off (report_livro_patch).
+                import report_livro_patch  # noqa: F401
                 import report_visual_identity_v28  # noqa: F401
                 import report_extras_perf_v30  # noqa: F401
                 import landuse_profile_v39  # noqa: F401
