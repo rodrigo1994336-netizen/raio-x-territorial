@@ -1198,9 +1198,30 @@ def linha_item(rotulo_txt: str, estado: str, atencao_item: bool, detalhe: str, l
     return altura, desenhar
 
 
+def _tirar_colunas_vazias(colunas, linhas, numericas):
+    """Tira as colunas sem nenhum valor e reparte a largura delas entre as que ficaram."""
+    if not linhas:
+        return list(colunas), list(linhas), tuple(numericas)
+    manter = [i for i in range(len(colunas))
+              if any(str(linha[i]).strip() for linha in linhas if i < len(linha))]
+    if len(manter) == len(colunas) or not manter:
+        return list(colunas), list(linhas), tuple(numericas)
+    sobra = sum(colunas[i][1] for i in range(len(colunas)) if i not in manter) / len(manter)
+    novas = [(colunas[i][0], colunas[i][1] + sobra) for i in manter]
+    novas_linhas = [[linha[i] if i < len(linha) else "" for i in manter] for linha in linhas]
+    novas_numericas = tuple(manter.index(i) for i in numericas if i in manter)
+    return novas, novas_linhas, novas_numericas
+
+
 def tabela(colunas: list[tuple[str, float]], linhas: list[list[str]], nota: str | None = None,
            numericas: tuple[int, ...] = ()):
-    """Tabela do livro: cabeçalho espacejado, fio fino entre linhas, sem grade fechada."""
+    """Tabela do livro: cabeçalho espacejado, fio fino entre linhas, sem grade fechada.
+
+    Coluna sem nenhum valor em nenhuma linha **não é desenhada** (regra do dono: campo vazio não
+    aparece). A largura dela é repartida entre as que ficaram, para a tabela continuar ocupando a
+    medida de sempre.
+    """
+    colunas, linhas, numericas = _tirar_colunas_vazias(colunas, linhas, numericas)
     largura = sum(w for _, w in colunas)
     celulas = [[texto(v, "tab_num" if i in numericas else "tab_cel", colunas[i][1] - 3 * mm)
                 for i, v in enumerate(linha)] for linha in linhas]
@@ -2689,9 +2710,33 @@ def pagina_6(c, L: Leitura, grade: bool) -> float:
                           [[a, b] for a, b in linhas_extra])
         blocos.append(Bloco("agua_extra", alt, des, espaco=1, prioridade=3))
 
+    # O que foi consultado sobre água, com a situação e o alcance de cada consulta. Entra sempre:
+    # num capítulo curto (fonte pendente) é o que mostra ao cliente o que FOI perguntado.
+    alt, des = tabela_do_que_foi_consultado(L, ("outorga", "pocos", "pivo"))
+    if alt:
+        blocos.append(Bloco("consultas_agua", alt, des, espaco=1, prioridade=6))
+
     alt_cx, des_cx = caixa_significado([(None, significado_agua(L))])
     blocos.append(Bloco("significado", alt_cx, des_cx, espaco=1, ancorar=True))
     return fechar_pagina(c, L, blocos, 6, "agua", grade)
+
+
+def tabela_do_que_foi_consultado(L: Leitura, chaves: tuple[str, ...]):
+    """Uma linha por consulta: o que foi perguntado, a situação e até onde a consulta enxerga."""
+    linhas = []
+    for chave in chaves:
+        e = L.fato(chave)
+        if e["estado"] == "nao_se_aplica":
+            continue
+        fonte = (e.get("fonte") or {}).get("nome_publico") or ""
+        limites = "; ".join(str(x) for x in (e.get("limites") or []))
+        linhas.append([NOME_DO_FATO.get(chave, chave),
+                       ROTULO_SITUACAO.get(e["estado"], "Fora desta edição"),
+                       str(fonte), limites])
+    if not linhas:
+        return 0, None
+    return tabela([("O que foi consultado", 42 * mm), ("Situação", 28 * mm), ("Fonte", 44 * mm),
+                   ("Até onde a consulta enxerga", 56 * mm)], linhas)
 
 
 def significado_agua(L: Leitura) -> str:
