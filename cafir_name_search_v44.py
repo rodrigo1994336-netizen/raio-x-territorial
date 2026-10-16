@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
 
+import deploy_app
 from deploy_app import _curl
 
 ROOT=Path(__file__).resolve().parent
@@ -19,6 +20,9 @@ SIGEF=(
  ('PUBLICO','https://pamgia.ibama.gov.br/server/rest/services/01_Publicacoes_Bases/lim_imovel_sigef_publico_a/FeatureServer/10/query'),
  ('PRIVADO','https://pamgia.ibama.gov.br/server/rest/services/01_Publicacoes_Bases/lim_imovel_sigef_privado_a/FeatureServer/9/query'),
 )
+# Teto do locate_incra_sync: os dois espelhos SIGEF em sequencia, cada um uma chamada do curl padrao do
+# deploy_app. Quem poe prazo em cima dele usa este numero; menor cortaria resposta que hoje chega.
+LOCATE_WORST_CASE_S=round(len(SIGEF)*deploy_app.CURL_WORST_CASE_S,1)
 
 
 def _norm(v:Any)->str:
@@ -108,9 +112,9 @@ def locate_incra_sync(incra_code:str)->dict[str,Any]:
                 from shapely.geometry import shape
                 g=shape(f.get('geometry'));c=g.representative_point();center={'lat':float(c.y),'lon':float(c.x)}
             except Exception:center=None
-            items.append({'source':f'SIGEF/INCRA {source.lower()} — espelho público IBAMA/PAMGIA','incra_code':p.get('codigo_imo'),'parcel_code':p.get('parcela_co'),'sigef_name':p.get('nome_area'),'registry':p.get('registro_m'),'status':p.get('status') or p.get('situacao_i'),'center':center,'geometry':f.get('geometry'),'display_kind':'INCRA_CERTIFIED_PARCEL','car_code':None,'panel_name_eligible':False})
+            items.append({'source':f'SIGEF/INCRA {source.lower()} · mapa público do IBAMA','incra_code':p.get('codigo_imo'),'parcel_code':p.get('parcela_co'),'sigef_name':p.get('nome_area'),'registry':p.get('registro_m'),'status':p.get('status') or p.get('situacao_i'),'center':center,'geometry':f.get('geometry'),'display_kind':'INCRA_CERTIFIED_PARCEL','car_code':None,'panel_name_eligible':False})
     if not items and errors:return {'ok':False,'detail':'SIGEF unavailable: '+' | '.join(errors)[:500],'items':[]}
-    return {'ok':True,'items':items,'count':len(items),'incra_code':incra,'source':'SIGEF/INCRA','car_link_status':'NOT_VALIDATED','note':'A parcela certificada pode ser exibida no mapa, mas não é convertida em CAR nem herda automaticamente o nome CAFIR.'}
+    return {'ok':True,'items':items,'count':len(items),'incra_code':incra,'source':'SIGEF/INCRA · mapa público do IBAMA','car_link_status':'NOT_VALIDATED','note':'A parcela certificada pode ser exibida no mapa, mas não é convertida em CAR nem herda automaticamente o nome CAFIR.'}
 
 
 print('RX_CAFIR_NAME_SEARCH_V44=direct_inverse_name_search_no_car_name_inheritance',flush=True)

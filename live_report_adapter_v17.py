@@ -9,6 +9,7 @@ from visual_hybrid import build_hybrid_property_imagery
 from sicar_detail_sources_v2 import query_sicar_details_v2
 from terrain_srtm import query_terrain_srtm
 from report_engine_v7 import build_premium_property_report_v7
+import terra_verdade_t1 as terra_t1
 
 
 async def _extras_v17(result:dict,car_code:str,out_dir:Path):
@@ -18,7 +19,7 @@ async def _extras_v17(result:dict,car_code:str,out_dir:Path):
         v13.query_groundwater(geom,20.0),v13.query_safras(car_code),
         asyncio.to_thread(query_sicar_details_v2,geom,bbox,10,car_code),
         asyncio.to_thread(v13.query_aerodromes_anac,geom,50.0,12),
-        asyncio.to_thread(v13.query_soilgrids_wcs,geom),asyncio.to_thread(v13.query_climatology_nasa,geom),
+        asyncio.to_thread(v13.query_soil_texture,geom),asyncio.to_thread(v13.query_climatology_nasa,geom),
         v13.query_sif_establishments(props.get('municipio'),props.get('uf'),30),return_exceptions=True)
 
 v13._extras=_extras_v17
@@ -69,14 +70,17 @@ _prev_repair=v13._repair_agro_keys
 def _repair_with_terrain(payload:dict,result:dict):
     payload=_prev_repair(payload,result);t=result.get('terrain_srtm') or {}
     if not t.get('ok'):return payload
-    prod=payload.setdefault('productive',{});apt=next((x for x in prod.get('terrain_kpis') or [] if str(x.get('label') or '').lower()=='aptidão'),None);under8=0.0
-    for r in t.get('slope_classes') or []:
-        if r.get('class') in {'0–3°','3–8°'}:under8+=float(r.get('share_pct') or 0)
-    kpis=[{'label':'Altitude','value':f"{t.get('elevation_median_m')} m",'note':f"faixa {t.get('elevation_min_m')}–{t.get('elevation_max_m')} m • SRTM ~30 m",'status':'CONSULTADA','level':'ok'},{'label':'Declividade','value':f"{t.get('slope_median_deg')}° mediana",'note':f"média {t.get('slope_mean_deg')}° • P90 {t.get('slope_p90_deg')}°",'status':'CONSULTADA','level':'ok'},{'label':'Declive ≤ 8°','value':f"{round(under8,1)}%",'note':'participação raster do CAR; indicador topográfico, não laudo de mecanização','status':'CONSULTADA','level':'info'}]
+    # T1: inclinação em %, classes de relevo da Embrapa; a mesma leitura do quadro final (terra_verdade_t1).
+    prod=payload.setdefault('productive',{});apt=next((x for x in prod.get('terrain_kpis') or [] if str(x.get('label') or '').lower()=='aptidão'),None)
+    kpis=terra_t1.relief_kpis(t)
     if apt:kpis.append(apt)
-    else:kpis.append({'label':'Aptidão','value':'VER SEÇÃO','note':'camada de aptidão agrícola consultada separadamente','status':'INFO','level':'info'})
-    prod['terrain_kpis']=kpis[:4];prod['terrain_srtm']=t;checks=payload.setdefault('agropecuaria',{}).setdefault('property_screening',{}).setdefault('checks',[]);checks=[x for x in checks if str(x.get('factor') or '')!='Declividade'];checks.append({'factor':'Declividade SRTM','scope':'raster ~30 m dentro do CAR','status':'consultada','value':{'mediana_graus':t.get('slope_median_deg'),'p90_graus':t.get('slope_p90_deg'),'declive_ate_8_pct':round(under8,1)}});payload['agropecuaria']['property_screening']['checks']=checks
-    payload['sources']=[x for x in payload.get('sources') or [] if 'ide-sisema / declividade' not in str(x.get('name') or '').lower()];payload.setdefault('sources',[]).append({'name':'SRTM 1 arc-second — altitude e declividade','description':f"DEM público ~30 m recortado ao CAR: altitude mediana {t.get('elevation_median_m')} m; declividade mediana {t.get('slope_median_deg')}°, P90 {t.get('slope_p90_deg')}°. Não substitui levantamento topográfico de campo.",'status':'CONSULTADA','level':'ok'})
+    prod['terrain_kpis']=kpis[:4];prod['terrain_srtm']=t;checks=payload.setdefault('agropecuaria',{}).setdefault('property_screening',{}).setdefault('checks',[]);checks=[x for x in checks if str(x.get('factor') or '') not in {'Declividade','Declividade SRTM','Relevo (SRTM)'}]
+    check=terra_t1.relief_check(t)
+    if check:checks.append(check)
+    payload['agropecuaria']['property_screening']['checks']=checks
+    payload['sources']=[x for x in payload.get('sources') or [] if 'ide-sisema / declividade' not in str(x.get('name') or '').lower() and 'srtm 1 arc-second' not in str(x.get('name') or '').lower()]
+    source=terra_t1.relief_source(t)
+    if source:payload.setdefault('sources',[]).append(source)
     return payload
 
 v13._repair_agro_keys=_repair_with_terrain

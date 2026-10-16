@@ -1,0 +1,184 @@
+{
+ "features": [
+  {
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -44.182777999999985,
+     -18.89111100057862
+    ],
+    "crs": null
+   },
+   "id": 40003,
+   "type": "Feature",
+   "properties": {
+    "int_cd": 1169714,
+    "int_qt_vazaomedia": 10,
+    "int_nu_longitude": -44.182778,
+    "tsp_ds": "Outorgado",
+    "ing_sg_ufmunicipio": "MG",
+    "int_nu_latitude": -18.891111,
+    "out_tp_ato": "Portaria",
+    "tpo_ds": "Direito de Uso",
+    "org_uf": "MG",
+    "int_nu_cnarh": "710002506507",
+    "asb_nu_profundidadefinal": null,
+    "tfn_ds": "Irrigação",
+    "int_qt_volumeanual": 30660,
+    "ing_nm_municipio": "CURVELO",
+    "out_dt_outorgainicial": "15/12/2020",
+    "tin_ds": "Captação",
+    "org_nm": "IGAM",
+    "out_nu_ato": "1309443/2020",
+    "objectid": 40003,
+    "out_dt_outorgafinal": "15/12/2030"
+   }
+  },
+  {
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -44.20833332999996,
+     -18.847222220577443
+    ],
+    "crs": null
+   },
+   "id": 91158,
+   "type": "Feature",
+   "properties": {
+    "int_cd": 1329341,
+    "int_qt_vazaomedia": 6.5,
+    "int_nu_longitude": -44.20833333,
+    "tsp_ds": "Outorgado",
+    "ing_sg_ufmunicipio": "MG",
+    "int_nu_latitude": -18.84722222,
+    "out_tp_ato": "PORTARIA",
+    "tpo_ds": "Direito de Uso",
+    "org_uf": "MG",
+    "int_nu_cnarh": null,
+    "asb_nu_profundidadefinal": 80,
+    "tfn_ds": "Irrigação",
+    "int_qt_volumeanual": 14448.525,
+    "ing_nm_municipio": "CURVELO",
+    "out_dt_outorgainicial": "04/06/2022",
+    "tin_ds": "Captação",
+    "org_nm": "IGAM",
+    "out_nu_ato": "1303844/2022",
+    "objectid": 91158,
+    "out_dt_outorgafinal": "04/06/2032"
+   }
+  },
+  {
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -44.216666669999945,
+     -18.883333330578417
+    ],
+    "crs": null
+   },
+   "id": 92005,
+   "type": "Feature",
+   "properties": {
+    "int_cd": 1318669,
+    "int_qt_vazaomedia": 8,
+    "int_nu_longitude": -44.21666667,
+    "tsp_ds": "Outorgado",
+    "ing_sg_ufmunicipio": "MG",
+    "int_nu_latitude": -18.88333333,
+    "out_tp_ato": "PORTARIA",
+    "tpo_ds": "Direito de Uso",
+    "org_uf": "MG",
+    "int_nu_cnarh": null,
+    "asb_nu_profundidadefinal": 90,
+    "tfn_ds": "Consumo Humano",
+    "int_qt_volumeanual": 14600,
+    "ing_nm_municipio": "CURVELO",
+    "out_dt_outorgainicial": "12/04/2022",
+    "tin_ds": "Captação",
+    "org_nm": "IGAM",
+    "out_nu_ato": "1302446/2022",
+    "objectid": 92005,
+    "out_dt_outorgafinal": "12/04/2032"
+   }
+  },
+  {
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -44.216666669999945,
+     -18.883333330578417
+    ],
+    "crs": null
+   },
+   "id": 113386,
+   "type": "Feature",
+   "properties": {
+    "int_cd": 1590856,
+    "int_qt_vazaomedia": 4.6,
+    "int_nu_longitude": -44.21666667,
+    "tsp_ds": "Outorgado",
+    "ing_sg_ufmunicipio": "MG",
+    "int_nu_latitude": -18.88333333,
+    "out_tp_ato": "PORTARIA",
+    "tpo_ds": "Direito de Uso",
+    "org_uf": "MG",
+    "int_nu_cnarh": null,
+    "asb_nu_profundidadefinal": 78,
+    "tfn_ds": "Abastecimento Público",
+    "int_qt_volumeanual": 7975.25,
+    "ing_nm_municipio": "CURVELO",
+    "out_dt_outorgainicial": "24/09/2024",
+    "tin_ds": "Captação",
+    "org_nm": "IGAM",
+    "out_nu_ato": "1404287/2024",
+    "objectid": 113386,
+    "out_dt_outorgafinal": "24/09/2034"
+   }
+  },
+  {
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -44.19361110999995,
+     -18.899444440578833
+    ],
+    "crs": null
+   },
+   "id": 115086,
+   "type": "Feature",
+   "properties": {
+    "int_cd": 1576752,
+    "int_qt_vazaomedia": 7,
+    "int_nu_longitude": -44.19361111,
+    "tsp_ds": "Outorgado",
+    "ing_sg_ufmunicipio": "MG",
+    "int_nu_latitude": -18.89944444,
+    "out_tp_ato": "PORTARIA",
+    "tpo_ds": "Direito de Uso",
+    "org_uf": "MG",
+    "int_nu_cnarh": null,
+    "asb_nu_profundidadefinal": 80,
+    "tfn_ds": "Consumo Humano",
+    "int_qt_volumeanual": 15330,
+    "ing_nm_municipio": "CURVELO",
+    "out_dt_outorgainicial": "07/06/2024",
+    "tin_ds": "Captação",
+    "org_nm": "IGAM",
+    "out_nu_ato": "1402593/2024",
+    "objectid": 115086,
+    "out_dt_outorgafinal": "07/06/2034"
+   }
+  }
+ ],
+ "crs": {
+  "type": "name",
+  "properties": {
+   "name": "EPSG:4674"
+  }
+ },
+ "type": "FeatureCollection",
+ "properties": {
+  "exceededTransferLimit": false
+ }
+}

@@ -20,8 +20,8 @@ _SOURCE_CATALOG = (
     ("registry", "Matrícula"),
     ("public_forest", "Floresta Pública"),
     ("snci", "SNCI"),
-    ("mte_slave_labor", "MTE — Trabalho Escravo"),
-    ("sinaflor", "SINAFLOR — Supressão"),
+    ("mte_slave_labor", "Trabalho escravo (Ministério do Trabalho)"),
+    ("sinaflor", "Autorização para cortar vegetação (IBAMA)"),
 )
 SOURCE_IDS = tuple(source_id for source_id, _ in _SOURCE_CATALOG)
 SOURCE_COUNT = len(_SOURCE_CATALOG)

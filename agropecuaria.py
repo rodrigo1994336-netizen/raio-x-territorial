@@ -169,7 +169,7 @@ def property_livestock_screening(result:dict) -> dict[str,Any]:
         {'factor':'Aptidão agrícola','scope':'interseção cartográfica','status':'consultada' if aptitude.get('ok') else ('parcial' if aptitude else 'indisponível'),'value':_ide_classes(result,'aptidao')[:3]},
         {'factor':'Declividade','scope':'interseção cartográfica','status':'consultada' if terrain.get('ok') else ('parcial' if terrain else 'indisponível'),'value':_ide_classes(result,'declividade')[:3]},
     ]
-    return {'checks':checks,'carrying_capacity':None,'carrying_capacity_note':'Lotação animal (UA/ha) não é estimada sem dados de forragem, manejo, estação, suplementação e validação agronômica. O Raio-X não inventa capacidade de suporte.'}
+    return {'checks':checks,'carrying_capacity':None,'carrying_capacity_note':'A lotação de gado por hectare depende de pasto, manejo, estação do ano e suplementação; sem esses dados ela não é calculada aqui.'}
 
 
 async def build_agro_profile(result:dict,car_code:str,include_sif:bool=True) -> dict[str,Any]:

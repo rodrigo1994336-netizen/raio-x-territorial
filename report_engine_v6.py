@@ -84,25 +84,27 @@ def build_premium_property_report_v6(path:str|Path,payload:dict[str,Any])->str:
     story += _section('A leitura que interessa para a decisão','Primeiro vem o que muda a decisão; depois, a evidência técnica que sustenta cada conclusão.')
     story.append(_decision_columns(nar))
     story += [Spacer(1,6*mm),Paragraph('O que fazer agora',S['h2'])]+_bullets(nar.get('next_steps') or con.get('diligence') or [],12)
-    story += [Spacer(1,4*mm),_callout('REGRA DO RAIO-X','Fonte indisponível vira ponto cego. O sistema nunca transforma “não consegui consultar” em “não existe problema”.','attention'),PageBreak()]
+    story += [Spacer(1,4*mm),_callout('CONSULTA PENDENTE NÃO É “NÃO EXISTE”','Quando uma fonte não responde, o item fica pendente e é consultado de novo. Pendente nunca vira “sem problema”.','attention'),PageBreak()]
 
     # 3 — cobertura
     stats=_source_stats(sources)
     story += _section('Cobertura das fontes','Uma fonte só conta como consultada quando efetivamente respondeu nesta emissão.')
-    story.append(_kpis([('Consultadas',stats['ok'],'responderam','CONSULTADA'),('Parciais',stats['partial'],'retorno incompleto','PARCIAL'),('Pendentes',stats['unavailable'],'refeitas na próxima emissão','ATENÇÃO'),('Outras',stats['other'],'não consultadas nesta emissão','ATENÇÃO')]))
+    # T2: "Outras — não consultadas nesta emissão" anunciava como ausência aquilo que o produto não consulta.
+    # O que está fora do escopo é dito uma vez, na linha de escopo abaixo do subtítulo desta seção.
+    story.append(_kpis([('Consultadas',stats['ok'],'responderam','CONSULTADA'),('Responderam em parte',stats['partial'],'trouxeram só parte','PARCIAL'),('Pendentes',stats['unavailable']+stats['other'],'refeitas na próxima emissão','ATENÇÃO')]))
     story += [Spacer(1,5*mm),_sources_table(sources),PageBreak()]
 
     # 4 — CAR e fundiário
     story += _section('CAR, cadastro e situação fundiária','Cadastro ambiental, georreferenciamento e propriedade registral respondem perguntas diferentes.')
     story.append(_info(car.get('fields') or [],[60*mm,105*mm],['Campo','Resultado']))
-    story += [Spacer(1,5*mm),Paragraph('SIGEF, SNCI, CCIR e matrícula',S['h2']),_info(land.get('certifications') or [],[28*mm,35*mm,24*mm,78*mm],['Base','Situação','Registros','Leitura'])]
+    story += [Spacer(1,5*mm),Paragraph('Certificação do imóvel no INCRA',S['h2']),_info(land.get('certifications') or [],[28*mm,35*mm,24*mm,78*mm],['Base','Situação','Registros','Leitura'])]
     if land.get('matrix'): story += [Spacer(1,4*mm),_info(land.get('matrix'),[35*mm,40*mm,28*mm,62*mm],['Base/campo','Resultado','Área','O que significa'])]
-    ev=land.get('evidence') or {}; story += [Spacer(1,4*mm),_callout('EVIDÊNCIA DOMINIAL',f"{_s(ev.get('score'),'NÃO CLASSIFICADA')} — {_s(ev.get('text'),'')}",'attention'),PageBreak()]
+    ev=land.get('evidence') or {}; story += [Spacer(1,4*mm),_callout('QUEM É O DONO',f"{_s(ev.get('score'),'SEM CLASSIFICAÇÃO')} — {_s(ev.get('text'),'')}",'attention'),PageBreak()]
 
     # 5 — ambiental
     pd=env.get('prodes') or {}
     story += _section('Ambiental e fiscalização','Desmatamento, embargos, autos e restrições são apresentados com área, período e fonte sempre que o dado permitir.')
-    story.append(_kpis([('PRODES',_s(pd.get('count'),0),f"{_s(pd.get('area_ha'),0)} ha",_s(pd.get('status'),'CONSULTADA')),('Embargos',_s(enf.get('embargo_count'),0),'IBAMA + ICMBio',_s(enf.get('embargo_status'),'CONSULTADA')),('Autos IBAMA',_s(enf.get('auto_count'),'N/D'),_s(enf.get('fine_total_text'),''),'ATENÇÃO' if _s(enf.get('auto_count')) not in ('0','N/D','NÃO CONSULTADO') else 'CONSULTADA'),('Restrições',f"{_s(env.get('unique_problem_area_ha'),0)} ha",f"{_s(env.get('unique_problem_area_pct'),0)}% do CAR",'ATENÇÃO' if env.get('unique_problem_area_ha') else 'CONSULTADA')]))
+    story.append(_kpis([('PRODES',_s(pd.get('count'),0),('consulta pendente' if pd.get('pending') else f"{_s(pd.get('area_ha'),0)} ha"),_s(pd.get('status'),'CONSULTADA')),('Embargos',_s(enf.get('embargo_count'),0),_s(enf.get('embargo_sources_label'),'IBAMA + ICMBio'),_s(enf.get('embargo_status'),'CONSULTADA')),('Autos IBAMA',_s(enf.get('auto_count'),'N/D'),_s(enf.get('fine_total_text'),''),'ATENÇÃO' if _s(enf.get('auto_count')) not in ('0','N/D','NÃO CONSULTADO') else 'CONSULTADA'),('Restrições',f"{_s(env.get('unique_problem_area_ha'),0)} ha",f"{_s(env.get('unique_problem_area_pct'),0)}% do CAR",'ATENÇÃO' if env.get('unique_problem_area_ha') else 'CONSULTADA')]))
     if payload.get('technical_map_image_path'):
         story += [Spacer(1,5*mm)]+_image(payload.get('technical_map_image_path'),'Mapa técnico do mesmo imóvel: limite CAR e interseções cartográficas usadas na análise. Não é ilustração genérica.')
     story += [Spacer(1,5*mm),Paragraph('Camadas ambientais e territoriais',S['h2']),_info(env.get('layer_rows') or [],[48*mm,70*mm,47*mm],['Camada','Resultado','Fonte'])]
@@ -111,7 +113,8 @@ def build_premium_property_report_v6(path:str|Path,payload:dict[str,Any])->str:
 
     # 6 — mineral
     story += _section('Mineração, minerais críticos e terras raras','O Raio-X diferencia processo minerário, sinal geológico e jazida comprovada — são coisas diferentes.')
-    story.append(_kpis([('Processos ANM',_s(mining.get('process_count'),0),f"{_s(mining.get('overlap_area_ha'),0)} ha",'ATENÇÃO' if mining.get('process_count') else 'CONSULTADA'),('Minerais críticos',_s(mining.get('critical_process_count'),0),', '.join(mining.get('critical_minerals') or []) or 'nenhum classificado','ATENÇÃO' if mining.get('critical_process_count') else 'CONSULTADA'),('Terras raras',_s(mining.get('rare_earth_signal'),'NÃO IDENTIFICADO'),f"processos: {_s(mining.get('rare_earth_count'),0)}",'ATENÇÃO' if _s(mining.get('rare_earth_signal')).upper()=='SIM' else 'CONSULTADA'),('SGB',_s(mining.get('rare_earth_source'),'ANM + SGB'),'camadas públicas','CONSULTADA')]))
+    mpend=bool(mining.get('pending'))
+    story.append(_kpis([('Processos ANM',_s(mining.get('process_count'),0),('consulta pendente' if mpend else f"{_s(mining.get('overlap_area_ha'),0)} ha"),'CONSULTA PENDENTE' if mpend else ('ATENÇÃO' if mining.get('process_count') else 'CONSULTADA')),('Minerais críticos',_s(mining.get('critical_process_count'),0),('consulta pendente' if mpend else (', '.join(mining.get('critical_minerals') or []) or 'nenhum classificado')),'CONSULTA PENDENTE' if mpend else ('ATENÇÃO' if mining.get('critical_process_count') else 'CONSULTADA')),('Terras raras',_s(mining.get('rare_earth_signal'),'NÃO IDENTIFICADO'),('consulta pendente' if mpend else f"processos: {_s(mining.get('rare_earth_count'),0)}"),'ATENÇÃO' if _s(mining.get('rare_earth_signal')).upper()=='SIM' else ('CONSULTA PENDENTE' if mpend else 'CONSULTADA')),('SGB',_s(mining.get('rare_earth_source'),'ANM + SGB'),'camadas públicas','CONSULTADA')]))
     story += [Spacer(1,5*mm),P(mining.get('summary') or '')]
     if mining.get('critical_rows'): story += [Spacer(1,4*mm),_info(mining.get('critical_rows'),[80*mm,85*mm],['Indicador','Resultado'])]
     if mining.get('processes'): story += [Spacer(1,4*mm),Paragraph('Processos identificados',S['h2']),_info(mining.get('processes'),[27*mm,42*mm,35*mm,38*mm,23*mm],['Processo','Titular','Substância','Fase','% imóvel'])]
@@ -139,8 +142,12 @@ def build_premium_property_report_v6(path:str|Path,payload:dict[str,Any])->str:
     property_rows=_agro_property_rows(agro)
     story += [Spacer(1,5*mm),Paragraph('O que sabemos sobre o imóvel',S['h2']),_info(property_rows,[45*mm,76*mm,44*mm],['Fator','Resultado','Escopo / status'])]
     pasture=agro.get('pasture') or {}
-    pasture_state=_s(pasture.get('state'),'não executado')
-    story += [Spacer(1,5*mm),_callout('PASTAGEM / VIGOR',f"{pasture_state}. {_s(pasture.get('note'),'Métricas só são exibidas após processamento real do polígono.')}",'info' if 'ready' not in pasture_state.lower() else 'good')]
+    # T2: 'ready'/'unavailable'/'não executado' é palavra de dentro do código, e "polígono" é jargão —
+    # os dois estavam impressos no relatório. Sem resposta, a nota da fonte também não entra: ela pode
+    # carregar o detalhe técnico do erro.
+    pasture_ready='ready' in str(pasture.get('state') or '').lower()
+    pasture_text=_s(pasture.get('note'),'') if pasture_ready else 'Consulta pendente: a pastagem deste imóvel é medida quando essa base responder. Pendente não quer dizer que não há pastagem.'
+    story += [Spacer(1,5*mm),_callout('PASTAGEM / VIGOR',pasture_text,'good' if pasture_ready else 'info')]
     capacity=(agro.get('property_screening') or {}).get('carrying_capacity_note')
     story += [Spacer(1,4*mm),_callout('LOTAÇÃO / CAPACIDADE DE SUPORTE',capacity or 'Não calculada sem dados de forragem, manejo e validação zootécnica.','attention'),PageBreak()]
 

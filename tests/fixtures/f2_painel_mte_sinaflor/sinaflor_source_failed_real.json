@@ -1,0 +1,12 @@
+{
+  "ok": false,
+  "answered": false,
+  "state": "source_failed",
+  "source": "IBAMA — SINAFLOR / PAMGIA",
+  "source_page": "https://www.gov.br/ibama/pt-br/assuntos/biodiversidade/flora-e-madeira/sistema-nacional-de-controle-da-origem-dos-produtos-florestais-sinaflor",
+  "queried_at": "2026-09-14T11:28:26+00:00",
+  "data_date": null,
+  "data_date_status": "unavailable",
+  "reason": "A fonte oficial SINAFLOR/PAMGIA não respondeu com metadados utilizáveis. Nenhuma ausência foi presumida.",
+  "detail": "process_timeout_after_45s"
+}

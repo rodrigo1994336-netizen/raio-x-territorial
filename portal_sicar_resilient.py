@@ -13,6 +13,13 @@ from external_process_lifecycle import ManagedOperationTimeout, RequestDisconnec
 app = portal_v8.app
 install_shutdown_cleanup(app)
 
+# Attributes kept on each drawn feature. F1B 1B.7: the creation and update dates come in the SAME SICAR
+# answer as the outline, so the card paints them on click instead of waiting for /map-panel.
+VIEWPORT_PROPERTY_KEYS = (
+    'cod_imovel', 'area', 'municipio', 'uf', 'status_imovel', 'condicao', 'tipo_imovel', 'm_fiscal',
+    'dat_criacao', 'data_atualizacao',
+)
+
 
 def _type_name(uf: str) -> str:
     code=(uf or '').strip().upper()
@@ -83,9 +90,7 @@ async def live_sicar_viewport_resilient(
             out.append({
                 'type':'Feature',
                 'geometry':mapping(g),
-                'properties':{k:props.get(k) for k in (
-                    'cod_imovel','area','municipio','uf','status_imovel','condicao','tipo_imovel','m_fiscal'
-                )},
+                'properties':{k:props.get(k) for k in VIEWPORT_PROPERTY_KEYS},
             })
         except Exception:
             continue

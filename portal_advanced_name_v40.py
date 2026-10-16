@@ -10,6 +10,7 @@ import portal_advanced_search_v39 as adv
 from property_search import _sigef_search_sync
 from car_resilient import CAR_RE
 from portal_mobile_v19 import resolve_v19
+from external_process_lifecycle import wait_for_cancelling_processes
 
 app=portal_v8.app
 
@@ -27,7 +28,8 @@ async def _enrich_sigef(rows:list[dict[str,Any]],limit:int=12)->list[dict[str,An
         if lat is None or lon is None:return y
         async with sem:
             try:
-                d=await asyncio.wait_for(resolve_v19(float(lat),float(lon)),timeout=10)
+                # M1: o prazo que estoura também derruba o curl gerenciado que a consulta do ponto ainda segura
+                d=await wait_for_cancelling_processes(resolve_v19(float(lat),float(lon)),10)
                 p=d.get('property') or {}
                 if p.get('car_code'):
                     # Centroid coincidence is context only. It is not a denomination link.

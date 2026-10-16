@@ -21,7 +21,7 @@ INTEGRATIONS: dict[str,dict[str,Any]] = {
         'credentials':['SERPRO_CONSUMER_KEY','SERPRO_CONSUMER_SECRET'],'cost_mode':'usage',
         'purpose':'Consulta/emissão de certidões fiscais quando contratada.'},
     'sncr_ccir': {
-        'label':'SNCR / CCIR autorizado','enabled_flag':'RX_SNCR_ENABLED',
+        'label':'Cadastro do imóvel no INCRA (CCIR)','enabled_flag':'RX_SNCR_ENABLED',
         'credentials':['SNCR_CLIENT_ID','SNCR_CLIENT_SECRET'],'cost_mode':'authorized',
         'purpose':'Consulta cadastral/CCIR mediante habilitação oficial.'},
     'onr_matricula': {

@@ -1,6 +1,11 @@
 from __future__ import annotations
 
 import portal_v8
+# O laço de viewport remendado aqui (loadVisibleParcels com rxTimer/rxLoading) é escrito por
+# portal_nationwide_v21. Sem declarar essa dependência, o remendo só casa quando outro módulo importou
+# o V21 primeiro: em qualquer ordem diferente o arranque cai com
+# v43_viewport_loader_guard_injection_point_missing. Importar é idempotente.
+import portal_nationwide_v21  # noqa: F401 - dono da âncora loadVisibleParcels (V21)
 
 # Production identity must describe the experience actually served, not the
 # historical portal_v8 base module that V43 composes underneath.

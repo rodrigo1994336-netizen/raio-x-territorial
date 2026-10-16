@@ -1,0 +1,187 @@
+{
+ "recorded_at": "2026-09-14T00:02:09+00:00",
+ "cars": {
+  "curvelo_teste": {
+   "car": "MG-3120904-DFB380BECD7A4323AD8AA68FA14D011F",
+   "bbox": [
+    -44.185073,
+    -18.894249,
+    -44.178653,
+    -18.888268
+   ],
+   "layers": {
+    "imoveiscertificados_privado_mg": {
+     "url": "https://acervofundiario.incra.gov.br/i3geo/ogc.php?tema=imoveiscertificados_privado_mg&service=WFS&version=1.0.0&request=GetFeature&typeName=imoveiscertificados_privado_mg&outputFormat=GML2&srsName=EPSG%3A4326&maxFeatures=500&bbox=-44.185073%2C-18.894249%2C-44.178653%2C-18.888268",
+     "features_in_box": 0
+    },
+    "imoveiscertificados_publico_mg": {
+     "url": "https://acervofundiario.incra.gov.br/i3geo/ogc.php?tema=imoveiscertificados_publico_mg&service=WFS&version=1.0.0&request=GetFeature&typeName=imoveiscertificados_publico_mg&outputFormat=GML2&srsName=EPSG%3A4326&maxFeatures=500&bbox=-44.185073%2C-18.894249%2C-44.178653%2C-18.888268",
+     "features_in_box": 0
+    },
+    "certificada_sigef_particular_mg": {
+     "url": "https://acervofundiario.incra.gov.br/i3geo/ogc.php?tema=certificada_sigef_particular_mg&service=WFS&version=1.0.0&request=GetFeature&typeName=certificada_sigef_particular_mg&outputFormat=GML2&srsName=EPSG%3A4326&maxFeatures=500&bbox=-44.185073%2C-18.894249%2C-44.178653%2C-18.888268",
+     "features_in_box": 0
+    },
+    "certificada_sigef_publico_mg": {
+     "url": "https://acervofundiario.incra.gov.br/i3geo/ogc.php?tema=certificada_sigef_publico_mg&service=WFS&version=1.0.0&request=GetFeature&typeName=certificada_sigef_publico_mg&outputFormat=GML2&srsName=EPSG%3A4326&maxFeatures=500&bbox=-44.185073%2C-18.894249%2C-44.178653%2C-18.888268",
+     "features_in_box": 0
+    }
+   },
+   "pamgia_publico_10_feature_count": 0,
+   "live_states": {
+    "sigef": "not_found",
+    "snci": "not_found"
+   },
+   "live_best": {
+    "sigef": [],
+    "snci": []
+   }
+  },
+  "vizinho_snci": {
+   "car": "MG-3120904-528DEBA144FF4CEE994BA14D1ABD0E71",
+   "bbox": [
+    -44.263349,
+    -18.858353,
+    -44.248712,
+    -18.840103
+   ],
+   "layers": {
+    "imoveiscertificados_privado_mg": {
+     "url": "https://acervofundiario.incra.gov.br/i3geo/ogc.php?tema=imoveiscertificados_privado_mg&service=WFS&version=1.0.0&request=GetFeature&typeName=imoveiscertificados_privado_mg&outputFormat=GML2&srsName=EPSG%3A4326&maxFeatures=500&bbox=-44.263349%2C-18.858353%2C-44.248712%2C-18.840103",
+     "features_in_box": 1
+    },
+    "imoveiscertificados_publico_mg": {
+     "url": "https://acervofundiario.incra.gov.br/i3geo/ogc.php?tema=imoveiscertificados_publico_mg&service=WFS&version=1.0.0&request=GetFeature&typeName=imoveiscertificados_publico_mg&outputFormat=GML2&srsName=EPSG%3A4326&maxFeatures=500&bbox=-44.263349%2C-18.858353%2C-44.248712%2C-18.840103",
+     "features_in_box": 0
+    },
+    "certificada_sigef_particular_mg": {
+     "url": "https://acervofundiario.incra.gov.br/i3geo/ogc.php?tema=certificada_sigef_particular_mg&service=WFS&version=1.0.0&request=GetFeature&typeName=certificada_sigef_particular_mg&outputFormat=GML2&srsName=EPSG%3A4326&maxFeatures=500&bbox=-44.263349%2C-18.858353%2C-44.248712%2C-18.840103",
+     "features_in_box": 8
+    },
+    "certificada_sigef_publico_mg": {
+     "url": "https://acervofundiario.incra.gov.br/i3geo/ogc.php?tema=certificada_sigef_publico_mg&service=WFS&version=1.0.0&request=GetFeature&typeName=certificada_sigef_publico_mg&outputFormat=GML2&srsName=EPSG%3A4326&maxFeatures=500&bbox=-44.263349%2C-18.858353%2C-44.248712%2C-18.840103",
+     "features_in_box": 0
+    }
+   },
+   "pamgia_publico_10_feature_count": 0,
+   "live_states": {
+    "sigef": "not_found",
+    "snci": "found"
+   },
+   "live_best": {
+    "sigef": [],
+    "snci": [
+     [
+      "privado",
+      0.999972
+     ]
+    ]
+   }
+  },
+  "vizinho_sigef2025": {
+   "car": "MG-3120904-82A2876828AB43EE91CA8D1E33EE785F",
+   "bbox": [
+    -44.20776,
+    -18.879628,
+    -44.197962,
+    -18.872974
+   ],
+   "layers": {
+    "imoveiscertificados_privado_mg": {
+     "url": "https://acervofundiario.incra.gov.br/i3geo/ogc.php?tema=imoveiscertificados_privado_mg&service=WFS&version=1.0.0&request=GetFeature&typeName=imoveiscertificados_privado_mg&outputFormat=GML2&srsName=EPSG%3A4326&maxFeatures=500&bbox=-44.207760%2C-18.879628%2C-44.197962%2C-18.872974",
+     "features_in_box": 0
+    },
+    "imoveiscertificados_publico_mg": {
+     "url": "https://acervofundiario.incra.gov.br/i3geo/ogc.php?tema=imoveiscertificados_publico_mg&service=WFS&version=1.0.0&request=GetFeature&typeName=imoveiscertificados_publico_mg&outputFormat=GML2&srsName=EPSG%3A4326&maxFeatures=500&bbox=-44.207760%2C-18.879628%2C-44.197962%2C-18.872974",
+     "features_in_box": 0
+    },
+    "certificada_sigef_particular_mg": {
+     "url": "https://acervofundiario.incra.gov.br/i3geo/ogc.php?tema=certificada_sigef_particular_mg&service=WFS&version=1.0.0&request=GetFeature&typeName=certificada_sigef_particular_mg&outputFormat=GML2&srsName=EPSG%3A4326&maxFeatures=500&bbox=-44.207760%2C-18.879628%2C-44.197962%2C-18.872974",
+     "features_in_box": 2
+    },
+    "certificada_sigef_publico_mg": {
+     "url": "https://acervofundiario.incra.gov.br/i3geo/ogc.php?tema=certificada_sigef_publico_mg&service=WFS&version=1.0.0&request=GetFeature&typeName=certificada_sigef_publico_mg&outputFormat=GML2&srsName=EPSG%3A4326&maxFeatures=500&bbox=-44.207760%2C-18.879628%2C-44.197962%2C-18.872974",
+     "features_in_box": 0
+    }
+   },
+   "pamgia_publico_10_feature_count": 0,
+   "live_states": {
+    "sigef": "found",
+    "snci": "not_found"
+   },
+   "live_best": {
+    "sigef": [
+     [
+      "particular",
+      0.998478
+     ]
+    ],
+    "snci": []
+   }
+  },
+  "vizinho_sigef2021": {
+   "car": "MG-3120904-DB822B19289143419DA829F1633B75EF",
+   "bbox": [
+    -44.196128,
+    -18.87454,
+    -44.176103,
+    -18.854631
+   ],
+   "layers": {
+    "imoveiscertificados_privado_mg": {
+     "url": "https://acervofundiario.incra.gov.br/i3geo/ogc.php?tema=imoveiscertificados_privado_mg&service=WFS&version=1.0.0&request=GetFeature&typeName=imoveiscertificados_privado_mg&outputFormat=GML2&srsName=EPSG%3A4326&maxFeatures=500&bbox=-44.196128%2C-18.874540%2C-44.176103%2C-18.854631",
+     "features_in_box": 0
+    },
+    "imoveiscertificados_publico_mg": {
+     "url": "https://acervofundiario.incra.gov.br/i3geo/ogc.php?tema=imoveiscertificados_publico_mg&service=WFS&version=1.0.0&request=GetFeature&typeName=imoveiscertificados_publico_mg&outputFormat=GML2&srsName=EPSG%3A4326&maxFeatures=500&bbox=-44.196128%2C-18.874540%2C-44.176103%2C-18.854631",
+     "features_in_box": 0
+    },
+    "certificada_sigef_particular_mg": {
+     "url": "https://acervofundiario.incra.gov.br/i3geo/ogc.php?tema=certificada_sigef_particular_mg&service=WFS&version=1.0.0&request=GetFeature&typeName=certificada_sigef_particular_mg&outputFormat=GML2&srsName=EPSG%3A4326&maxFeatures=500&bbox=-44.196128%2C-18.874540%2C-44.176103%2C-18.854631",
+     "features_in_box": 5
+    },
+    "certificada_sigef_publico_mg": {
+     "url": "https://acervofundiario.incra.gov.br/i3geo/ogc.php?tema=certificada_sigef_publico_mg&service=WFS&version=1.0.0&request=GetFeature&typeName=certificada_sigef_publico_mg&outputFormat=GML2&srsName=EPSG%3A4326&maxFeatures=500&bbox=-44.196128%2C-18.874540%2C-44.176103%2C-18.854631",
+     "features_in_box": 0
+    }
+   },
+   "pamgia_publico_10_feature_count": 0,
+   "live_states": {
+    "sigef": "found",
+    "snci": "not_found"
+   },
+   "live_best": {
+    "sigef": [
+     [
+      "particular",
+      0.999125
+     ]
+    ],
+    "snci": []
+   }
+  }
+ },
+ "controls": {
+  "rj_certificada_sigef_publico": {
+   "url": "https://acervofundiario.incra.gov.br/i3geo/ogc.php?tema=certificada_sigef_publico_rj&service=WFS&version=1.0.0&request=GetFeature&typeName=certificada_sigef_publico_rj&outputFormat=GML2&srsName=EPSG%3A4326&maxFeatures=500&bbox=-43.300000%2C-22.950000%2C-43.200000%2C-22.850000",
+   "transport_ok": true,
+   "bytes": 0,
+   "parsed_answered": false,
+   "detail": "empty_body"
+  },
+  "unknown_theme": {
+   "url": "https://acervofundiario.incra.gov.br/i3geo/ogc.php?tema=imoveiscertificados_privado_xx&service=WFS&version=1.0.0&request=GetFeature&typeName=imoveiscertificados_privado_xx&outputFormat=GML2&srsName=EPSG%3A4326&maxFeatures=500&bbox=-43.300000%2C-22.950000%2C-43.200000%2C-22.850000",
+   "transport_ok": true,
+   "bytes": 0,
+   "parsed_answered": false,
+   "detail": "empty_body"
+  },
+  "json_output": {
+   "url": "https://acervofundiario.incra.gov.br/i3geo/ogc.php?tema=imoveiscertificados_privado_mg&service=WFS&version=1.0.0&request=GetFeature&typeName=imoveiscertificados_privado_mg&outputFormat=application%2Fjson&srsName=EPSG%3A4326&maxFeatures=500&bbox=-44.263349%2C-18.858353%2C-44.248712%2C-18.840103",
+   "transport_ok": true,
+   "bytes": 585,
+   "parsed_answered": false,
+   "detail": "service_exception:itted output format for layer &#39;imoveiscertificados_privado_mg&#39;, review wfs_getfeature_formatlist setting. </ServiceException> </ServiceExceptionReport> "
+  }
+ }
+}

@@ -2,13 +2,22 @@ from __future__ import annotations
 
 import asyncio
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 import portal_v8
 import portal_search_resilient_v43 as resilient
 import cafir_name_search_v44 as cafir
+from external_process_lifecycle import RequestDisconnected, wait_for_cancelling_processes
 
 app=portal_v8.app
+# Teto declarado pelo modulo que implementa a consulta (cafir_name_search_v44), mais a folga abaixo.
+# Folga ARBITRADA (não medida) para a leitura das geometrias dos dois espelhos SIGEF, que corre na mesma
+# thread depois que o curl volta. Medido em 16/09 nesta máquina, com código INCRA de verdade tirado da
+# própria busca por nome (A/B no mesmo processo e no mesmo minuto, 6 sem escopo e 6 com escopo, todas
+# ok:true): mediana 1540 ms sem escopo contra 1641 ms com escopo, pior caso 2,1 s — contra os 106,6 s do
+# teto. O teto não corta resposta que hoje chega.
+_GEOMETRY_S=15.0
+_LOCATE_S=round(cafir.LOCATE_WORST_CASE_S+_GEOMETRY_S,1)
 
 
 @app.get('/v1/live/search/cafir-name')
@@ -17,8 +26,13 @@ async def cafir_name_search(q:str,uf:str='MG',municipality:str|None=None,limit:i
 
 
 @app.get('/v1/live/search/cafir-name/locate')
-async def cafir_name_locate(incra_code:str):
-    out=await asyncio.to_thread(cafir.locate_incra_sync,incra_code)
+async def cafir_name_locate(incra_code:str,request:Request):
+    # Dentro do escopo: prazo e desistencia do cliente derrubam os curls dos dois espelhos SIGEF.
+    try:
+        out=await wait_for_cancelling_processes(
+            asyncio.to_thread(cafir.locate_incra_sync,incra_code),_LOCATE_S,request=request)
+    except asyncio.TimeoutError:raise HTTPException(status_code=504,detail='cafir_locate_timeout')
+    except RequestDisconnected:raise HTTPException(status_code=499,detail='client_disconnected')
     if not out.get('ok') and str(out.get('detail') or '').startswith('invalid'):
         raise HTTPException(status_code=422,detail=out)
     return out
@@ -55,7 +69,7 @@ app.get('/v1/live/search/advanced')(advanced_search_v44)
 
 V39_MAP="function mapOpen(x){close();try{if(typeof map!=='undefined'&&x.geometry){const l=L.geoJSON({type:'Feature',geometry:x.geometry,properties:{}},{style:{color:'#62e4a3',weight:3,fillColor:'#62e4a3',fillOpacity:.10}}).addTo(map);const b=l.getBounds();if(b.isValid())map.fitBounds(b.pad(.16),{maxZoom:15});setTimeout(()=>{try{map.removeLayer(l)}catch(e){}},3500)}else if(typeof map!=='undefined'&&x.center)map.setView([x.center.lat,x.center.lon],14);if(typeof showProperty==='function')showProperty({car_code:x.car_code,name:x.name,municipality:x.municipality,uf:x.uf,area_ha:x.area_ha,status:x.status,condition:x.condition,type:x.property_type,fiscal_modules:x.fiscal_modules},x.geometry)}catch(e){if(typeof toast==='function')toast('Não foi possível abrir este imóvel agora.')}}"
 V40_SAFE_MAP="async function mapOpen(x){close();try{if(typeof map!=='undefined'&&x.geometry){const l=L.geoJSON({type:'Feature',geometry:x.geometry,properties:{}},{style:{color:'#62e4a3',weight:3,fillColor:'#62e4a3',fillOpacity:.10}}).addTo(map);const b=l.getBounds();if(b.isValid())map.fitBounds(b.pad(.16),{maxZoom:15});setTimeout(()=>{try{map.removeLayer(l)}catch(e){}},3500)}else if(typeof map!=='undefined'&&x.center)map.setView([x.center.lat,x.center.lon],14);if(x.car_code&&x.name_validation_status==='VALIDATED'&&x.panel_name_eligible===true&&typeof showProperty==='function'){showProperty({car_code:x.car_code,name:x.name,municipality:x.municipality,uf:x.uf,area_ha:x.area_ha,status:x.status,condition:x.condition,type:x.property_type,fiscal_modules:x.fiscal_modules},x.geometry);return}if(typeof toast==='function')toast('Referência SIGEF localizada. Nenhuma denominação foi aplicada a um CAR sem vínculo validado.')}catch(e){if(typeof toast==='function')toast('Não foi possível abrir esta referência agora.')}}"
-NEW_MAP=r'''async function mapOpen(x){close();try{if(x?.type==='cafir'){if(!x.incra_code){if(typeof toast==='function')toast(`${x.name}: registro CAFIR localizado, mas sem código INCRA utilizável para posicionamento.`);return}const r=await fetch(`/v1/live/search/cafir-name/locate?incra_code=${encodeURIComponent(x.incra_code)}`,{cache:'no-store'}),d=await r.json();if(!r.ok||!d.ok||!(d.items||[]).length){if(typeof toast==='function')toast(`${x.name}: registro CAFIR localizado; parcela SIGEF não localizada agora. Nenhum CAR foi presumido.`);return}const feats=(d.items||[]).filter(y=>y.geometry).map(y=>({type:'Feature',geometry:y.geometry,properties:{}}));if(typeof map!=='undefined'&&feats.length){const l=L.geoJSON({type:'FeatureCollection',features:feats},{style:{color:'#ffc866',weight:3,dashArray:'7 5',fillColor:'#ffc866',fillOpacity:.07}}).addTo(map);const b=l.getBounds();if(b.isValid())map.fitBounds(b.pad(.16),{maxZoom:15});setTimeout(()=>{try{map.removeLayer(l)}catch(e){}},6500)}if(typeof toast==='function')toast(`${x.name}: CAFIR localizado · ${feats.length} parcela(s) SIGEF exibida(s) · CAR não vinculado automaticamente.`);return}if(typeof map!=='undefined'&&x.geometry){const l=L.geoJSON({type:'Feature',geometry:x.geometry,properties:{}},{style:{color:'#62e4a3',weight:3,fillColor:'#62e4a3',fillOpacity:.10}}).addTo(map);const b=l.getBounds();if(b.isValid())map.fitBounds(b.pad(.16),{maxZoom:15});setTimeout(()=>{try{map.removeLayer(l)}catch(e){}},3500)}else if(typeof map!=='undefined'&&x.center)map.setView([x.center.lat,x.center.lon],14);if(x.car_code&&typeof showProperty==='function'){const validated=x.name_validation_status==='VALIDATED'&&x.panel_name_eligible===true;showProperty({car_code:x.car_code,name:validated?x.name:undefined,municipality:x.municipality,uf:x.uf,area_ha:x.area_ha,status:x.status,condition:x.condition,type:x.property_type,fiscal_modules:x.fiscal_modules},x.geometry)}}catch(e){if(typeof toast==='function')toast('Não foi possível abrir este resultado agora.')}}'''
+NEW_MAP=r'''async function mapOpen(x){close();try{if(x?.type==='cafir'){if(!x.incra_code){if(typeof toast==='function')toast(`${x.name}: registro CAFIR localizado, mas sem código INCRA utilizável para posicionamento.`);return}const r=await fetch(`/v1/live/search/cafir-name/locate?incra_code=${encodeURIComponent(x.incra_code)}`,{cache:'no-store'}),d=await r.json();if(!r.ok||!d.ok||!(d.items||[]).length){if(typeof toast==='function')toast(`${x.name}: registro CAFIR localizado; posição no mapa: consulta pendente. Nenhum CAR foi presumido.`);return}const feats=(d.items||[]).filter(y=>y.geometry).map(y=>({type:'Feature',geometry:y.geometry,properties:{}}));if(typeof map!=='undefined'&&feats.length){const l=L.geoJSON({type:'FeatureCollection',features:feats},{style:{color:'#ffc866',weight:3,dashArray:'7 5',fillColor:'#ffc866',fillOpacity:.07}}).addTo(map);const b=l.getBounds();if(b.isValid())map.fitBounds(b.pad(.16),{maxZoom:15});setTimeout(()=>{try{map.removeLayer(l)}catch(e){}},6500)}if(typeof toast==='function')toast(`${x.name}: CAFIR localizado · ${feats.length} parcela(s) SIGEF exibida(s) · CAR não vinculado automaticamente.`);return}if(typeof map!=='undefined'&&x.geometry){const l=L.geoJSON({type:'Feature',geometry:x.geometry,properties:{}},{style:{color:'#62e4a3',weight:3,fillColor:'#62e4a3',fillOpacity:.10}}).addTo(map);const b=l.getBounds();if(b.isValid())map.fitBounds(b.pad(.16),{maxZoom:15});setTimeout(()=>{try{map.removeLayer(l)}catch(e){}},3500)}else if(typeof map!=='undefined'&&x.center)map.setView([x.center.lat,x.center.lon],14);if(x.car_code&&typeof showProperty==='function'){const validated=x.name_validation_status==='VALIDATED'&&x.panel_name_eligible===true;showProperty({car_code:x.car_code,name:validated?x.name:undefined,municipality:x.municipality,uf:x.uf,area_ha:x.area_ha,status:x.status,condition:x.condition,type:x.property_type,fiscal_modules:x.fiscal_modules},x.geometry)}}catch(e){if(typeof toast==='function')toast('Não foi possível abrir este resultado agora.')}}'''
 map_replaced=False
 for old_map in (V40_SAFE_MAP,V39_MAP):
     if old_map in portal_v8.PORTAL_HTML:
@@ -78,8 +92,8 @@ if OLD_FLOW not in portal_v8.PORTAL_HTML:
 portal_v8.PORTAL_HTML=portal_v8.PORTAL_HTML.replace(OLD_FLOW,NEW_FLOW,1)
 
 portal_v8.PORTAL_HTML=portal_v8.PORTAL_HTML.replace(
-    'Fontes: SICAR/WFS para imóveis e MapBiomas Coleção 11 para perfil de uso/cobertura.',
-    'Fontes: CAFIR/Receita Federal para busca por denominação; SICAR/WFS para CAR; MapBiomas Coleção 11 para perfil de uso/cobertura.'
+    'Fontes: SICAR para os imóveis e MapBiomas Coleção 11 para o perfil de uso do solo.',
+    'Fontes: CAFIR/Receita Federal para a busca por nome; SICAR para o CAR; MapBiomas Coleção 11 para o perfil de uso do solo.'
 )
 
 if 'RX_CAFIR_INVERSE_V44' not in portal_v8.PORTAL_HTML:

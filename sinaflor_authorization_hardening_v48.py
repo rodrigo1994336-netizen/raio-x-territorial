@@ -230,21 +230,21 @@ def query_sinaflor_authorization(car_code: str) -> dict[str, Any]:
     try:
         from car_resilient import CAR_RE, fetch_car_live_resilient
     except Exception as exc:
-        return {"ok": False, "answered": False, "state": "source_failed", "source": sf.SOURCE_NAME, "source_page": sf.SOURCE_PAGE, "queried_at": queried_at, "data_date": None, "data_date_status": "unavailable", "reason": f"Dependência do CAR indisponível: {type(exc).__name__}.", "detail": "car_resolver_dependency_unavailable"}
+        return {"ok": False, "answered": False, "state": "source_failed", "source": sf.SOURCE_NAME, "source_page": sf.SOURCE_PAGE, "queried_at": queried_at, "data_date": None, "data_date_status": "unavailable", "reason": "O desenho do imóvel não pôde ser carregado agora.", "detail": "car_resolver_dependency_unavailable"}
     if not CAR_RE.match(code):
-        return {"ok": False, "answered": False, "state": "source_failed", "source": sf.SOURCE_NAME, "source_page": sf.SOURCE_PAGE, "queried_at": queried_at, "data_date": None, "data_date_status": "unavailable", "reason": "Código CAR inválido; a checagem espacial não foi executada.", "detail": "invalid_car_format"}
+        return {"ok": False, "answered": False, "state": "source_failed", "source": sf.SOURCE_NAME, "source_page": sf.SOURCE_PAGE, "queried_at": queried_at, "data_date": None, "data_date_status": "unavailable", "reason": "O código do CAR não está num formato válido; a conferência não foi feita.", "detail": "invalid_car_format"}
 
     meta = metadata()
     if not meta.get("ok"):
-        return {"ok": False, "answered": False, "state": "source_failed", "source": sf.SOURCE_NAME, "source_page": sf.SOURCE_PAGE, "queried_at": queried_at, "data_date": meta.get("data_date"), "data_date_status": meta.get("data_date_status", "unavailable"), "reason": "A fonte oficial SINAFLOR/PAMGIA não respondeu com metadados utilizáveis. Nenhuma ausência foi presumida.", "detail": meta.get("detail")}
+        return {"ok": False, "answered": False, "state": "source_failed", "source": sf.SOURCE_NAME, "source_page": sf.SOURCE_PAGE, "queried_at": queried_at, "data_date": meta.get("data_date"), "data_date_status": meta.get("data_date_status", "unavailable"), "reason": "A base pública do IBAMA não respondeu agora.", "detail": meta.get("detail")}
 
     car = fetch_car_live_resilient(code)
     if not car.get("ok") or not car.get("geometry") or not car.get("bbox"):
-        return {"ok": False, "answered": False, "state": "source_failed", "source": sf.SOURCE_NAME, "source_page": sf.SOURCE_PAGE, "queried_at": queried_at, "data_date": meta.get("data_date"), "data_date_status": meta.get("data_date_status"), "reason": "O perímetro do CAR não pôde ser obtido; a checagem espacial SINAFLOR não foi concluída.", "detail": car.get("detail") or "car_geometry_unavailable"}
+        return {"ok": False, "answered": False, "state": "source_failed", "source": sf.SOURCE_NAME, "source_page": sf.SOURCE_PAGE, "queried_at": queried_at, "data_date": meta.get("data_date"), "data_date_status": meta.get("data_date_status"), "reason": "O desenho do imóvel não pôde ser obtido; a conferência não foi concluída.", "detail": car.get("detail") or "car_geometry_unavailable"}
 
     candidates = sf._query_candidates(car["bbox"])
     if not candidates.get("ok"):
-        return {"ok": False, "answered": False, "state": "source_failed", "source": sf.SOURCE_NAME, "source_page": sf.SOURCE_PAGE, "queried_at": queried_at, "data_date": meta.get("data_date"), "data_date_status": meta.get("data_date_status"), "reason": "A consulta espacial à camada oficial SINAFLOR/PAMGIA falhou. Nenhuma ausência foi presumida.", "detail": candidates.get("detail"), "candidate_count": candidates.get("candidate_count")}
+        return {"ok": False, "answered": False, "state": "source_failed", "source": sf.SOURCE_NAME, "source_page": sf.SOURCE_PAGE, "queried_at": queried_at, "data_date": meta.get("data_date"), "data_date_status": meta.get("data_date_status"), "reason": "A base pública do IBAMA não respondeu agora.", "detail": candidates.get("detail"), "candidate_count": candidates.get("candidate_count")}
 
     props = car.get("properties") or {}
     exact = evaluate_features(
@@ -255,7 +255,7 @@ def query_sinaflor_authorization(car_code: str) -> dict[str, Any]:
         car_uf=props.get("uf") or code[:2],
     )
     if not exact.get("ok"):
-        return {"ok": False, "answered": False, "state": "source_failed", "source": sf.SOURCE_NAME, "source_page": sf.SOURCE_PAGE, "queried_at": queried_at, "data_date": meta.get("data_date"), "data_date_status": meta.get("data_date_status"), "reason": "A geometria não pôde ser confrontada com segurança. Nenhuma ausência foi presumida.", "detail": exact.get("detail")}
+        return {"ok": False, "answered": False, "state": "source_failed", "source": sf.SOURCE_NAME, "source_page": sf.SOURCE_PAGE, "queried_at": queried_at, "data_date": meta.get("data_date"), "data_date_status": meta.get("data_date_status"), "reason": "O desenho do imóvel não pôde ser conferido com segurança agora.", "detail": exact.get("detail")}
 
     matches = exact.get("matches") or []
     record_dates = [m.get("data_updated_at") for m in matches if m.get("data_updated_at")]
@@ -280,17 +280,19 @@ def query_sinaflor_authorization(car_code: str) -> dict[str, Any]:
         "car_area_ha": exact.get("car_area_ha"),
         "method": "ArcGIS envelope candidates + exact positive-area intersection in EPSG:4674/GRS80 + broad-scope binding guard",
     }
+    # T2: este texto é impresso no cartão do cliente palavra por palavra. ASV, UAS, SINAFLOR, "polígono" e
+    # "intersectam espacialmente" são vocabulário de dentro do código; aqui fica o português de quem compra terra.
     if not matches:
-        return {**base, "state": "checked_clear", "reason": "Nenhum polígono público de ASV/UAS do SINAFLOR foi localizado intersectando o imóvel. Isso não prova ausência de autorização emitida fora do SINAFLOR ou em sistema estadual competente."}
+        return {**base, "state": "checked_clear", "reason": "Nenhuma autorização de corte de vegetação com desenho sobre este imóvel foi localizada na base pública do IBAMA. Autorização dada por órgão do Estado pode não aparecer aqui."}
 
     confirmed = [m for m in matches if m.get("property_binding_confirmed") is True]
     if not confirmed:
-        return {**base, "state": "checked_spatial_record_unconfirmed", "reason": f"{len(matches)} registro(s) SINAFLOR intersectam espacialmente o CAR, mas o vínculo com este imóvel não pôde ser confirmado. A geometria publicada é de escopo territorial amplo e não traz o CAR coincidente; não foi declarado que o imóvel está autorizado."}
+        return {**base, "state": "checked_spatial_record_unconfirmed", "reason": f"{len(matches)} autorização(ões) de corte de vegetação têm desenho sobre esta região, mas o desenho é largo e não identifica este imóvel. A ligação com o imóvel não foi confirmada — e também não foi descartada."}
 
     current = [m for m in confirmed if m.get("currently_confirmed") is True]
     if current:
-        return {**base, "state": "checked_authorization_overlap", "reason": f"{len(confirmed)} autorização(ões) ASV/UAS com vínculo espacial/local confirmado foram localizadas; {len(current)} têm vigência/status compatíveis com a data da consulta. Isso ainda não substitui a comparação temporal com o evento de desmatamento."}
-    return {**base, "state": "checked_authorization_overlap_unconfirmed", "reason": f"{len(confirmed)} autorização(ões) ASV/UAS com vínculo espacial/local foram localizadas, mas a vigência/status atual não pôde ser confirmada. Não foi concluído que eventual desmatamento estava autorizado."}
+        return {**base, "state": "checked_authorization_overlap", "reason": f"{len(confirmed)} autorização(ões) de corte de vegetação com desenho sobre o imóvel; {len(current)} com prazo compatível com a data da consulta. Se houve corte, a data dele também entra na conta para saber se estava autorizado."}
+    return {**base, "state": "checked_authorization_overlap_unconfirmed", "reason": f"{len(confirmed)} autorização(ões) de corte de vegetação com desenho sobre o imóvel, mas o prazo e a situação atual não foram confirmados. Não está dito que um corte de vegetação estava autorizado."}
 
 
 # Patch the V48 source module deliberately; portal/gates import this hardening before use.

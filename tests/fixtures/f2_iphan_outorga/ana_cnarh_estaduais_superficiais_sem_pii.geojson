@@ -1,0 +1,166 @@
+{
+ "type": "FeatureCollection",
+ "crs": {
+  "type": "name",
+  "properties": {
+   "name": "EPSG:4674"
+  }
+ },
+ "features": [
+  {
+   "type": "Feature",
+   "id": 24779,
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -44.13694443999998,
+     -18.847500000577483
+    ]
+   },
+   "properties": {
+    "objectid": 24779,
+    "int_cd": 579021,
+    "int_qt_vazaomedia": 159.84,
+    "int_qt_vazaomaxima": 159.84,
+    "int_qt_volumeanual": 241837.92,
+    "org_nm": "IGAM",
+    "org_uf": "MG",
+    "out_nu_ato": "1718/2011",
+    "out_nu_processo": "10284/2009",
+    "out_tp_ato": "Portaria",
+    "out_dt_outorgainicial": 1307577600000,
+    "out_dt_outorgafinal": 1465430400000,
+    "outorga_valida": 0,
+    "tfn_ds": "Irrigação",
+    "tin_ds": "Captação",
+    "tch_ds": "Rio ou Curso D'Água",
+    "tdm_ds": "Estadual",
+    "ing_nm_municipio": "PRESIDENTE JUSCELINO"
+   }
+  },
+  {
+   "type": "Feature",
+   "id": 342086,
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -44.17458944399993,
+     -18.877475834578238
+    ]
+   },
+   "properties": {
+    "objectid": 342086,
+    "int_cd": 382488,
+    "int_qt_vazaomedia": null,
+    "int_qt_vazaomaxima": null,
+    "int_qt_volumeanual": null,
+    "org_nm": "IGAM",
+    "org_uf": "MG",
+    "out_nu_ato": "1998/2013",
+    "out_nu_processo": "09304/2013",
+    "out_tp_ato": "Portaria",
+    "out_dt_outorgainicial": 1378252800000,
+    "out_dt_outorgafinal": 2482790400000,
+    "outorga_valida": 1,
+    "tfn_ds": "Obras Hidráulicas",
+    "tin_ds": "Ponto de Referência",
+    "tch_ds": "Rio ou Curso D'Água",
+    "tdm_ds": "Estadual",
+    "ing_nm_municipio": "CURVELO"
+   }
+  },
+  {
+   "type": "Feature",
+   "id": 365473,
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -44.16360311599993,
+     -18.85668374057769
+    ]
+   },
+   "properties": {
+    "objectid": 365473,
+    "int_cd": 382478,
+    "int_qt_vazaomedia": null,
+    "int_qt_vazaomaxima": null,
+    "int_qt_volumeanual": null,
+    "org_nm": "IGAM",
+    "org_uf": "MG",
+    "out_nu_ato": "2000/2013",
+    "out_nu_processo": "09306/2013",
+    "out_tp_ato": "Portaria",
+    "out_dt_outorgainicial": 1378252800000,
+    "out_dt_outorgafinal": 2482790400000,
+    "outorga_valida": 1,
+    "tfn_ds": "Obras Hidráulicas",
+    "tin_ds": "Ponto de Referência",
+    "tch_ds": "Rio ou Curso D'Água",
+    "tdm_ds": "Estadual",
+    "ing_nm_municipio": "CURVELO"
+   }
+  },
+  {
+   "type": "Feature",
+   "id": 374227,
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -44.17184286199995,
+     -18.88787091457852
+    ]
+   },
+   "properties": {
+    "objectid": 374227,
+    "int_cd": 382507,
+    "int_qt_vazaomedia": null,
+    "int_qt_vazaomaxima": null,
+    "int_qt_volumeanual": null,
+    "org_nm": "IGAM",
+    "org_uf": "MG",
+    "out_nu_ato": "1995/2013",
+    "out_nu_processo": "09301/2013",
+    "out_tp_ato": "Portaria",
+    "out_dt_outorgainicial": 1378252800000,
+    "out_dt_outorgafinal": 2482790400000,
+    "outorga_valida": 1,
+    "tfn_ds": "Obras Hidráulicas",
+    "tin_ds": "Ponto de Referência",
+    "tch_ds": "Rio ou Curso D'Água",
+    "tdm_ds": "Estadual",
+    "ing_nm_municipio": "CURVELO"
+   }
+  },
+  {
+   "type": "Feature",
+   "id": 388635,
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -44.16360311599993,
+     -18.88787091457852
+    ]
+   },
+   "properties": {
+    "objectid": 388635,
+    "int_cd": 382483,
+    "int_qt_vazaomedia": null,
+    "int_qt_vazaomaxima": null,
+    "int_qt_volumeanual": null,
+    "org_nm": "IGAM",
+    "org_uf": "MG",
+    "out_nu_ato": "1999/2013",
+    "out_nu_processo": "09305/2013",
+    "out_tp_ato": "Portaria",
+    "out_dt_outorgainicial": 1378252800000,
+    "out_dt_outorgafinal": 2482790400000,
+    "outorga_valida": 1,
+    "tfn_ds": "Obras Hidráulicas",
+    "tin_ds": "Ponto de Referência",
+    "tch_ds": "Rio ou Curso D'Água",
+    "tdm_ds": "Estadual",
+    "ing_nm_municipio": "CURVELO"
+   }
+  }
+ ]
+}

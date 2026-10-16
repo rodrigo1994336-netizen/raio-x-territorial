@@ -27,6 +27,7 @@ async def dom_state(page, stage: str, network: list[dict], errors: list[str]) ->
             readyState:document.readyState,
             viewport:{w:innerWidth,h:innerHeight},
             sessionReady:sessionStorage.getItem('rx-v26-ready-reload'),
+            bootReady:window.rxPortalBootReady===true,
             bootGuard:!!document.querySelector('#rxBootGuard'),
             rxV46Installed:window.rxV46Installed===true,
             hasMteMarker:document.documentElement.innerHTML.includes('RX_CONFORMITY_MTE_V48'),
@@ -87,7 +88,7 @@ async def main() -> None:
             # The portal intentionally reloads once during the boot guard handshake.
             # Do not inspect the DOM until that navigation has settled.
             await page.wait_for_function(
-                "sessionStorage.getItem('rx-v26-ready-reload')==='1' && !document.querySelector('#rxBootGuard')",
+                "(window.rxPortalBootReady===true || sessionStorage.getItem('rx-v26-ready-reload')==='1') && !document.querySelector('#rxBootGuard')",
                 timeout=25000,
             )
             await page.wait_for_function("window.rxV46Installed===true", timeout=25000)

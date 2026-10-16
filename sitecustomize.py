@@ -5,6 +5,9 @@ import threading
 import time
 
 IS_PORTAL = os.getenv('RX_RELEASE') == 'V8_OPERATIONAL_ZERO_COST'
+# Cache de blocos do GDAL com teto fixo (MB). Sem isso ele usa 5% da RAM que o contêiner enxerga, que no Render
+# pode ser a do host e não os 512 MB do plano; o T1 (MapBiomas Solo) somou até +75 MB de pico medido em 15/09.
+os.environ.setdefault('GDAL_CACHEMAX', '96')
 CORE_RUNTIME_READY = all(importlib.util.find_spec(name) is not None for name in ('fastapi', 'httpx', 'shapely'))
 
 
@@ -23,6 +26,7 @@ def _load_report_after_report_api():
                 import report_perf_v24  # noqa: F401
                 import core_retry_fast_v29  # noqa: F401
                 import report_v19_patch  # noqa: F401
+                import report_v20_patch  # noqa: F401
                 import report_visual_identity_v28  # noqa: F401
                 import report_extras_perf_v30  # noqa: F401
                 import landuse_profile_v39  # noqa: F401
@@ -83,6 +87,7 @@ def _load_portal_deferred():
                 import portal_experience_v43  # noqa: F401
                 import portal_map_panel_v45  # noqa: F401
                 import portal_conformity_mte_v48  # noqa: F401
+                import portal_prodes_card_f2  # noqa: F401  (F2: linha PRODES do cartão = leitura do relatório)
                 import portal_car_integrity_v47  # noqa: F401
                 import portal_car_integrity_ui_v47  # noqa: F401
                 import portal_map_stability_v43  # noqa: F401
@@ -94,6 +99,9 @@ def _load_portal_deferred():
                 import portal_map_v46  # noqa: F401
                 import portal_map_v46_anchor_state  # noqa: F401
                 import portal_identity_title_guard_v49  # noqa: F401
+                import portal_share_link_w1a  # noqa: F401
+                import portal_full_reading_f1b  # noqa: F401  (F1B: análise completa visível no painel)
+                import portal_report_wake_f1b  # noqa: F401  (F1B 1B.8: acorda o motor do relatório ao abrir o cartão)
                 import portal_pmtiles_consumer_v48  # noqa: F401
 
                 import portal_resource_guard_v27  # noqa: F401
@@ -142,6 +150,17 @@ def _load_portal_deferred():
                     raise RuntimeError('v46_anchor_state_guard_not_loaded')
                 if 'RX_NUMBER_FORMAT_C2' not in portal_v8.PORTAL_HTML:
                     raise RuntimeError('c2_card_format_not_loaded')
+                if 'RX_SHARE_LINK_W1A' not in portal_v8.PORTAL_HTML:
+                    raise RuntimeError('w1a_share_link_not_loaded')
+                if 'RX_FULL_READING_F1B' not in portal_v8.PORTAL_HTML:
+                    raise RuntimeError('f1b_full_reading_not_loaded')
+                if 'RX_REPORT_WAKE_F1B' not in portal_v8.PORTAL_HTML or '/v1/live/report-engine/wake' not in ready:
+                    raise RuntimeError('f1b_report_wake_not_loaded')
+                try:  # F1B 1B.6: warm the IBGE lists in this thread, never inside a request
+                    import municipios_ibge_br
+                    municipios_ibge_br._load()
+                except Exception as exc:  # the search answers 503 'indisponível', never 'not found'
+                    print(f'RX_CITY_SEARCH_IBGE=unavailable:{type(exc).__name__}', flush=True)
                 if str(portal_v8.APP_PORTAL_VERSION) != '0.47.0-v47-search-name-truth-fill':
                     raise RuntimeError('v46_release_identity_not_loaded')
                 if 'RX_MAP_STABILITY_V43_5' not in portal_v8.PORTAL_HTML:
@@ -184,6 +203,9 @@ def _load_portal_deferred():
         time.sleep(0.05)
     print('RX_PORTAL_V46_EXTENSION=timeout_waiting_portal_api', flush=True)
 
+
+# W1a: read by portal_boot_assets_w1a - GET / serves the boot page until the deferred load is ready.
+PORTAL_DEFERRED_BOOT = bool(CORE_RUNTIME_READY and IS_PORTAL)
 
 if CORE_RUNTIME_READY:
     if IS_PORTAL:

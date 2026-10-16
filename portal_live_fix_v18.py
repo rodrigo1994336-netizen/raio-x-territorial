@@ -3,13 +3,21 @@ from __future__ import annotations
 import asyncio
 import os
 import httpx
-from fastapi import HTTPException
+
+from fastapi import HTTPException, Request
 
 import portal_v8
+# A âncora pastagem-mapbiomas remendada aqui é escrita por portal_property_tabs: sem declarar a
+# dependência, o remendo depende da ordem de importação e o arranque cai com anchor_missing.
+import portal_property_tabs  # noqa: F401 - dono da âncora pastagem-mapbiomas
+import car_resilient
 from critical_minerals import query_critical_minerals
 from agropecuaria import build_agro_profile
 from car_resilient import fetch_car_live_resilient
+from external_process_lifecycle import RequestDisconnected, wait_for_cancelling_processes
+from sicar_lookup_http import lookup_http_error
 from anm_resilient import query_anm_curl_exact
+import terra_verdade_t1
 
 app=portal_v8.app
 HEAVY_BASE=os.getenv('RX_HEAVY_BASE_URL','https://raio-x-territorial-report.onrender.com').rstrip('/')
@@ -17,15 +25,23 @@ HEAVY_BASE=os.getenv('RX_HEAVY_BASE_URL','https://raio-x-territorial-report.onre
 REPLACE_PATHS={'/v1/live/critical-minerals/{car_code}','/v1/live/agropecuaria/{car_code}'}
 app.router.routes=[r for r in app.router.routes if getattr(r,'path',None) not in REPLACE_PATHS]
 
-async def _car(code:str):
-    car=await asyncio.to_thread(fetch_car_live_resilient,code.upper())
+def _desistiu():return HTTPException(status_code=499,detail='Consulta encerrada: o cliente desistiu.')
+
+async def _car(code:str,request=None):
+    # Dentro do escopo: a desistência do cliente derruba os curls desta busca e impede o próximo. O teto é o
+    # pior caso derivado pelo car_resilient — maior que a cadeia real, então não corta resposta que hoje chega.
+    try:
+        car=await wait_for_cancelling_processes(asyncio.to_thread(fetch_car_live_resilient,code.upper()),
+                                                car_resilient.WORST_CASE_SECONDS,request=request)
+    except RequestDisconnected:
+        raise _desistiu()
     if not car.get('ok'):
-        raise HTTPException(status_code=404 if car.get('not_found') else 502,detail='CAR não localizado ou SICAR indisponível')
+        raise lookup_http_error(car)
     return car
 
 @app.get('/v1/live/critical-minerals/{car_code}')
-async def critical_minerals_v18(car_code:str):
-    code=car_code.upper();car=await _car(code);geom=car.get('geometry');bbox=car.get('bbox') or []
+async def critical_minerals_v18(car_code:str,request:Request=None):
+    code=car_code.upper();car=await _car(code,request);geom=car.get('geometry');bbox=car.get('bbox') or []
     anm_task=asyncio.to_thread(query_anm_curl_exact,geom,bbox)
     # SGB can classify the ANM payload, but doing both serially is slow. Query ANM
     # first with a strict direct endpoint, then give it to SGB classification.
@@ -41,7 +57,7 @@ async def critical_minerals_v18(car_code:str):
         'anm_available':anm_available,'sgb_available':sgb_available,
         'anm':{**classified,'process_count':classified.get('process_count') if classified.get('process_count') is not None else exact.get('occurrence_count',0),'exact':exact},
         'source':'ANM/SIGMINE + Serviço Geológico do Brasil (GeoSGB)',
-        'note':'Consulta direta da aba. Não depende da geração do dossiê completo; falha de uma fonte não é tratada como ausência.'
+        'note':'Consulta feita direto nesta aba, sem precisar gerar o relatório.'
     }
 
 async def _heavy_agro(code:str):
@@ -53,8 +69,8 @@ async def _heavy_agro(code:str):
     except Exception as e:return {'ok':False,'detail':f'heavy_worker:{type(e).__name__}:{str(e)[:180]}'}
 
 @app.get('/v1/live/agropecuaria/{car_code}')
-async def agropecuaria_v18(car_code:str):
-    code=car_code.upper();car=await _car(code)
+async def agropecuaria_v18(car_code:str,request:Request=None):
+    code=car_code.upper();car=await _car(code,request)
     minimal={'car':car}
     profile_task=build_agro_profile(minimal,code,True)
     heavy_task=_heavy_agro(code)
@@ -64,9 +80,10 @@ async def agropecuaria_v18(car_code:str):
     mb=(heavy or {}).get('mapbiomas') or {};terrain=(heavy or {}).get('terrain_srtm') or {}
     screening=(profile.setdefault('property_screening',{}) if isinstance(profile,dict) else {}).setdefault('checks',[])
     # Remove stale placeholder terrain/soil rows from the lightweight municipal profile.
-    screening=[x for x in screening if str(x.get('factor') or '') not in {'Solo','Aptidão agrícola','Declividade'}]
-    if terrain.get('ok'):
-        screening.append({'factor':'Declividade','scope':'SRTM ~30 m dentro do CAR','status':'consultada','value':{'median_deg':terrain.get('slope_median_deg'),'p90_deg':terrain.get('slope_p90_deg'),'elevation_median_m':terrain.get('elevation_median_m')}})
+    screening=[x for x in screening if str(x.get('factor') or '') not in {'Solo','Aptidão agrícola','Declividade','Relevo (SRTM)'}]
+    relief=terra_verdade_t1.relief_check(terrain)  # T1: inclinação em %, classes de relevo da Embrapa
+    if relief:
+        screening.append(relief)
     profile['property_screening']['checks']=screening
     profile['mapbiomas']=mb;profile['terrain_srtm']=terrain
     profile['pasture']={
@@ -81,13 +98,39 @@ async def agropecuaria_v18(car_code:str):
     return profile
 
 # Final HTML corrections after tabs are loaded.
+#
+# Remendo por string que não casa é silencioso: str.replace() devolve o texto igual e ninguém percebe.
+# Duas âncoras daqui morreram num commit que reescreveu o texto original e a tela seguiu sem a correção.
+# Agora cada remendo é conferido: um que não casa derruba o arranque (RX_PORTAL_V46_EXTENSION=failed),
+# que é como este repositório enxerga âncora quebrada — e o CI pega antes de chegar ao cliente.
+_UI_FIXES=[
+    ("persistencia-inclui-operacional",
+     "const active=d.persistence==='durable'",
+     "const active=['durable','operational_nonpersistent'].includes(d.persistence)"),
+    ("pastagem-mapbiomas",
+     "Pastagem/vigor MapBiomas só exibirá percentuais quando o worker raster devolver métricas reais do polígono.",
+     "${d.pasture?.state==='ready'?`Pastagem MapBiomas ${d.pasture.year||''}: <b>${fmt(d.pasture.pasture_area_ha,2)} ha</b> (${fmt(d.pasture.pasture_share_pct,1)}% do CAR). Vegetação nativa: ${fmt(d.pasture.native_vegetation_share_pct,1)}%.`:'MapBiomas não respondeu nesta consulta; isso não significa ausência de pastagem.'}"),
+]
+# Saíram daqui, no mesmo commit em que perderam a razão de existir:
+#  * o rótulo "PERSISTENTE — PRONTO / AGUARDANDO VÍNCULO DO BANCO" — portal_v8 já escreve
+#    "${active?'DISPONÍVEL':'AINDA NÃO DISPONÍVEL'}", que com a correção acima dá exatamente o mesmo texto;
+#  * "Fontes restritas permanecem preparadas — OFF até habilitação." — portal_property_tabs passou a
+#    escrever "Alguns documentos ainda não estão disponíveis por aqui.", que já é o texto de cliente certo;
+#  * um replace cuja busca era igual ao substituto (remendo de si mesmo, sem efeito nenhum).
+
 def install_ui_fixes():
     html=portal_v8.PORTAL_HTML
-    html=html.replace("const active=d.persistence==='durable'","const active=['durable','operational_nonpersistent'].includes(d.persistence)")
-    html=html.replace("${active?'PERSISTENTE — PRONTO':'AGUARDANDO VÍNCULO DO BANCO'}","${d.persistence==='durable'?'PERSISTENTE — PRONTO':(active?'OPERACIONAL — FREE':'BACKEND DE ALERTAS INDISPONÍVEL')}")
-    html=html.replace("Pastagem/vigor MapBiomas só exibirá percentuais quando o worker raster devolver métricas reais do polígono.","${d.pasture?.state==='ready'?`Pastagem MapBiomas ${d.pasture.year||''}: <b>${fmt(d.pasture.pasture_area_ha,2)} ha</b> (${fmt(d.pasture.pasture_share_pct,1)}% do CAR). Vegetação nativa: ${fmt(d.pasture.native_vegetation_share_pct,1)}%.`:'MapBiomas não respondeu nesta consulta; isso não significa ausência de pastagem.'}")
-    html=html.replace("Fontes restritas permanecem preparadas — OFF até habilitação.","Fontes públicas são consultadas automaticamente. Serviços cadastrais/registrários pagos aparecem abaixo apenas como integrações opcionais que exigem credencial ou contratação.")
-    html=html.replace("<span class=\"rx-pill\">${x.ready?'ATIVO':'PREPARADO — OFF'}</span>","<span class=\"rx-pill\">${x.ready?'ATIVO':'OPCIONAL / REQUER HABILITAÇÃO'}</span>")
+    casaram=[]
+    perdidas=[]
+    for nome,busca,troca in _UI_FIXES:
+        if busca not in html:
+            perdidas.append(nome)
+            continue
+        html=html.replace(busca,troca)
+        casaram.append(nome)
+    print(f'RX_PORTAL_LIVE_FIX_ANCHORS=casaram:{len(casaram)}/{len(_UI_FIXES)}'+(f' perdidas:{",".join(perdidas)}' if perdidas else ''),flush=True)
+    if perdidas:
+        raise RuntimeError('portal_live_fix_anchor_missing:'+','.join(perdidas))
     portal_v8.PORTAL_HTML=html
 
 install_ui_fixes()

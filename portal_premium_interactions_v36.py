@@ -14,7 +14,7 @@ def _patch_progressive(html: str) -> str:
     if old_ready in html:
         html = html.replace(old_ready, new_ready, 1)
 
-    old_error = "if(body)body.innerHTML=`<div class=\"row\"><b class=\"warn\">FONTE PRINCIPAL LENTA</b><br><span>${String(e.message||e)}. Tente novamente; nenhuma conclusão será inventada.</span></div>`;"
+    old_error = "if(body)body.innerHTML=`<div class=\"row\"><b class=\"warn\">CONSULTA PENDENTE</b><br><span>A fonte principal não respondeu agora. Tente de novo em instantes.</span></div>`;"
     new_error = "if(body)body.classList.remove('rx-analyzing');progressBox('Análise aprofundada temporariamente indisponível','Os dados essenciais permanecem disponíveis. Tente novamente em instantes.','warn');"
     if old_error in html:
         html = html.replace(old_error, new_error, 1)

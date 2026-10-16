@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import incra_acervo_f2
+
 
 def _ok(result:dict,key:str)->bool:
     return isinstance(result.get(key),dict) and result.get(key,{}).get('ok') is True
@@ -38,13 +40,12 @@ def comprehensive_truth_guard(payload:dict[str,Any],result:dict[str,Any],base_gu
 
     # Fundiário: keep the limitation, but stop presenting restricted connectors as forgotten work.
     land=payload.setdefault('land',{})
-    sigef_count=int(sigef.get('feature_count') or 0)
-    land['summary']=(f'SIGEF público consultado nesta emissão: {sigef_count} parcela(s) candidata(s) no envelope do imóvel. '
-                     'SNCI/CCIR, matrícula, ônus e titularidade são integrações registrais/cadastrais separadas e permanecem preparadas para ativação por fonte legalmente habilitada; não são inferidas do CAR.')
+    # F2: SIGEF and SNCI come from the official INCRA answer; the PAMGIA mirror never says "0 parcela".
+    acervo=result.get('incra_acervo')
     cert=[]
     for row in land.get('certifications') or []:
         r=list(row)
-        if r and _contains_any(r[0],'SNCI','CCIR'):
+        if r and _contains_any(r[0],'CCIR'):
             while len(r)<4:r.append('')
             r[1]='INTEGRAÇÃO PREPARADA — OFF';r[2]='—';r[3]='Ativação depende de fonte/credencial legalmente habilitada.'
         cert.append(r)
@@ -57,6 +58,7 @@ def comprehensive_truth_guard(payload:dict[str,Any],result:dict[str,Any],base_gu
             r[1]='INTEGRAÇÃO RESTRITA — OFF';r[2]='—';r[3]='Não inferido do CAR; conector preparado para provedor/fonte autorizada.'
         matrix.append(r)
     land['matrix']=matrix
+    payload=incra_acervo_f2.apply_to_report_payload(payload,acervo)
 
     # Monitoring values must reflect the real Sentinel and fire engines.
     mon=payload.setdefault('monitoring',{})
@@ -115,21 +117,25 @@ def comprehensive_truth_guard(payload:dict[str,Any],result:dict[str,Any],base_gu
 
     # Build an objective coverage statement from real engines, instead of keeping the old "Raio-X parcial" wording.
     checks={
-        'CAR/SICAR':car.get('ok') is True,'SIGEF':sigef.get('ok') is True,'IBAMA embargos':emb.get('ok') is True,
+        'CAR/SICAR':car.get('ok') is True,'SIGEF':incra_acervo_f2.family_answered(acervo,'sigef'),'IBAMA embargos':emb.get('ok') is True,
         'IBAMA autos':autos.get('ok') is True,'PRODES':prodes.get('ok') is True,'ANM':anm.get('ok') is True,
         'restrições territoriais':cons.get('ok') is True,'outorgas':water.get('ok') is True,'pivôs':piv.get('ok') is True,
-        'clima':cl.get('ok') is True,'solo':(ide.get('soil') or {}).get('ok') is True,
-        'aptidão':apt.get('ok') is True,'declividade':slope.get('ok') is True,
+        # T1: solo e aptidão pela base nacional (qualquer UF); relevo medido no modelo de elevação, não na camada de MG.
+        'clima':cl.get('ok') is True,'solo':((result.get('terra_nacional') or {}).get('pedologia') or {}).get('state') in ('found','not_found'),
+        'aptidão':((result.get('terra_nacional') or {}).get('aptidao') or {}).get('state') in ('found','not_found'),'declividade':(result.get('terrain_srtm') or {}).get('ok') is True or (result.get('terrain_srtm') or {}).get('state')=='not_found',
         'imagem Sentinel-2':sat.get('ok') is True,'MapBiomas cobertura':mb.get('ok') is True,
     }
     ready=[k for k,v in checks.items() if v];missing=[k for k,v in checks.items() if not v]
     con['coverage']={'consulted_core_count':len(ready),'core_count':len(checks),'consulted_core':ready,'unavailable_core':missing}
+    # T2: "núcleos técnicos" e "integrações registrais/restritas" são vocabulário de dentro do código — e a
+    # segunda frase falava de linhas que o cliente não vê mais. O limite do cartório é dito na linha de escopo.
     if len(ready)>=12:
-        con['verdict']=(f'Raio-X público ampliado executado: {len(ready)}/{len(checks)} núcleos técnicos responderam nesta emissão. '
-                        'As integrações registrais/restritas permanecem claramente separadas e não são substituídas por inferência.')
+        con['verdict']=(f'{len(ready)} das {len(checks)} consultas públicas responderam nesta emissão. '
+                        'Matrícula, ônus e titularidade saem por certidão do cartório de registro de imóveis, pedida à parte.')
     else:
-        con['verdict']=(f'Raio-X executado com {len(ready)}/{len(checks)} núcleos técnicos respondendo. '
-                        f'Pontos cegos desta emissão: {", ".join(missing) if missing else "nenhum núcleo público principal"}.')
+        con['verdict']=(f'{len(ready)} das {len(checks)} consultas públicas responderam nesta emissão. '
+                        + (f'Ficaram pendentes: {", ".join(missing)}; pendente não quer dizer que não existe ocorrência.'
+                           if missing else 'Nenhuma consulta pública principal ficou pendente.'))
 
     # Priorities become due diligence, not a stale development checklist.
     priorities=[]

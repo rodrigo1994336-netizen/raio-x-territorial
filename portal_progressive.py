@@ -43,7 +43,7 @@ PROGRESSIVE_JS=r'''
         progressBox('Resultado inicial pronto','O aprofundamento continua; houve uma falha temporária ao consultar o estado do processamento.','warn');
       }
     }
-    progressBox('Resultado inicial disponível','Algumas fontes profundas continuam lentas. Você pode navegar normalmente; fonte pendente não é tratada como ausência de ocorrência.','warn');
+    progressBox('Resultado inicial disponível','Algumas fontes ainda estão respondendo. Você pode navegar normalmente.','warn');
   }
   async function progressiveAnalyze(){
     if(!current?.car_code)return;
@@ -63,7 +63,7 @@ PROGRESSIVE_JS=r'''
       pollDeep(code,myToken);
     }catch(e){
       if(myToken!==token)return;
-      if(body)body.innerHTML=`<div class="row"><b class="warn">FONTE PRINCIPAL LENTA</b><br><span>${String(e.message||e)}. Tente novamente; nenhuma conclusão será inventada.</span></div>`;
+      if(body)body.innerHTML=`<div class="row"><b class="warn">CONSULTA PENDENTE</b><br><span>A fonte principal não respondeu agora. Tente de novo em instantes.</span></div>`;
     }
   }
   function install(){const b=document.querySelector('#analyze');if(b)b.onclick=progressiveAnalyze}

@@ -1,13 +1,19 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
+import math
+import os
 import re
+import sys
+import time
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 from playwright.async_api import async_playwright
 
-BASE = "http://127.0.0.1:8000/"
+BASE = os.getenv("RX_SMOKE_BASE", "http://127.0.0.1:8000/")
 OUT = Path("artifacts")
 DENSE = {"lat": -18.4448863, "lon": -44.2181254, "zoom": 13}
 results = {"viewports": {}, "movements": [], "console": []}
@@ -20,21 +26,23 @@ async def js(page, expr, arg=None):
 
 
 async def wait_runtime(page):
-    # The boot guard reloads once. Do not type a search into the document that
-    # is about to be replaced, or the input vanishes before the button click.
-    await page.wait_for_function("sessionStorage.getItem('rx-v26-ready-reload')==='1' && !document.querySelector('#rxBootGuard')", timeout=15000)
+    # Wait for the complete page (W1a: no reload once ready; a cold server shows the
+    # boot page first and reloads once). Do not type into a document about to be replaced.
+    await page.wait_for_function("(window.rxPortalBootReady===true || sessionStorage.getItem('rx-v26-ready-reload')==='1') && !document.querySelector('#rxBootGuard')", timeout=15000)
     await page.wait_for_function("window.rxV46Installed===true", timeout=15000)
     await page.wait_for_function(
         "typeof map!=='undefined' && !!map && !!map.getBounds", timeout=10000
     )
 
 
+# W1a: parcels may be drawn by a canvas renderer (no <path> per parcel). Every probe below
+# reads Leaflet layers carrying a CAR code, so it works for SVG and canvas alike.
+PARCELS_IN_VIEW_JS = """()=>{if(typeof map==='undefined'||!map)return 0;const b=map.getBounds();let n=0;map.eachLayer(l=>{const p=l.feature&&l.feature.properties;if(p&&p.cod_imovel&&l.getBounds){try{if(b.intersects(l.getBounds()))n++}catch(e){}}});return n}"""
+
+
 async def set_dense(page):
     await js(page, "p=>map.setView([p.lat,p.lon],p.zoom,{animate:false})", DENSE)
-    await page.wait_for_function(
-        "document.querySelectorAll('.leaflet-overlay-pane path.leaflet-interactive').length>0",
-        timeout=25000,
-    )
+    await page.wait_for_function(f"({PARCELS_IN_VIEW_JS})()>0", timeout=25000)
 
 
 async def map_center(page):
@@ -42,10 +50,7 @@ async def map_center(page):
 
 
 async def visible_parcels(page):
-    return await js(
-        page,
-        """()=>{const mr=document.querySelector('#map')?.getBoundingClientRect();if(!mr)return 0;return [...document.querySelectorAll('.leaflet-overlay-pane path.leaflet-interactive')].filter(p=>{const r=p.getBoundingClientRect();return r.width>1&&r.height>1&&r.right>mr.left&&r.left<mr.right&&r.bottom>mr.top&&r.top<mr.bottom}).length}""",
-    )
+    return await js(page, PARCELS_IN_VIEW_JS)
 
 
 async def proven_empty_map_point(page):
@@ -54,12 +59,16 @@ async def proven_empty_map_point(page):
         """()=>{
           const mapEl=document.querySelector('#map'),r=mapEl?.getBoundingClientRect();
           if(!r)return null;
-          const fx=[.08,.16,.24,.32,.40,.48,.56,.64,.72,.80,.88,.94];
-          const fy=[.12,.22,.32,.42,.52,.62,.72,.82,.90];
+          // W1a: with every CAR drawn, bare pixels are rarer; scan a finer grid (coarse points first).
+          const fx=[.08,.16,.24,.32,.40,.48,.56,.64,.72,.80,.88,.94,.04,.12,.20,.28,.36,.44,.52,.60,.68,.76,.84,.92];
+          const fy=[.12,.22,.32,.42,.52,.62,.72,.82,.90,.17,.27,.37,.47,.57,.67,.77,.86];
           for(const yy of fy)for(const xx of fx){
             const x=r.left+r.width*xx,y=r.top+r.height*yy,el=document.elementFromPoint(x,y);
             if(!el||!el.closest('#map'))continue;
-            if(el.closest('.leaflet-popup,.leaflet-control,.leaflet-interactive'))continue;
+            if(el.closest('.leaflet-popup,.leaflet-control')||(el.tagName!=='CANVAS'&&el.closest('.leaflet-interactive')))continue; // a canvas keeps .leaflet-interactive while hovered; parcels are excluded below
+            const lp=map.containerPointToLayerPoint([x-r.left,y-r.top]);let onParcel=false;
+            const ll=map.containerPointToLatLng([x-r.left,y-r.top]);map.eachLayer(l=>{if(!onParcel&&l.feature?.properties?.cod_imovel&&l._containsPoint&&l.getBounds){try{onParcel=l.getBounds().contains(ll)&&l._containsPoint(lp)}catch(e){}}});
+            if(onParcel)continue;
             return {x,y,tag:el.tagName,id:el.id||null,cls:String(el.className||'')};
           }
           return null;
@@ -67,26 +76,109 @@ async def proven_empty_map_point(page):
     )
 
 
-async def click_first_parcel(page):
-    paths = page.locator(".leaflet-overlay-pane path.leaflet-interactive")
-    n = await paths.count()
-    assert n > 0, "no interactive CAR polygon to click"
-    for i in range(min(n, 12)):
-        try:
-            b = await paths.nth(i).bounding_box()
-            if b and b["width"] > 4 and b["height"] > 4:
-                await paths.nth(i).click(
-                    position={
-                        "x": max(2, min(b["width"] / 2, b["width"] - 2)),
-                        "y": max(2, min(b["height"] / 2, b["height"] - 2)),
-                    },
-                    force=True,
-                )
+# Parcel click (CI flake of 15/09: "no interactive CAR polygon to click" at 1440 px with 17 parcels).
+# The old probe only tried the CENTRE of each parcel's bounding box, inside fixed margins, right after
+# the FIRST parcel touched the view. When the cells that arrived first hold parcels that merely stick
+# into the view (edge or margin cells, SICAR slow for the runner), or the parcel is concave, no centre
+# qualifies and the smoke failed although clickable parcels were on screen.
+# Now the target is read from the geometry the map really has: a grid over the free map area (same
+# margins as before), where each pixel must be covered by nothing but the parcel canvas/path, and the
+# parcel under it is the one Leaflet will receive the click (canvas: LAST drawn interactive layer
+# containing the point, exactly like L.Canvas._onClick). The 4 neighbours at PAD px must hit the same
+# parcel, so rounding cannot move the click to a border or to a neighbour. Pixels with a single
+# parcel are preferred. No pixel yet: wait for cells; still none: pan to a loaded parcel's interior.
+# The click must open the card of THAT CAR (tags below name each failure). A repeated click passes the
+# CARs already clicked as `avoid`: the grid is deterministic and would pick the same parcel again, so
+# a card stuck on the first property would pass unnoticed (review of 15/09: 5 of 7 live clicks hit one
+# CAR); with `avoid` the next click targets another parcel and its card must show that one.
+PARCEL_BOX = {"l": 30, "r": 60, "t": 60, "b": 70, "step": 18, "pad": 5, "want": 4}
+PARCEL_TARGET_JS = """(o)=>{
+  const mapEl=document.querySelector('#map');if(!mapEl||typeof map==='undefined'||!map)return {cands:[],parcels:0,stats:{no_map:true}};
+  const r=mapEl.getBoundingClientRect(),top=Math.max(r.top,document.querySelector('header.top')?.getBoundingClientRect().bottom||0);
+  const box={l:r.left+o.l,r:r.right-o.r,t:top+o.t,b:r.bottom-o.b},parcels=[],byPath=new Map(),rends=new Map();
+  map.eachLayer(l=>{if(!l.feature?.properties?.cod_imovel||!l._containsPoint||!l.options?.interactive)return;parcels.push(l);
+    if(l._path)byPath.set(l._path,l);else if(l._renderer?._container)rends.set(l._renderer._container,l._renderer)});
+  const tag=el=>el.tagName.toLowerCase()+(el.id?'#'+el.id:'')+(typeof el.className==='string'&&el.className.trim()?'.'+el.className.trim().split(/\\s+/)[0]:'');
+  const probe=(x,y)=>{const el=document.elementFromPoint(x,y);if(!el)return {why:'offscreen'};const lp=map.containerPointToLayerPoint(L.point(x-r.left,y-r.top));
+    if(byPath.has(el))return {target:byPath.get(el),alone:parcels.filter(l=>l._containsPoint(lp)).length===1};
+    const rend=rends.get(el);if(!rend)return parcels.some(l=>l._containsPoint(lp))?{why:'covered',by:tag(el)}:{why:'empty'};
+    let hit=null,n=0;for(let q=rend._drawFirst;q;q=q.next){const l=q.layer;if(l.options.interactive&&l._containsPoint(lp)){hit=l;n++}}
+    if(!hit)return {why:'empty'};if(!hit.feature?.properties?.cod_imovel)return {why:'covered',by:'non-parcel layer'};return {target:hit,alone:n===1}};
+  const carOf=l=>l.feature.properties.cod_imovel;
+  if(o.at){const p=probe(o.at[0],o.at[1]);return {car:p.target?carOf(p.target):null,why:p.why||null,by:p.by||null,parcels:parcels.length}}
+  const stats={parcels:parcels.length,points:0,empty:0,edge:0,covered:{}},cx=(box.l+box.r)/2,cy=(box.t+box.b)/2,pts=[];
+  for(let y=box.t;y<=box.b;y+=o.step)for(let x=box.l;x<=box.r;x+=o.step)pts.push([x,y]);
+  pts.sort((a,b)=>Math.hypot(a[0]-cx,a[1]-cy)-Math.hypot(b[0]-cx,b[1]-cy));
+  const alone=[],shared=[],seen=new Set(o.avoid||[]);
+  for(const [x,y] of pts){if(alone.length>=o.want)break;stats.points++;const p=probe(x,y);
+    if(!p.target){if(p.why==='covered')stats.covered[p.by]=(stats.covered[p.by]||0)+1;else stats.empty++;continue}
+    const car=carOf(p.target);if(seen.has(car))continue;let ok=true,solo=p.alone;
+    for(const [dx,dy] of [[-o.pad,0],[o.pad,0],[0,-o.pad],[0,o.pad]]){const q=probe(x+dx,y+dy);if(q.target!==p.target){ok=false;break}solo=solo&&q.alone}
+    if(!ok){stats.edge++;continue}seen.add(car);(solo?alone:shared).push({x,y,car,alone:solo})}
+  return {cands:alone.concat(shared).slice(0,o.want),parcels:parcels.length,stats}}"""
+# Pan fallback: the loaded interactive parcel nearest to the free area, moved so that an interior
+# pixel (neighbours at 2*PAD inside too) lands in the middle of that area.
+PARCEL_PAN_JS = """(o)=>{const mapEl=document.querySelector('#map');if(!mapEl)return null;const r=mapEl.getBoundingClientRect(),top=Math.max(r.top,document.querySelector('header.top')?.getBoundingClientRect().bottom||0);
+  const cx=(r.left+o.l+r.right-o.r)/2-r.left,cy=(top+o.t+r.bottom-o.b)/2-r.top,skip=new Set(o.skip||[]),rows=[];
+  map.eachLayer(l=>{const car=l.feature?.properties?.cod_imovel,b=l._pxBounds;if(!car||skip.has(car)||!l._containsPoint||!l.options?.interactive||!b)return;
+    if(b.max.x-b.min.x<4*o.pad||b.max.y-b.min.y<4*o.pad)return;const c=map.layerPointToContainerPoint(b.getCenter());rows.push({l,car,d:Math.hypot(c.x-cx,c.y-cy)})});
+  rows.sort((a,b)=>a.d-b.d);
+  for(const {l,car} of rows.slice(0,60)){const b=l._pxBounds,mid=b.getCenter();let best=null;
+    for(let i=1;i<12;i++)for(let j=1;j<12;j++){const p=L.point(b.min.x+(b.max.x-b.min.x)*i/12,b.min.y+(b.max.y-b.min.y)*j/12);
+      if(!l._containsPoint(p)||![[-1,0],[1,0],[0,-1],[0,1]].every(([dx,dy])=>l._containsPoint(L.point(p.x+dx*2*o.pad,p.y+dy*2*o.pad))))continue;
+      const d=p.distanceTo(mid);if(!best||d<best.d)best={p,d}}
+    if(best){const c=map.layerPointToContainerPoint(best.p);return {car,dx:Math.round(c.x-cx),dy:Math.round(c.y-cy)}}}
+  return null}"""
+
+
+async def click_first_parcel(page, timeout_ms=30000, pan_after_ms=6000, avoid=()):
+    """Clicks a pixel proven to belong to one visible interactive CAR parcel outside `avoid` and requires
+    the card of that CAR. Returns the click, with the map centre read right before it (card contract)."""
+    assert await page.locator(".rx46-card").count() == 0, "click_first_parcel expects no open card"
+    avoid = [str(c) for c in avoid]
+    loop = asyncio.get_running_loop()
+    t0 = loop.time()
+    deadline, next_pan = t0 + timeout_ms / 1000, t0 + pan_after_ms / 1000
+    pans, races = [], 0
+    while True:
+        found = await js(page, PARCEL_TARGET_JS, {**PARCEL_BOX, "avoid": avoid})
+        if found["cands"]:
+            cand = found["cands"][0]
+            center = await map_center(page)
+            await page.mouse.click(cand["x"], cand["y"])
+            try:
                 await page.wait_for_selector(".rx46-card", state="visible", timeout=5000)
-                return i
-        except Exception:
-            pass
-    raise AssertionError("could not click a visible CAR polygon")
+            except Exception:
+                now = await js(page, PARCEL_TARGET_JS, {**PARCEL_BOX, "at": [cand["x"], cand["y"]]})
+                raise AssertionError(("CLICK_NO_CARD: a pixel of a visible interactive CAR parcel opened no card", cand, now)) from None
+            got = (await page.locator(".rx46-card").get_attribute("data-car") or "").strip()
+            if got == cand["car"]:
+                info = {**cand, "center": center, "waited_ms": round((loop.time() - t0) * 1000), "pans": pans, "races": races, "parcels": found["parcels"], "avoid": avoid}
+                print("RX_V46_PARCEL_CLICK", json.dumps(info, ensure_ascii=False))
+                return info
+            now = await js(page, PARCEL_TARGET_JS, {**PARCEL_BOX, "at": [cand["x"], cand["y"]]})
+            # Only accepted mismatch: a cell that arrived between the probe and the click drew the card's
+            # parcel on top of that pixel (the parcel set changed and the pixel now belongs to it).
+            if now["car"] == got and now["parcels"] != found["parcels"] and races < 2 and loop.time() < deadline:
+                races += 1
+                await js(page, "()=>window.rxV46CloseAnchor?.()")
+                await page.locator(".rx46-card").wait_for(state="detached", timeout=1500)
+                continue
+            if got in avoid:
+                raise AssertionError(("CLICK_STALE_CAR: the card still shows a property clicked before, not the one under the pixel", cand, got, now))
+            raise AssertionError(("CLICK_OTHER_CAR: the click opened the card of another property", cand, got, now))
+        tick = loop.time()
+        if tick >= deadline:
+            grid = await js(page, "()=>window.rxW1aGridState?window.rxW1aGridState():null")
+            raise AssertionError(("NO_CLICKABLE_PARCEL: no pixel of a visible interactive CAR parcel could be clicked",
+                                  {"stats": found["stats"], "grid": grid, "pans": pans, "in_view": await visible_parcels(page)}))
+        if tick >= next_pan and len(pans) < 3:
+            pan = await js(page, PARCEL_PAN_JS, {**PARCEL_BOX, "skip": avoid + [p["car"] for p in pans]})
+            if pan:
+                await js(page, "d=>map.panBy([d.dx,d.dy],{animate:false})", pan)
+                pans.append(pan)
+            next_pan = tick + 3
+        await page.wait_for_timeout(400)
 
 
 AREA_RE = re.compile(r"(\d{1,3}(\.\d{3})*,\d{2}|< 0,01) ha")
@@ -339,9 +431,10 @@ async def open_full(page, width):
     assert await page.locator(".rx46-card").count() == 0
     panel = page.locator(".rx45-panel-card")
     text = await panel.inner_text()
-    assert "RISCO NÃO CLASSIFICADO" in text, text
-    assert "Fonte não consultada não significa ausência de ocorrência" in text, text
-    assert "fontes responderam" in text.lower(), text
+    # F1B: no internal wording in the client panel (no risk placeholder, no "N de M fontes responderam").
+    for internal in ("RISCO NÃO CLASSIFICADO", "Fonte não consultada não significa ausência de ocorrência", "fontes responderam"):
+        assert internal.casefold() not in text.casefold(), (internal, text)
+    assert "ver fontes e datas" in text.casefold(), text
     assert "VER ANÁLISE COMPLETA" in text
     assert not re.search(r"20\d{2}-\d{2}-\d{2}T\d{2}:", text), text
     # C2a: clean panel head and KPIs. Compliance rows carry their own labels (C3),
@@ -499,11 +592,12 @@ async def viewport_flow(browser, width, height, label):
     await set_dense(page)
     await assert_parcel_tooltips(page)
     await assert_text_fits(page, label)
-    before = await map_center(page)
-    await click_first_parcel(page)
+    # The helper may wait for cells or pan to reach a clickable parcel; the "map does not move on
+    # click" contract compares with the centre read right before the click.
+    clicked = await click_first_parcel(page)
     await page.wait_for_timeout(700)
     await assert_card_placement(page, label, inside_map=True)
-    card = await assert_card_contract(page, before, width)
+    card = await assert_card_contract(page, clicked["center"], width)
     await assert_card_placement(page, label, inside_map=False)
     await assert_car_copy(page, ".rx46-card")
     await assert_official_sicar_action(page)
@@ -518,9 +612,11 @@ async def viewport_flow(browser, width, height, label):
         "selected property disappeared with card close"
     )
 
-    before = await map_center(page)
-    await click_first_parcel(page)
-    await assert_card_contract(page, before, width)
+    # Another property: the card has to follow the click, not stay on the first one.
+    first_car = clicked["car"]
+    clicked = await click_first_parcel(page, avoid=[first_car])
+    assert clicked["car"] != first_car, (first_car, clicked)
+    await assert_card_contract(page, clicked["center"], width)
     late = await delay_snapshot(page)
     await open_full(page, width)
     await assert_late_snapshot_keeps_panel(page, late)
@@ -592,7 +688,7 @@ async def movement_gate(browser):
         ("zoom_in_3", "map.setZoom(Math.min(14,map.getZoom()+1),{animate:false})"),
     ]
     for idx, (name, code) in enumerate(ops, 1):
-        await js(page, code)
+        await js(page, f"()=>void ({code})")
         samples = []
         for _ in range(16):
             samples.append(await visible_parcels(page))
@@ -621,19 +717,16 @@ async def movement_gate(browser):
 
 
 async def assert_parcel_fill(page):
-    fills = await js(page, """()=>{const rows=[];map.eachLayer(l=>{if(l._path&&l.feature?.properties?.cod_imovel){const s=getComputedStyle(l._path);rows.push({fill:s.fill,opacity:Number(s.fillOpacity)})}});return rows}""")
+    fills = await js(page, """()=>{const rows=[];map.eachLayer(l=>{if(!l.feature?.properties?.cod_imovel||!l.options)return;if(l._path){const s=getComputedStyle(l._path);rows.push({fill:s.fill,opacity:Number(s.fillOpacity)})}else if(l._parts){rows.push({fill:l.options.fill===false?'none':String(l.options.fillColor||l.options.color),opacity:Number(l.options.fillOpacity)})}});return rows}""")
     assert fills and all(x['fill'] != 'none' and .15 <= x['opacity'] <= .25 for x in fills), fills
 
 
 async def assert_parcel_tooltips(page):
-    # C2a: the hover tooltip is a plain location/area line: no municipality heading,
-    # no '—' placeholder, pt-BR area.
-    tips = await js(page, """()=>{const rows=[];map.eachLayer(l=>{if(l._path&&l.feature?.properties?.cod_imovel){const t=l.getTooltip?.();const c=t?t.getContent():null;if(typeof c==='string')rows.push(c)}});return rows}""")
-    assert tips, "no parcel tooltip content"
-    for tip in tips:
-        assert "—" not in tip and "<b>" not in tip and "Imóvel rural" not in tip, tip
-        if tip.endswith(" ha"):
-            assert AREA_RE.search(tip) and not re.search(r"\d\.\d{3,4} ha$", tip), tip
+    # F1B: nothing is written over the map on hover (the municipality/area balloon is gone);
+    # the click still opens the card.
+    tips = await js(page, """()=>{let n=0,withTip=0;map.eachLayer(l=>{if(l.feature?.properties?.cod_imovel){n++;if(l.getTooltip&&l.getTooltip())withTip++}});return {n,withTip,open:document.querySelectorAll('.leaflet-tooltip').length}}""")
+    assert tips["n"] > 0, ("no parcels to check", tips)
+    assert tips["withTip"] == 0 and tips["open"] == 0, ("tooltip over the map", tips)
 
 
 async def assert_search_dropdown_escaped(page, car, geometry):
@@ -664,6 +757,10 @@ CARD_FIELDS_JS = """()=>{const c=document.querySelector('.rx46-card');const f={}
 
 async def assert_card_rules_runtime(page, car, geometry):
     """Runs the shipped JS rules (not a Python twin) on deterministic payloads."""
+    # F1B: the card and the panel share ONE /map-panel request per CAR (window.rxMapPanelOnce). The real
+    # search just opened `car`, and its real /map-panel request may still be in flight (SICAR slow from
+    # GitHub): a fixture for the same code would never be asked. The deterministic payloads use their own code.
+    car = car[:-1] + ("0" if car[-1] != "0" else "1")
     fmt = await js(page, """()=>({ha0:rxNum.ha(0),haNull:rxNum.ha(null),haEmpty:rxNum.ha(''),haNaN:rxNum.ha(NaN),haStr0:rxNum.ha('0'),
       tiny:rxNum.num(0.003,2),edge:rxNum.num(0.005,2),big:rxNum.ha(1981.2),date:rxDateBR('2016-04-11T02:05:53.354Z'),dateNull:rxDateBR(null),
       renderWrapped:window.rxV46RenderV45Immediate?.__rxIdentitySanitizedV49===true})""")
@@ -754,7 +851,7 @@ async def search_regression(page, label):
 # /map-panel fixtures in a flow of its own (the real-click flows above stay untouched).
 SIGEF_CAR = "MG-3152006-BB48D05173F540CD9703B23088C3ABF4"
 SIGEF_LABEL = "PROJETO DE ASSENTAMENTO PAULISTA"
-SIGEF_ORIGIN = "SIGEF/INCRA · espelho público IBAMA/PAMGIA"
+SIGEF_ORIGIN = "Acervo Fundiário do INCRA (SIGEF)"
 SIGEF_GEOMETRY = {"type": "Polygon", "coordinates": [[[-45.02, -19.22], [-44.98, -19.22], [-44.98, -19.18], [-45.02, -19.18], [-45.02, -19.22]]]}
 
 REF_JS = """(root)=>{
@@ -818,7 +915,10 @@ async def sigef_reference_flow(browser, width, height, scenarios):
     await page.goto(BASE, wait_until="domcontentloaded", timeout=30000)
     await wait_runtime(page)
     await page.route("**/v1/live/map-panel/**", map_panel)
-    for pattern in ("**/v1/live/snapshot/**", "**/v1/live/property-identity/**", "**/v1/live/conformity/**", "**/v1/live/car-integrity/**"):
+    # F1B: opening the card's "VER ANÁLISE COMPLETA" starts the full reading (report engine): quiet too, the
+    # fixture CAR codes do not exist and the engine is not what this flow checks.
+    for pattern in ("**/v1/live/snapshot/**", "**/v1/live/property-identity/**", "**/v1/live/conformity/**", "**/v1/live/car-integrity/**",
+                    "**/v1/live/quick/**", "**/v1/live/progressive/**"):
         await page.route(pattern, quiet)
     # Below z11 the viewport loader stays idle, so no external source is involved.
     await js(page, "()=>map.setView([-19.2,-45.0],10,{animate:false})")
@@ -866,7 +966,7 @@ async def sigef_reference_flow(browser, width, height, scenarios):
         await page.wait_for_timeout(700)
         pinfo = await page.evaluate(REF_JS, ".rx45-panel-card")
         assert_ref_readable(pinfo, "panel-found")
-        for required in ("Referência INCRA", SIGEF_LABEL, "99,95%", SIGEF_ORIGIN, "não é o nome do CAR", "+1 outra parcela SIGEF cobre metade ou mais"):
+        for required in ("Referência INCRA", SIGEF_LABEL, "99,95%", SIGEF_ORIGIN, "não é o nome do CAR", "+1 outra certificação INCRA cobre metade ou mais"):
             assert required in pinfo["text"], (required, pinfo)
         assert SIGEF_LABEL.replace(" ", "") not in pinfo["title"], pinfo
         assert "OpenStreetMap" in pinfo["all"] and "Fazenda Teste OSM" in pinfo["all"], pinfo
@@ -980,8 +1080,144 @@ async def sigef_reference_flow(browser, width, height, scenarios):
     await context.close()
 
 
+# --click-controls: the parcel click helper against parcels that defeated the old probe, served by a
+# deterministic in-browser fixture (no SICAR), then one broken rule at a time in the served portal.
+# Rings are pixel offsets from the DENSE centre at DENSE zoom (x east, y south).
+CLICK_LAYOUTS = {
+    # bbox centre of the U falls in its notch, the donut's in its hole: both clickable only by their body.
+    "concave": [
+        [[(-160, -120), (-90, -120), (-90, 60), (90, 60), (90, -120), (160, -120), (160, 120), (-160, 120)]],
+        [[(250, -100), (450, -100), (450, 100), (250, 100)], [(300, -50), (400, -50), (400, 50), (300, 50)]],
+    ],
+    # only parcels sticking into the view from outside (as when the edge/margin cells answer first):
+    # 20 px at the right edge and 16 px under the top bar, both outside the free area -> needs the pan.
+    "edge": [
+        [[(700, -60), (1000, -60), (1000, 60), (700, 60)]],
+        [[(-100, -520), (100, -520), (100, -400), (-100, -400)]],
+    ],
+}
+CLICK_MUTATIONS = {
+    "click_ignored": ("CLICK_NO_CARD", "l.on('click',e=>{if(e.originalEvent){try{e.originalEvent.__rx46ParcelClick=true",
+                      "l.on('dblclick',e=>{if(e.originalEvent){try{e.originalEvent.__rx46ParcelClick=true"),
+    "other_car": ("CLICK_OTHER_CAR", "const live=l.feature||ff,p=propertyFromFeature(live);if(typeof window.rxV46SelectProperty==='function')",
+                  "const live=(()=>{let o=null;map.eachLayer(x=>{if(!o&&x.feature?.properties?.cod_imovel&&x.feature!==l.feature)o=x.feature});return o})()||l.feature||ff,p=propertyFromFeature(live);if(typeof window.rxV46SelectProperty==='function')"),
+    "not_interactive": ("NO_CLICKABLE_PARCEL", "L.geoJSON(f,{renderer,style:rxParcelStyleFor", "L.geoJSON(f,{renderer,interactive:false,style:rxParcelStyleFor"),
+    # the card keeps the FIRST property ever clicked: the first click passes, the second must not.
+    "stuck_first_car": ("CLICK_STALE_CAR", "const live=l.feature||ff,p=propertyFromFeature(live);if(typeof window.rxV46SelectProperty==='function')",
+                        "const live=(window.__rxStuckFeature||=(l.feature||ff)),p=propertyFromFeature(live);if(typeof window.rxV46SelectProperty==='function')"),
+}
+
+
+def dense_px_to_lonlat(dx: float, dy: float) -> list[float]:
+    scale = 256 * 2 ** DENSE["zoom"]
+    siny = math.sin(math.radians(DENSE["lat"]))
+    x = (DENSE["lon"] + 180) / 360 * scale + dx
+    y = (0.5 - math.log((1 + siny) / (1 - siny)) / (4 * math.pi)) * scale + dy
+    return [x / scale * 360 - 180, math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * y / scale))))]
+
+
+def click_layout_features(layout: str) -> list[dict]:
+    feats = []
+    for i, rings in enumerate(CLICK_LAYOUTS[layout]):
+        coords = [[dense_px_to_lonlat(*pt) for pt in ring + [ring[0]]] for ring in rings]
+        car = "MG-3120904-" + hashlib.md5(f"click:{layout}:{i}".encode()).hexdigest().upper()
+        feats.append({"type": "Feature", "geometry": {"type": "Polygon", "coordinates": coords},
+                      "properties": {"cod_imovel": car, "area": 40.5, "municipio": "Curvelo", "uf": "MG", "status_imovel": "AT",
+                                     "condicao": "Aguardando análise", "tipo_imovel": "IRU", "m_fiscal": 1.1}})
+    return feats
+
+
+async def click_fixture_run(browser, layout: str, mutation: str | None = None, timeout_ms: int = 30000) -> list[dict]:
+    context = await browser.new_context(viewport={"width": 1440, "height": 900})
+    page = await context.new_page()
+    feats = click_layout_features(layout)
+    applied = []
+
+    async def cells(route):
+        q = parse_qs(urlparse(route.request.url).query)
+        w, s, e, n = (float(q[k][0]) for k in ("west", "south", "east", "north"))
+        hit = []
+        for f in feats:
+            xs = [c[0] for c in f["geometry"]["coordinates"][0]]
+            ys = [c[1] for c in f["geometry"]["coordinates"][0]]
+            if min(xs) < e and max(xs) > w and min(ys) < n and max(ys) > s:
+                hit.append(f)
+        await route.fulfill(json={"type": "FeatureCollection", "features": hit, "uf": "MG", "ufs": ["MG"], "truncated": False,
+                                  "partial_failures": 0, "cached": True, "fetched_at": round(time.time(), 3)})
+
+    async def mutate(route):
+        if route.request.resource_type not in ("document", "script"):
+            await route.fallback()
+            return
+        resp = await route.fetch()
+        text = await resp.text()
+        _, old, new = CLICK_MUTATIONS[mutation]
+        if old not in text:
+            await route.fulfill(response=resp)
+            return
+        assert text.count(old) == 1, ("CLICK_MUTATION_ANCHOR_NOT_UNIQUE", mutation)
+        applied.append(route.request.url)
+        headers = {k: v for k, v in resp.headers.items() if k.lower() not in ("content-length", "content-encoding", "etag")}
+        await route.fulfill(status=resp.status, headers=headers, body=text.replace(old, new))
+
+    try:
+        if mutation:
+            await page.route("**/*", mutate)
+        await page.route("**/v1/live/sicar/viewport-v46?*", cells)
+        await page.route("**/v1/live/map-panel/*", lambda route: route.fulfill(status=502, json={"detail": "fixture_unavailable"}))
+        await page.goto(BASE, wait_until="domcontentloaded", timeout=30000)
+        await wait_runtime(page)
+        assert not mutation or applied, ("CLICK_MUTATION_NOT_APPLIED", mutation)
+        await set_dense(page)
+        cars = {f["properties"]["cod_imovel"] for f in feats}
+        first = await click_first_parcel(page, timeout_ms=timeout_ms)
+        assert first["car"] in cars, first
+        # Same sequence as viewport_flow: close on an empty pixel, then click the OTHER parcel.
+        empty = await proven_empty_map_point(page)
+        assert empty, "no provably empty map pixel found"
+        await page.mouse.click(empty["x"], empty["y"])
+        await page.locator(".rx46-card").wait_for(state="detached", timeout=1500)
+        second = await click_first_parcel(page, timeout_ms=timeout_ms, avoid=[first["car"]])
+        assert second["car"] in cars and second["car"] != first["car"], (first, second)
+        return [first, second]
+    finally:
+        await context.close()
+
+
+async def click_controls(browser) -> None:
+    report = {"layouts": {}, "mutations": {}}
+    for layout in CLICK_LAYOUTS:
+        clicked = await click_fixture_run(browser, layout)
+        assert layout != "edge" or all(c["pans"] for c in clicked), ("edge layout must need the pan on both clicks (premise)", clicked)
+        report["layouts"][layout] = clicked
+        print("RX_V46_CLICK_LAYOUT", layout, "PASS")
+    missed = []
+    for name, (tag, _, _) in CLICK_MUTATIONS.items():
+        try:
+            await click_fixture_run(browser, "concave", mutation=name, timeout_ms=8000)
+            outcome = "passed"
+        except AssertionError as exc:
+            msg = str(exc)
+            outcome = "caught" if tag in msg and "CLICK_MUTATION_" not in msg else "other: " + msg[:300]
+        report["mutations"][name] = outcome
+        print("RX_V46_CLICK_MUTATION", name, tag, outcome)
+        if outcome != "caught":
+            missed.append(name)
+    (OUT / "v46-click-controls.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    assert not missed, ("parcel click mutations not caught at their tag", missed)
+    print("RX_V46_CLICK_CONTROLS=PASS")
+
+
 async def main():
     OUT.mkdir(parents=True, exist_ok=True)
+    if "--click-controls" in sys.argv:
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            try:
+                await click_controls(browser)
+            finally:
+                await browser.close()
+        return
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
         OUT.joinpath("browser-executed.txt").write_text(

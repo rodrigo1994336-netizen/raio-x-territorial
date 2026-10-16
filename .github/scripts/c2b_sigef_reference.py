@@ -1,9 +1,12 @@
 """C2b: the SIGEF/INCRA reference reaches the map panel with its overlap, origin and honest state.
 
-Deterministic (no network): SICAR, SIGEF and OSM are patched. The measured case below is the
-live answer of /v1/live/property-identity/MG-3152006-BB48D05173F540CD9703B23088C3ABF4 on
-13/09/2026 (SIGEF/INCRA, espelho publico IBAMA/PAMGIA, 35 candidates), at the 6-decimal floored
-precision the server stores. overlap_ratio is the share of the CAR area covered by the parcel,
+Deterministic (no network): SICAR, the INCRA Acervo Fundiário transport and OSM are patched. The
+measured ranking case below is the live answer of
+/v1/live/property-identity/MG-3152006-BB48D05173F540CD9703B23088C3ABF4 on 13/09/2026 (then read from
+the PAMGIA mirror, 35 candidates), at the 6-decimal floored precision the server stores; the ranking
+contract does not depend on the source. F2: the real _sigef_candidates now asks the official INCRA
+layers (SIGEF particular/público, SNCI privado/público) through incra_acervo_f2.
+overlap_ratio is the share of the CAR area covered by the parcel,
 parcel_overlap_ratio the share of the parcel covered by the CAR, area_ratio parcel area / CAR area.
 """
 from __future__ import annotations
@@ -13,12 +16,13 @@ import threading
 import time
 from unittest.mock import MagicMock, patch
 
+import incra_acervo_f2 as acervo
 import property_identity_runtime as identity
 import portal_map_panel_v45 as panel
 
 CAR = "MG-3152006-BB48D05173F540CD9703B23088C3ABF4"
 LABEL = "PROJETO DE ASSENTAMENTO PAULISTA"
-ORIGIN = "SIGEF/INCRA · espelho público IBAMA/PAMGIA"
+ORIGIN = "Acervo Fundiário do INCRA (SIGEF)"
 SQUARE = {"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]]}
 CAR_ROW = {
     "ok": True,
@@ -36,7 +40,8 @@ MEASURED = (
     ("LOTE 26 - " + LABEL, 0.030202, 0.999761, 0.0302, False, 0.0302),
     ("LOTE 29 - " + LABEL, 0.026883, 0.999035, 0.0269, False, 0.0269),
 )
-ARCGIS_ERROR = {"error": {"code": 400, "extendedCode": -2147467259, "message": "Unable to complete operation.", "details": []}}
+SERVICE_EXCEPTION = (b"<?xml version='1.0' encoding=\"UTF-8\" ?><ServiceExceptionReport version=\"1.2.0\">"
+                     b"<ServiceException>msWFSGetFeature(): WFS server error. Invalid or Unsupported FILTER</ServiceException></ServiceExceptionReport>")
 NO_OSM = {"ok": True, "chosen": None, "items": [], "names": [], "conflict": False}
 
 
@@ -47,10 +52,10 @@ def candidate(name, overlap, area_ratio=1.0, inside=False, score=None, code="0d9
         "centroid_inside": inside, "score": overlap if score is None else score,
         "parcel_code": code, "property_code": "4170920078203", "registry": None,
         "municipality": "Pompéu", "uf": "MG",
-        "source": "SIGEF/INCRA — espelho público IBAMA/PAMGIA",
+        "source": ORIGIN,
         "display_kind": "REFERENCE", "validation_status": "UNVALIDATED", "panel_name_eligible": False,
         "reference_kind": "SIGEF_CADASTRAL", "map_anchor": "CADASTRAL_REFERENCE",
-        "origin_label": "SIGEF/INCRA — referência cadastral ainda não vinculada ao CAR",
+        "origin_label": ORIGIN + " — referência cadastral ainda não vinculada ao CAR",
     }
 
 
@@ -71,15 +76,54 @@ def run_panel(sig, car_row=CAR_ROW, sigef_mock=None, keep_cache=False, id_fetch=
         return panel._panel_sync(CAR), sigef
 
 
-def feature(name, geom, area=None, code="p"):
-    props = {"nome_area": name, "parcela_co": code}
-    if area is not None:
-        props["Shape__Area"] = area
-    return {"type": "Feature", "geometry": geom, "properties": props}
-
-
 def box(x0, y0, x1, y1):
     return {"type": "Polygon", "coordinates": [[[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]]]}
+
+
+def gml(theme, parcels):
+    """A GML2 FeatureCollection as the INCRA i3Geo WFS writes it. parcels: (fields, GeoJSON Polygon | raw GML)."""
+    members = []
+    for fields, geom in parcels:
+        if isinstance(geom, str):
+            geom_xml = geom
+        else:
+            coords = " ".join(f"{x},{y}" for x, y in geom["coordinates"][0])
+            geom_xml = ('<gml:Polygon srsName="EPSG:4326"><gml:outerBoundaryIs><gml:LinearRing><gml:coordinates>'
+                        f"{coords}</gml:coordinates></gml:LinearRing></gml:outerBoundaryIs></gml:Polygon>")
+        props = "".join(f"<ms:{k}>{v}</ms:{k}>" for k, v in fields.items())
+        members.append(f"<gml:featureMember><ms:{theme}><ms:msGeometry>{geom_xml}</ms:msGeometry>{props}</ms:{theme}></gml:featureMember>")
+    head = ('<?xml version="1.0" encoding="UTF-8" ?><wfs:FeatureCollection xmlns:ms="http://www.omsug.ca/osgis2004" '
+            'xmlns:wfs="http://www.opengis.net/wfs" xmlns:gml="http://www.opengis.net/gml">'
+            "<gml:boundedBy><gml:null>missing</gml:null></gml:boundedBy>")
+    return (head + "".join(members) + "</wfs:FeatureCollection>").encode("utf-8")
+
+
+def incra(by_theme=None, default=None, calls=None):
+    """Fake INCRA transport: body per theme prefix (a callable(url) is allowed), empty FeatureCollection otherwise."""
+    by_theme = by_theme or {}
+
+    def fetch(url, cancel_event=None):
+        if calls is not None:
+            calls.append(url)
+        theme = url.split("tema=", 1)[1].split("&", 1)[0]
+        for prefix, body in by_theme.items():
+            if theme.startswith(prefix):
+                body = body(url) if callable(body) else body
+                return body if isinstance(body, dict) else {"ok": True, "body": body}
+        if default is not None:
+            return default if isinstance(default, dict) else {"ok": True, "body": default}
+        return {"ok": True, "body": gml(theme, [])}
+    return fetch
+
+
+def sigef_fields(name, code):
+    return {"parcela_codigo": code, "codigo_imovel": "9501811074685", "status": "CERTIFICADA", "data_aprovacao": "2025-06-18",
+            "nome_area": name, "rt": "SENTINELA", "art": "SENTINELA", "registro_matricula": "SENTINELA"}
+
+
+def candidates(fetch, geom=SQUARE):
+    with patch.object(acervo, "curl_fetch", fetch), patch.object(acervo.time, "sleep", lambda _s: None):
+        return identity._sigef_candidates(geom, [0, 0, 1, 1], uf="MG")
 
 
 def share_contract():
@@ -88,55 +132,69 @@ def share_contract():
         assert identity._share(k / 1_000_000) == k / 1_000_000, k
     assert identity._share(0.5005) == 0.5005 and identity._share(0.9999996) < 1.0
     assert identity._share(float("nan")) == 0.0 and identity._share(1.7) == 1.0
+    assert acervo.floor_share(0.9999996) < 1.0 and acervo.floor_share(0.5005) == 0.5005
 
 
 def candidates_contract():
-    """The real _sigef_candidates keeps both shares, never rounds up to 100% and reports truncation."""
-    parcel_a = box(0, 0, 0.9999996, 1)
-    parcel_b = box(0.5, 0, 3, 1)
-    raw = {"ok": True, "json": {"type": "FeatureCollection", "features": [
-        feature("PARCELA QUASE TOTAL", parcel_a, code="a"), feature("PARCELA VIZINHA", parcel_b, code="b"),
-    ], "exceededTransferLimit": True, "properties": {"exceededTransferLimit": True}}}
-    curl = MagicMock(return_value=raw)
-    with patch.object(identity, "_curl", curl):
-        out = identity._sigef_candidates(SQUARE, [0, 0, 1, 1])
-    url = curl.call_args[0][0]
-    assert "orderByFields=Shape__Area+DESC" in url and "Shape__Area" in url.split("outFields=", 1)[1], url
-    assert out["ok"] is True and out["truncated"] is True and out["truncated_relevant"] is True, out
+    """The real _sigef_candidates asks the official INCRA layers, keeps both shares and never rounds up to 100%."""
+    calls = []
+    body = gml("certificada_sigef_particular_mg", [
+        (sigef_fields("PARCELA QUASE TOTAL", "a"), box(0, 0, 0.9999996, 1)),
+        (sigef_fields("PARCELA VIZINHA", "b"), box(0.5, 0, 3, 1)),
+    ])
+    out = candidates(incra({"certificada_sigef_particular": body}, calls=calls))
+    themes = sorted(u.split("tema=", 1)[1].split("&", 1)[0] for u in calls)
+    assert themes == ["certificada_sigef_particular_mg", "certificada_sigef_publico_mg", "imoveiscertificados_privado_mg", "imoveiscertificados_publico_mg"], themes
+    assert all("outputFormat=GML2" in u and "bbox=" in u and "maxFeatures=500" in u and "pamgia" not in u for u in calls), calls
+    assert out["ok"] is True and out["truncated"] is False and out["partial"] is False, out
     by = {x["name"]: x for x in out["items"]}
     near = by["PARCELA QUASE TOTAL"]
     assert 0.9999 <= near["overlap_ratio"] < 1.0, near
     assert 0.9999 <= near["parcel_overlap_ratio"] <= 1.0, near
     side = by["PARCELA VIZINHA"]
-    assert abs(side["overlap_ratio"] - 0.5) < 1e-6 and abs(side["parcel_overlap_ratio"] - 0.2) < 1e-6, side
-    with patch.object(identity, "_curl", return_value={"ok": True, "json": {"features": []}}):
-        empty = identity._sigef_candidates(SQUARE, [0, 0, 1, 1])
-        assert empty["ok"] is True and empty["truncated"] is False, empty
+    # Geodesic GRS80 areas: edges are geodesics, so a lon/lat box share differs from the planar one by < 0.02%.
+    assert abs(side["overlap_ratio"] - 0.5) < 2e-4 and abs(side["parcel_overlap_ratio"] - 0.2) < 2e-4, side
+    assert near["reference_kind"] == "SIGEF_CADASTRAL" and near["origin"] == ORIGIN, near
+    assert "SENTINELA" not in repr(out), "a personal/registry field reached the card candidates"
+    empty = candidates(incra())
+    assert empty["ok"] is True and empty["items"] == [] and empty["truncated"] is False, empty
 
 
-def arcgis_error_contract():
-    """HTTP 200 + {"error":...} (overload, token required, rejected query) is not an answer."""
-    for body in (ARCGIS_ERROR, [], {"type": "FeatureCollection"}, {"features": None}):
-        with patch.object(identity, "_curl", return_value={"ok": True, "json": body}):
-            sig = identity._sigef_candidates(SQUARE, [0, 0, 1, 1])
+def service_error_contract():
+    """HTTP 200 with an empty body, an exception report or invalid XML is not an answer."""
+    for body in (b"", SERVICE_EXCEPTION, b"<html>erro</html", b"<ows:ExceptionReport xmlns:ows='x'>WFS request not enabled</ows:ExceptionReport>"):
+        sig = candidates(incra(default=body))
         assert sig["ok"] is False and sig["items"] == [], (body, sig)
     clear()
-    curl = MagicMock(return_value={"ok": True, "json": ARCGIS_ERROR})
-    with patch.object(identity, "_curl", curl), \
+    calls = []
+    fetch = incra(default=SERVICE_EXCEPTION, calls=calls)
+    with patch.object(acervo, "curl_fetch", fetch), patch.object(acervo.time, "sleep", lambda _s: None), \
             patch.object(identity, "fetch_car_live_resilient", return_value=CAR_ROW), \
             patch.object(identity, "_osm_identity_candidate", return_value=NO_OSM), \
             patch.object(panel, "fetch_car_live_resilient", return_value=CAR_ROW):
         result = panel._panel_sync(CAR)
         assert result["sigef_reference_state"] == "unavailable" and result["sigef_reference"] is None, result
         assert CAR not in panel._CACHE and CAR not in identity._CACHE, "an error reply was cached as an answer"
-        # A burst of clicks shares the attempt instead of repeating SICAR + SIGEF.
+        first = len(calls)
+        assert first == 8, calls  # 4 layers, one automatic retry each
+        # A burst of clicks shares the attempt instead of repeating SICAR + INCRA.
         again = panel._panel_sync(CAR)
-        assert again["sigef_reference_state"] == "unavailable" and curl.call_count == 1, curl.call_count
-        # The explicit client retry forgets that memory, so it really asks SIGEF again.
+        assert again["sigef_reference_state"] == "unavailable" and len(calls) == first, len(calls)
+        # The explicit client retry forgets that memory, so it really asks INCRA again.
         panel.forget_unanswered(CAR)
         panel._panel_sync(CAR)
-        assert curl.call_count == 2, curl.call_count
+        assert len(calls) == 2 * first, len(calls)
     clear()
+
+
+def disabled_contract():
+    """RX_INCRA_ACERVO_ENABLED off: nothing is asked and the card is pending, never 'none'."""
+    calls = []
+    with patch.dict("os.environ", {"RX_INCRA_ACERVO_ENABLED": "0"}):
+        sig = candidates(incra(calls=calls))
+    assert sig["ok"] is False and sig["detail"] == "incra_acervo_disabled" and not calls, (sig, calls)
+    result, _ = run_panel(sig)
+    assert result["sigef_reference_state"] == "unavailable", result
 
 
 def measured_case_contract():
@@ -195,43 +253,63 @@ def truncated_contract():
     assert result["sigef_reference_others"] == 1 and result["sigef_reference_others_complete"] is False, result
 
 
-def truncation_bound_contract():
-    """Largest parcels first: a capped page whose smallest parcel is below the threshold is a complete answer."""
-    tiny = [feature(f"LOTE {i}", box(0.001 * i, 0, 0.001 * i + 0.0005, 0.01), area=0.2 - i * 0.001) for i in range(80)]
-    tiny[0] = feature("LOTE GRANDE", box(0, 0, 0.4, 1), area=0.4)
-    raw = {"ok": True, "json": {"features": tiny, "exceededTransferLimit": True}}
-    with patch.object(identity, "_curl", return_value=raw):
-        sig = identity._sigef_candidates(SQUARE, [0, 0, 1, 1])
-    assert sig["truncated"] is True and sig["truncated_relevant"] is False, sig
+def truncation_split_contract():
+    """count == maxFeatures: the box is split; still cut after two levels -> not answered, never 'none'."""
+    lots = [(sigef_fields(f"LOTE {i}", f"l{i}"),
+             box(0.001 * (i % 100), 0.001 * (i // 100), 0.001 * (i % 100) + 0.0005, 0.001 * (i // 100) + 0.0005)) for i in range(500)]
+    full = gml("certificada_sigef_particular_mg", lots)
+    sig = candidates(incra({"certificada_sigef_particular": full}))
+    assert sig["ok"] is False and sig["items"] == [] and "truncated_after_split" in sig["detail"], sig
     result, _ = run_panel(sig)
-    assert result["sigef_reference_state"] == "none", result
-    # Unsorted (or no Shape__Area): the cut cannot be proven harmless.
-    shuffled = list(reversed(tiny))
-    with patch.object(identity, "_curl", return_value={"ok": True, "json": {"features": shuffled, "exceededTransferLimit": True}}):
-        assert identity._sigef_candidates(SQUARE, [0, 0, 1, 1])["truncated_relevant"] is True
-    # The smallest returned parcel could still cover half of the CAR: still incomplete.
-    big = [feature(f"GLEBA {i}", box(2 + i, 2, 3 + i, 3), area=1.0) for i in range(80)]
-    with patch.object(identity, "_curl", return_value={"ok": True, "json": {"features": big, "exceededTransferLimit": True}}):
-        sig = identity._sigef_candidates(SQUARE, [0, 0, 1, 1])
-    assert sig["truncated_relevant"] is True, sig
-    result, _ = run_panel(sig)
-    assert result["sigef_reference_state"] == "incomplete", result
+    assert result["sigef_reference_state"] == "unavailable", result
+    # First answer cut, quadrants complete: merged once each (a parcel crossing quadrants is not counted twice).
+    whole = gml("certificada_sigef_particular_mg", [(sigef_fields("GLEBA INTEIRA", "g"), box(0, 0, 1, 1))])
+    first = [True]
+
+    def body(_url):
+        if first[0]:
+            first[0] = False
+            return full
+        return whole
+    sig = candidates(incra({"certificada_sigef_particular": body}))
+    assert sig["ok"] is True and [x["name"] for x in sig["items"]] == ["GLEBA INTEIRA"], sig
 
 
 def invalid_geometry_contract():
     """A self-intersecting CAR is repaired before measuring; an unmeasurable parcel never yields 'none'."""
     bowtie = {"type": "Polygon", "coordinates": [[[0, 0], [1, 1], [1, 0], [0, 1], [0, 0]]]}
-    raw = {"ok": True, "json": {"features": [feature("METADE ESQUERDA", box(0, 0, 0.5, 1), area=0.5)]}}
-    with patch.object(identity, "_curl", return_value=raw):
-        sig = identity._sigef_candidates(bowtie, [0, 0, 1, 1])
+    half = gml("certificada_sigef_particular_mg", [(sigef_fields("METADE ESQUERDA", "m"), box(0, 0, 0.5, 1))])
+    sig = candidates(incra({"certificada_sigef_particular": half}), geom=bowtie)
     assert sig["ok"] is True and sig["partial"] is False, sig
-    assert [round(x["overlap_ratio"], 6) for x in sig["items"]] == [0.5], sig
-    broken = {"ok": True, "json": {"features": [feature("PARCELA ILEGIVEL", {"type": "Polygon", "coordinates": [[[0, 0], [1]]]})]}}
-    with patch.object(identity, "_curl", return_value=broken):
-        sig = identity._sigef_candidates(SQUARE, [0, 0, 1, 1])
-    assert sig["ok"] is True and sig["partial"] is True and sig["items"] == [], sig
+    assert [round(x["overlap_ratio"], 3) for x in sig["items"]] == [0.5], sig
+    broken_geom = ("<gml:Polygon><gml:outerBoundaryIs><gml:LinearRing><gml:coordinates>0,0 1"
+                   "</gml:coordinates></gml:LinearRing></gml:outerBoundaryIs></gml:Polygon>")
+    broken = gml("certificada_sigef_particular_mg", [(sigef_fields("PARCELA ILEGIVEL", "x"), broken_geom)])
+    sig = candidates(incra({"certificada_sigef_particular": broken}))
+    assert sig["ok"] is False and sig["items"] == [], sig
     result, _ = run_panel(sig)
-    assert result["sigef_reference_state"] == "incomplete", result
+    assert result["sigef_reference_state"] == "unavailable", result
+
+
+def snci_contract():
+    """F2: an SNCI certification is an INCRA reference too, with its own kind, origin and number (never the title)."""
+    fields = {"num_certificacao": "061308000091-60", "data_certificacao": "2013-08-06 10:29:03", "qtd_area_peca_tecnica": "178.7390",
+              "nome_imovel": "IMOVEL DE REFERENCIA 01", "cod_profissional_credenciado": "SENTINELA", "num_processo": "SENTINELA"}
+    snci = gml("imoveiscertificados_privado_mg", [(fields, box(0, 0, 1, 1))])
+    sig = candidates(incra({"imoveiscertificados_privado": snci}))
+    assert sig["ok"] is True and len(sig["items"]) == 1 and "SENTINELA" not in repr(sig), sig
+    result, _ = run_panel(sig)
+    ref = result["sigef_reference"]
+    assert result["sigef_reference_state"] == "found" and ref["kind"] == "SNCI_CADASTRAL", result
+    assert ref["origin"] == "Acervo Fundiário do INCRA (SNCI)" and ref["certification"] == "061308000091-60", ref
+    assert ref["car_overlap_ratio"] == 1.0 and ref["detail"] == "nº 061308000091-60 · 06/08/2013", ref
+    assert ref["label"] == "IMOVEL DE REFERENCIA 01", ref
+    assert result["validated_name"] is None and result["panel_name_eligible"] is False, result
+    # One layer did not answer but a parcel covering the CAR was found: shown, the count of others is a floor.
+    sig = candidates(incra({"imoveiscertificados_privado": snci, "certificada_sigef_publico": {"ok": False, "detail": "timeout"}}))
+    assert sig["ok"] is True and sig["partial"] is True, sig
+    result, _ = run_panel(sig)
+    assert result["sigef_reference_state"] == "found" and result["sigef_reference_others_complete"] is False, result
 
 
 def threshold_contract():
@@ -307,13 +385,15 @@ def main():
     try:
         share_contract()
         candidates_contract()
-        arcgis_error_contract()
+        service_error_contract()
+        disabled_contract()
         measured_case_contract()
         unavailable_contract()
         sicar_failure_contract()
         truncated_contract()
-        truncation_bound_contract()
+        truncation_split_contract()
         invalid_geometry_contract()
+        snci_contract()
         threshold_contract()
         not_queried_contract()
         cancelled_contract()

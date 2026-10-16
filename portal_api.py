@@ -7,12 +7,33 @@ import os
 from urllib.parse import urlencode
 
 import httpx
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 from fastapi.responses import HTMLResponse, Response, JSONResponse, RedirectResponse
 from shapely.geometry import Point, shape
 
 from report_api import app
 from deploy_app import SICAR, fetch_car_live
+import car_resilient  # depois do deploy_app: o install_global_patch dele reimporta este módulo
+from external_process_lifecycle import RequestDisconnected, wait_for_cancelling_processes
+from sicar_lookup_http import lookup_http_error
+
+
+def _desistiu():
+    return HTTPException(status_code=499, detail='Consulta encerrada: o cliente desistiu.')
+
+
+async def _car_para_exportar(car_code: str, request=None):
+    # Dentro do escopo: a desistência do cliente derruba os curls desta busca e impede o próximo. O teto é o
+    # pior caso derivado pelo car_resilient (o nome fetch_car_live resolve para a busca resiliente no
+    # arranque) — maior que a cadeia real, então não corta resposta que hoje chega.
+    try:
+        car = await wait_for_cancelling_processes(asyncio.to_thread(fetch_car_live, car_code.upper()),
+                                                  car_resilient.WORST_CASE_SECONDS, request=request)
+    except RequestDisconnected:
+        raise _desistiu()
+    if not car.get('ok'):
+        raise lookup_http_error(car)
+    return car
 
 APP_PORTAL_VERSION = '0.18.0-operational-portal'
 
@@ -65,6 +86,15 @@ def _kml_geometry(geometry: dict) -> str:
 
 
 async def _reverse_uf(lat: float, lon: float) -> str:
+    # W1a: the embedded IBGE state mesh answers locally. Nominatim stays only for points
+    # outside Brazil or within the measured border-ambiguity band (uf_locator_br).
+    try:
+        import uf_locator_br
+        local_uf = uf_locator_br.uf_for_point(float(lat), float(lon))
+    except Exception:
+        local_uf = None
+    if local_uf:
+        return local_uf
     url = os.getenv('NOMINATIM_REVERSE_URL', 'https://nominatim.openstreetmap.org/reverse')
     params = {'format':'jsonv2','lat':str(lat),'lon':str(lon),'zoom':'8','addressdetails':'1'}
     headers = {'User-Agent':'Raio-X-Territorial/0.18 (territorial-analysis)'}
@@ -132,20 +162,16 @@ async def resolve_point(lat: float, lon: float):
 
 
 @app.get('/v1/exports/property/{car_code}/geojson')
-async def export_geojson(car_code: str):
-    car = await asyncio.to_thread(fetch_car_live, car_code.upper())
-    if not car.get('ok'):
-        raise HTTPException(status_code=404 if car.get('not_found') else 502, detail='CAR não localizado ou SICAR indisponível.')
+async def export_geojson(car_code: str, request: Request = None):
+    car = await _car_para_exportar(car_code, request)
     feature = {'type':'Feature','geometry':car.get('geometry'),'properties':car.get('properties') or {}}
     fc = {'type':'FeatureCollection','features':[feature]}
     return Response(content=json.dumps(fc, ensure_ascii=False), media_type='application/geo+json', headers={'Content-Disposition':f'attachment; filename="raio_x_{car_code.upper()}.geojson"'})
 
 
 @app.get('/v1/exports/property/{car_code}/kml')
-async def export_kml(car_code: str):
-    car = await asyncio.to_thread(fetch_car_live, car_code.upper())
-    if not car.get('ok'):
-        raise HTTPException(status_code=404 if car.get('not_found') else 502, detail='CAR não localizado ou SICAR indisponível.')
+async def export_kml(car_code: str, request: Request = None):
+    car = await _car_para_exportar(car_code, request)
     props = car.get('properties') or {}
     geom = _kml_geometry(car.get('geometry') or {})
     code = html.escape(str(props.get('cod_imovel') or car_code.upper()))
@@ -172,11 +198,11 @@ function toast(t){$('#toast').textContent=t;$('#toast').classList.remove('hidden
 function fmt(v){let n=Number(String(v??'').replace(',','.'));return Number.isFinite(n)?n.toLocaleString('pt-BR',{maximumFractionDigits:3})+' ha':'-'}
 function carPattern(s){return /^[A-Z]{2}-\d{7}-[A-F0-9]{32}$/i.test(s.trim())}
 function showProperty(p,g){current={...p,geometry:g};$('#name').textContent=`Imóvel rural • ${p.municipality||'-'}/${p.uf||'-'}`;$('#meta').textContent=p.car_code||'-';$('#area').textContent=fmt(p.area_ha);$('#status').textContent=p.status||'-';$('#condition').textContent=p.condition||'-';$('#card').classList.remove('hidden');if(layer)map.removeLayer(layer);if(g){layer=L.geoJSON(g,{style:{color:'#63e6a5',weight:3,fillColor:'#63e6a5',fillOpacity:.12}}).addTo(map);map.fitBounds(layer.getBounds(),{padding:[35,35]})}}
-async function resolvePoint(lat,lon){toast('Localizando imóvel no SICAR…');let r=await fetch(`/v1/live/resolve?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}`);let d=await r.json();if(!r.ok)throw new Error(d.detail||'Imóvel não localizado');showProperty(d.property,d.geometry)}
-async function loadCar(code){toast('Consultando CAR real…');let r=await fetch(`/v1/live/car/${encodeURIComponent(code)}`);let d=await r.json();if(!r.ok)throw new Error((d.detail&&JSON.stringify(d.detail))||'CAR não localizado');let c=d.car||{},p=c.properties||{};showProperty({car_code:p.cod_imovel,municipality:p.municipio,uf:p.uf,area_ha:p.area,status:p.status_imovel,condition:p.condicao,type:p.tipo_imovel,fiscal_modules:p.m_fiscal},c.geometry)}
+async function resolvePoint(lat,lon){toast('Localizando imóvel no SICAR…');let r=await fetch(`/v1/live/resolve?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}`);let d=await r.json().catch(()=>null);if(!r.ok||!d||!d.property){toast(r.status===404&&d&&typeof d.detail==='string'&&/localizado neste ponto/.test(d.detail)?'Nenhum imóvel do CAR neste ponto.':'Consulta ao SICAR pendente. Tente de novo em instantes.');return false}showProperty(d.property,d.geometry)}
+async function loadCar(code){toast('Consultando CAR real…');let r=await fetch(`/v1/live/car/${encodeURIComponent(code)}`);let d=await r.json().catch(()=>null);if(!r.ok){const f=d&&d.detail&&d.detail.car;toast(r.status===404&&f&&f.not_found===true?'CAR não localizado no SICAR.':'Consulta ao SICAR pendente. Tente de novo em instantes.');return false}if(!d||!d.car){toast('Consulta ao SICAR pendente. Tente de novo em instantes.');return false}let c=d.car,p=c.properties||{};showProperty({car_code:p.cod_imovel,municipality:p.municipio,uf:p.uf,area_ha:p.area,status:p.status_imovel,condition:p.condicao,type:p.tipo_imovel,fiscal_modules:p.m_fiscal,created_at:p.dat_criacao,updated_at:p.data_atualizacao},c.geometry)}
 map.on('click',e=>resolvePoint(e.latlng.lat,e.latlng.lng).catch(x=>toast(x.message)));$('#go').onclick=()=>{let q=$('#q').value.trim().toUpperCase();if(!carPattern(q)){toast('Cole um código CAR válido ou clique no mapa.');return}loadCar(q).catch(x=>toast(x.message))};$('#q').addEventListener('keydown',e=>{if(e.key==='Enter')$('#go').click()});
-function sourceCard(name,obj){let ok=obj&&obj.ok===true,unknown=!obj||obj.ok==null;let cls=ok?'ok':unknown?'warn':'bad';let st=ok?'CONSULTADA':unknown?'NÃO CONSULTADA':'INDISPONÍVEL';let count=obj&&(obj.exact?.occurrence_count??obj.occurrence_count??obj.feature_count_bbox??obj.intersection_count);return `<div class="source"><small>${name}</small><b class="${cls}">${st}${count!=null?' • '+count:''}</b></div>`}
-function renderAnalysis(d){let a=d.analysis||{},car=a.car||{},ide=a.ide_layers||{},cons=a.territorial_constraints||{};let sourceHtml=[sourceCard('SICAR',car),sourceCard('SIGEF',a.sigef),sourceCard('IBAMA Embargos',a.embargos_ibama),sourceCard('IBAMA Autos',a.autos_ibama),sourceCard('ANM / Mineração',a.anm),sourceCard('INPE PRODES',a.prodes),sourceCard('INPE Fogo',a.fire_live),sourceCard('Outorgas',a.water_mg),sourceCard('Pivôs ANA',a.pivots_ana),sourceCard('NASA Clima',a.climate_nasa)].join('');Object.entries(ide).forEach(([k,v])=>sourceHtml+=sourceCard('IDE '+k,v));let cservices=(cons.services||{});Object.entries(cservices).forEach(([k,v])=>sourceHtml+=sourceCard(v.label||k,v));let findings=[];let add=(title,text,level='')=>findings.push(`<div class="row"><b class="${level}">${title}</b><br><span>${text}</span></div>`);let emb=a.embargos_ibama?.exact;if(emb?.occurrence_count)add('Embargo IBAMA',`${emb.occurrence_count} ocorrência(s) • ${emb.area_unique_ha||0} ha de interseção`,'bad');let anm=a.anm?.exact;if(anm?.occurrence_count)add('Processo minerário',`${anm.occurrence_count} processo(s) • ${anm.area_unique_ha||0} ha de interseção`,'warn');let pro=a.prodes?.exact;if(pro?.occurrence_count)add('PRODES',`${pro.occurrence_count} ocorrência(s) • ${pro.area_unique_ha||0} ha. PRODES não prova, isoladamente, infração.`,'warn');let fire=a.fire_live;if(fire?.inside_count||fire?.near_count)add('Fogo recente',`${fire.inside_count||0} foco(s) dentro • ${fire.near_count||0} próximo(s)`,'bad');if(!findings.length)add('Leitura inicial','Nenhuma ocorrência crítica foi exibida nas fontes que retornaram dados. Fontes indisponíveis continuam como ponto cego; isso não equivale a regularidade.','ok');$('#pbody').innerHTML=`<div class="hero"><span class="eyebrow">CENTRO DE DECISÃO</span><h3>${current?.municipality||''}/${current?.uf||''}</h3><p>Consulta online a fontes oficiais. Resultado territorial de triagem; não substitui matrícula, cadeia dominial, laudo técnico ou parecer jurídico.</p><div class="downloads"><button class="btn" onclick="downloadPDF()">BAIXAR PDF REAL</button><button class="ghost" onclick="downloadKML()">KML</button><button class="ghost" onclick="downloadGeo()">GeoJSON</button></div></div><div class="section"><h4>Fontes consultadas</h4><div class="sources">${sourceHtml}</div></div><div class="section"><h4>Pontos que exigem atenção</h4>${findings.join('')}</div>`}
+function sourceCard(name,obj){let ok=obj&&obj.ok===true,unknown=!obj||obj.ok==null;let cls=ok?'ok':unknown?'warn':'bad';let st=ok?'CONSULTADA':'CONSULTA PENDENTE';let count=obj&&(obj.exact?.occurrence_count??obj.occurrence_count??obj.feature_count_bbox??obj.intersection_count);return `<div class="source"><small>${name}</small><b class="${cls}">${st}${count!=null?' • '+count:''}</b></div>`}
+function renderAnalysis(d){let a=d.analysis||{},car=a.car||{},ide=a.ide_layers||{},cons=a.territorial_constraints||{};let sourceHtml=[sourceCard('SICAR',car),sourceCard('SIGEF',a.sigef),sourceCard('IBAMA Embargos',a.embargos_ibama),sourceCard('IBAMA Autos',a.autos_ibama),sourceCard('ANM / Mineração',a.anm),sourceCard('INPE PRODES',a.prodes?.reading?.state==='pending'?{ok:false}:a.prodes),sourceCard('INPE Fogo',a.fire_live),sourceCard('Outorgas',a.water_mg),sourceCard('Pivôs ANA',a.pivots_ana),sourceCard('NASA Clima',a.climate_nasa)].join('');Object.entries(ide).forEach(([k,v])=>sourceHtml+=sourceCard('IDE '+k,v));let cservices=(cons.services||{});Object.entries(cservices).forEach(([k,v])=>sourceHtml+=sourceCard(v.label||k,v));let findings=[];let add=(title,text,level='')=>findings.push(`<div class="row"><b class="${level}">${title}</b><br><span>${text}</span></div>`);let emb=a.embargos_ibama?.exact;if(emb?.occurrence_count)add('Embargo IBAMA',`${emb.occurrence_count} ocorrência(s) • ${emb.area_unique_ha||0} ha de interseção`,'bad');let anm=a.anm?.exact;if(anm?.occurrence_count)add('Processo minerário',`${anm.occurrence_count} processo(s) • ${anm.area_unique_ha||0} ha de interseção`,'warn');let pro=a.prodes?.exact,prd=a.prodes?.reading,rxe=v=>String(v??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])),prdb=prd?[prd.boundary_text,prd.accumulated_text,prd.other_classes_text].filter(Boolean).map(x=>'<br><small>'+rxe(x)+'</small>').join(''):'';if(prd&&prd.state==='found')add('PRODES',rxe(prd.inside_text)+' PRODES não prova, isoladamente, infração.'+prdb,'warn');else if(prd&&prd.state==='pending')add('PRODES',rxe(prd.inside_text)+prdb);else if(prd&&prdb)add('PRODES',rxe(prd.inside_text)+prdb);else if(!prd&&pro?.occurrence_count)add('PRODES',`${pro.occurrence_count} ocorrência(s) • ${pro.area_unique_ha||0} ha. PRODES não prova, isoladamente, infração.`,'warn');let fire=a.fire_live;if(fire?.inside_count||fire?.near_count)add('Fogo recente',`${fire.inside_count||0} foco(s) dentro • ${fire.near_count||0} próximo(s)`,'bad');if(!findings.length)add('Leitura inicial','Nada crítico nas fontes que responderam — isso não quer dizer que o imóvel esteja regular.','ok');$('#pbody').innerHTML=`<div class="hero"><span class="eyebrow">CENTRO DE DECISÃO</span><h3>${current?.municipality||''}/${current?.uf||''}</h3><p>Consulta online a fontes oficiais. Resultado territorial de triagem; não substitui matrícula, cadeia dominial, laudo técnico ou parecer jurídico.</p><div class="downloads"><button class="btn" onclick="downloadPDF()">BAIXAR PDF REAL</button><button class="ghost" onclick="downloadKML()">KML</button><button class="ghost" onclick="downloadGeo()">GeoJSON</button></div></div><div class="section"><h4>Fontes consultadas</h4><div class="sources">${sourceHtml}</div></div><div class="section"><h4>Pontos que exigem atenção</h4>${findings.join('')}</div>`}
 async function analyze(){if(!current?.car_code)return;$('#panel').classList.remove('hidden');$('#ptitle').textContent=current.car_code;$('#pbody').innerHTML='<div class="loader"><div class="spin"></div><b>Cruzando fontes oficiais…</b><p>CAR, SIGEF, IBAMA, ANM, PRODES, fogo, água, clima, solo, aptidão e restrições territoriais.</p></div>';try{let r=await fetch(`/v1/reports/property/${encodeURIComponent(current.car_code)}/meta`);let d=await r.json();if(!r.ok)throw new Error(d.detail||'Falha na análise');renderAnalysis(d)}catch(e){$('#pbody').innerHTML=`<div class="row"><b class="bad">Falha parcial</b><br><span>${e.message}</span></div>`}}
 function go(u){window.open(u,'_blank')}function downloadPDF(){go(`/v1/reports/property/${encodeURIComponent(current.car_code)}`)}function downloadKML(){go(`/v1/exports/property/${encodeURIComponent(current.car_code)}/kml`)}function downloadGeo(){go(`/v1/exports/property/${encodeURIComponent(current.car_code)}/geojson`)}
 $('#analyze').onclick=analyze;$('#back').onclick=()=>$('#panel').classList.add('hidden');$('#kml').onclick=downloadKML;$('#geo').onclick=downloadGeo;window.downloadPDF=downloadPDF;window.downloadKML=downloadKML;window.downloadGeo=downloadGeo;
@@ -191,3 +217,16 @@ def portal_root():
 @app.get('/v1/portal/status')
 def portal_status():
     return {'ok':True,'portal_version':APP_PORTAL_VERSION,'mode':'live','cost_mode':'zero-cost-public-sources'}
+
+
+# W1a: boot page while the deferred modules load, then the final HTML with hashed,
+# immutable JS/CSS and local Leaflet. Must be installed here, before the app starts.
+import portal_boot_assets_w1a  # noqa: E402
+
+portal_boot_assets_w1a.install(app)
+
+# O2: tela nova em /novo (app próprio, sem âncora no PORTAL_HTML). Instalada aqui para abrir
+# mesmo enquanto os módulos do portal carregam em segundo plano.
+import tela_nova_o2  # noqa: E402
+
+tela_nova_o2.install(app)

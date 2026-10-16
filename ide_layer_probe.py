@@ -3,6 +3,8 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import subprocess
+
+from external_process_lifecycle import ManagedProcessCancelled, in_current_scope, run_managed_process
 from urllib.parse import urlencode
 from shapely.geometry import shape
 from pyproj import Geod
@@ -33,9 +35,11 @@ def _area_ha(g):
 
 def _curl_json(url:str,max_time=18):
     try:
-        p=subprocess.run(['curl','-sS','--retry','1','--retry-delay','1','--connect-timeout','6','--max-time',str(max_time),'-A','Raio-X-Territorial/0.23-layer-probe',url],capture_output=True,timeout=max_time+4)
+        p=run_managed_process(['curl','-sS','--retry','1','--retry-delay','1','--connect-timeout','6','--max-time',str(max_time),'-A','Raio-X-Territorial/0.23-layer-probe',url],timeout_seconds=max_time+4)
     except subprocess.TimeoutExpired as e:
         return {'ok':False,'detail':f'TimeoutExpired:{e}'}
+    except ManagedProcessCancelled:
+        return {'ok':False,'cancelled':True,'detail':'request_cancelled'}
     if p.returncode:return {'ok':False,'detail':p.stderr.decode('utf-8','ignore')[:300]}
     raw=p.stdout
     if len(raw)>12_000_000:
@@ -100,8 +104,11 @@ def probe_benchmark(car_geometry:dict,bbox:list[float]):
 
     # The useful state layers are independent: query them concurrently. This turns
     # the old sum-of-latencies path into roughly the latency of the slowest source.
+    # ThreadPoolExecutor.submit NÃO copia o contexto (asyncio.to_thread copia): sem in_current_scope o escopo
+    # de cancelamento não chega ao trabalhador e o curl dele sobreviveria ao prazo e à desistência do cliente.
     with ThreadPoolExecutor(max_workers=len(LAYERS)) as ex:
-        jobs={ex.submit(query_layer,layer,bbox,car_geometry):key for key,layer in LAYERS.items()}
+        jobs={ex.submit(in_current_scope(query_layer),layer,bbox,car_geometry):key
+              for key,layer in LAYERS.items()}
         for fut in as_completed(jobs):
             key=jobs[fut];layer=LAYERS[key]
             try:result=fut.result()

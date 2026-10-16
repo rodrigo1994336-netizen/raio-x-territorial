@@ -11,7 +11,8 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, Response
 
-from deploy_app import analyze_car, fetch_car_live, _safe_summary, TEST_CAR, query_embargos, query_prodes, query_sigef
+from deploy_app import analyze_car, fetch_car_live, _safe_summary, TEST_CAR, query_embargos, query_prodes, query_sigef, finalize_prodes
+import source_layer_guard as layer_guard
 from anm_resilient import query_anm_curl_exact
 from fire_live import analyze_fire_near_property
 from live_extra_sources import query_ibama_autos
@@ -22,10 +23,22 @@ from climate_nasa import query_climate_nasa
 from ide_catalog import benchmark_targets, search_catalog
 from ide_layer_probe import probe_benchmark
 from critical_minerals import query_critical_minerals
+from solo_nacional_t1 import WFS_DEADLINE_S as _SOLO_DEADLINE_S, pending_result as _solo_pending, query_solo_nacional, compact_for_screen as _solo_screen
 from live_report_adapter_v8 import generate_live_report
+from sicar_lookup_http import lookup_http_error
 
 APP_VERSION='0.18.6-memory-hardened'
 app = FastAPI(title='Raio-X Territorial Report API', version=APP_VERSION)
+
+# M1: este app é o servido pelos dois serviços (o portal importa daqui). Linha RX_PROC_STATS no log no
+# arranque e a cada RX_PROC_STATS_MIN minutos; rota GET /v1/diag/processos só com RX_DIAG_TOKEN; e, no
+# desligamento, os processos externos gerenciados param. No portal a limpeza já vinha dos módulos
+# portal_* e property_identity_runtime (instalam neste mesmo app); o serviço de relatório não tinha.
+import external_process_lifecycle as _process_lifecycle  # noqa: E402
+import rx_proc_stats as _proc_stats  # noqa: E402
+
+_process_lifecycle.install_shutdown_cleanup(app)
+_proc_stats.install(app)
 
 # Heavy live-analysis objects can contain many GeoJSON features/geometries. Keep the
 # cache deliberately tiny on Render's 512 MB instances and never deepcopy them.
@@ -63,6 +76,7 @@ def _report_summary(result: dict):
         'sgb_hit_layers':[{'layer':x.get('layer'),'title':x.get('title'),'minerals':x.get('minerals'),'hit_count':x.get('hit_count')} for x in (msgb.get('hit_layers') or [])[:20]],
         'detail':msgb.get('detail')
     }
+    base['terra_nacional']=_solo_screen(result.get('terra_nacional'))
     base['cache']={'ttl_seconds':CACHE_TTL_SECONDS,'max_items':CACHE_MAX_ITEMS,'deepcopy':False}
     return base
 
@@ -113,18 +127,28 @@ def _cache_put(code:str,result:dict):
     _prune_cache()
 
 
+async def _reapply_prodes_reading(result:dict):
+    # F2: depois de trocar result['prodes'] pela nova tentativa, refaz a leitura única
+    # ('exact' só dentro do imóvel + 'reading') para relatório, portal, WhatsApp e monitoramento.
+    import deploy_app
+    await asyncio.to_thread(deploy_app._apply_prodes_reading,result)
+    return result
+
+
 async def _retry_failed_core(result:dict):
     car=result.get('car') or {}; bbox=car.get('bbox')
     if not bbox: return result
     jobs=[]; keys=[]
-    if not (result.get('sigef') or {}).get('ok'): keys.append('sigef'); jobs.append(query_sigef(bbox))
-    if not (result.get('embargos_ibama') or {}).get('ok'): keys.append('embargos_ibama'); jobs.append(query_embargos(bbox))
-    if not (result.get('prodes') or {}).get('ok'): keys.append('prodes'); jobs.append(query_prodes(bbox))
+    if layer_guard.worth_retry(result.get('sigef')): keys.append('sigef'); jobs.append(query_sigef(bbox))
+    if layer_guard.worth_retry(result.get('embargos_ibama')): keys.append('embargos_ibama'); jobs.append(query_embargos(bbox,car.get('geometry')))
+    if layer_guard.worth_retry(result.get('prodes')): keys.append('prodes'); jobs.append(query_prodes(bbox))
     if jobs:
         values=await asyncio.gather(*jobs,return_exceptions=True)
         for k,v in zip(keys,values):
-            if isinstance(v,Exception): result[k]={'ok':False,'detail':f'{type(v).__name__}:{v}'}
-            else: result[k]=v
+            if isinstance(v,Exception): v={'ok':False,'detail':f'{type(v).__name__}:{v}'}
+            if k=='prodes': v=finalize_prodes(v,car.get('geometry'))
+            result[k]=layer_guard.keep_better(result.get(k),v)
+    if 'prodes' in keys: await _reapply_prodes_reading(result)
     if not (result.get('anm') or {}).get('ok'):
         try: result['anm']=await asyncio.to_thread(query_anm_curl_exact,car.get('geometry'),bbox)
         except Exception as e: result['anm']={'ok':False,'source':'ANM/SIGMINE','detail':f'{type(e).__name__}:{e}'}
@@ -137,7 +161,7 @@ async def _query_autos_resilient(geometry,bbox,attempts=3):
         try:
             last=await query_ibama_autos(geometry,bbox)
             if last.get('ok'): return last
-        except Exception as e: last={'ok':False,'source':'IBAMA/PAMGIA - autos de infração ambiental','detail':f'{type(e).__name__}:{e}'}
+        except Exception as e: last={'ok':False,'source':'IBAMA — autos de infração ambiental','detail':f'{type(e).__name__}:{e}'}
         if i<attempts-1: await asyncio.sleep(.7*(i+1))
     return last
 
@@ -152,22 +176,36 @@ async def _safe_thread(label:str, fn, *args, source:str|None=None):
     except Exception as e: return {'ok':False,'source':source or label,'detail':f'{type(e).__name__}:{e}'}
 
 
+# T1: a base nacional de solo tem prazo total dentro dela (20 s); este é o limite de fora, que também conta a
+# fila de threads. Estourou: cada camada vira "pending", nunca "nenhuma unidade" e nunca espera sem fim.
+SOLO_NACIONAL_OUTER_S=_SOLO_DEADLINE_S+2.0
+
+
+async def _terra_nacional(geometry):
+    try: return await asyncio.wait_for(asyncio.to_thread(query_solo_nacional,geometry),timeout=SOLO_NACIONAL_OUTER_S)
+    except asyncio.TimeoutError: return _solo_pending('prazo_total')
+    except Exception as e: return _solo_pending(type(e).__name__)
+
+
 async def _analyze_uncached(car_code:str):
     result=await analyze_car(car_code); car=result.get('car') or {}
-    if not car.get('ok'): raise HTTPException(status_code=404 if car.get('not_found') else 502,detail=_safe_summary(result))
+    # 404 only when SICAR answered without the property; a lookup that failed is 503 + Retry-After.
+    if not car.get('ok'): raise lookup_http_error(car)
     result=await _retry_failed_core(result); car=result.get('car') or {}
     geometry=car.get('geometry'); bbox=car.get('bbox')
     jobs=[
         _query_autos_resilient(geometry,bbox),
         _safe_async('fire_live',analyze_fire_near_property(geometry,5.0,6),'INPE Programa Queimadas'),
         _safe_async('territorial_constraints',query_territorial_constraints(geometry,bbox),'restrições territoriais'),
-        _safe_thread('water_mg',query_outorgas_mg,geometry,bbox,5.0,source='IDE-Sisema / IGAM + ANA'),
+        _safe_thread('water_mg',query_outorgas_mg,geometry,bbox,5.0,((car.get('properties') or {}).get('uf') or car_code[:2]),source='IDE-Sisema / IGAM + ANA'),
         _safe_thread('pivots_ana',query_pivots_ana,geometry,bbox,5.0,source='ANA / SNIRH - Pivôs Centrais'),
         _safe_thread('climate_nasa',query_climate_nasa,geometry,30,source='NASA POWER - Daily API'),
         _safe_async('critical_minerals',query_critical_minerals(geometry,result.get('anm')),'ANM/SIGMINE + SGB/GeoSGB'),
+        # T1: solo, aptidão e erodibilidade pela base nacional (IBGE + Embrapa), prazo próprio por camada.
+        _terra_nacional(geometry),
     ]
     vals=await asyncio.gather(*jobs)
-    result['autos_ibama'],result['fire_live'],result['territorial_constraints'],result['water_mg'],result['pivots_ana'],result['climate_nasa'],result['critical_minerals']=vals
+    result['autos_ibama'],result['fire_live'],result['territorial_constraints'],result['water_mg'],result['pivots_ana'],result['climate_nasa'],result['critical_minerals'],result['terra_nacional']=vals
     result['ide_layers']=await _safe_thread('ide_layers',probe_benchmark,geometry,bbox,source='IDE-Sisema - Solo/Aptidão/Relevo/Uso')
     return result
 
@@ -267,7 +305,7 @@ async def ide_catalog(q:str='solo,aptidão,Mapbiomas,declividade,rodovias,APPs')
 @app.get('/v1/internal/ide/probe/{car_code}')
 async def ide_probe(car_code:str):
     car=await asyncio.to_thread(fetch_car_live,car_code.upper())
-    if not car.get('ok'): raise HTTPException(status_code=404 if car.get('not_found') else 502,detail=car)
+    if not car.get('ok'): raise lookup_http_error(car)
     return await asyncio.to_thread(probe_benchmark,car.get('geometry'),car.get('bbox'))
 @app.get('/v1/reports/property/{car_code}/meta')
 async def report_meta(car_code:str):

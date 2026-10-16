@@ -2,17 +2,44 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 import json
-import subprocess
+import external_process_lifecycle as epl
+from external_process_lifecycle import ManagedProcessCancelled, run_managed_process
 from typing import Any
 from urllib.parse import urlencode
+
+from climate_normal_f2 import build_rain_vs_normal, parse_climatology_payload
 
 BASE='https://power.larc.nasa.gov/api/temporal/daily/point'
 CLIM_BASE='https://power.larc.nasa.gov/api/temporal/climatology/point'
 PARAMS=('PRECTOTCORR','T2M','T2M_MAX','T2M_MIN','RH2M','ALLSKY_SFC_SW_DWN')
 
 
-def _curl_json(url:str,max_time=60):
-    p=subprocess.run(['curl','-sS','--retry','2','--retry-delay','1','--connect-timeout','15','--max-time',str(max_time),'-A','Raio-X-Territorial/0.23-climate',url],capture_output=True,timeout=max_time+10)
+# Folga ARBITRADA (não medida) entre o --max-time do curl e o prazo do processo gerenciado. Cobre o
+# nascimento do filho e a saída dele depois do próprio --max-time; aqui é maior que a do INCRA porque o
+# curl da NASA carrega --retry 2 --retry-delay 1, que estica a saída. Folga grande só adia o 504; folga
+# pequena mata um curl que ia responder.
+CURL_SLACK_S=10
+DAILY_MAX_TIME_S=65
+CLIMATOLOGY_MAX_TIME_S=60
+
+
+def worst_case_s(max_time:float)->float:
+    """Teto de UMA chamada: --max-time + folga do processo + carencia de parada do filho gerenciado.
+
+    Quem poe prazo em cima de query_climate_nasa/query_climatology_nasa usa este numero; menor cortaria
+    resposta que hoje chega."""
+    return round(float(max_time)+CURL_SLACK_S+epl.STOP_OVERHEAD_SECONDS,1)
+
+
+DAILY_WORST_CASE_S=worst_case_s(DAILY_MAX_TIME_S)
+CLIMATOLOGY_WORST_CASE_S=worst_case_s(CLIMATOLOGY_MAX_TIME_S)
+
+
+def _curl_json(url:str,max_time=CLIMATOLOGY_MAX_TIME_S):
+    try:
+        p=run_managed_process(['curl','-sS','--retry','2','--retry-delay','1','--connect-timeout','15','--max-time',str(max_time),'-A','Raio-X-Territorial/0.23-climate',url],timeout_seconds=max_time+CURL_SLACK_S)
+    except ManagedProcessCancelled:
+        return {'ok':False,'cancelled':True,'detail':'request_cancelled'}
     if p.returncode:
         return {'ok':False,'detail':p.stderr.decode('utf-8','ignore')[:300]}
     raw=p.stdout
@@ -52,7 +79,7 @@ def query_climate_nasa(car_geometry:dict[str,Any], days:int=30):
         'parameters':','.join(PARAMS),'community':'AG','longitude':lon,'latitude':lat,
         'start':start.strftime('%Y%m%d'),'end':today.strftime('%Y%m%d'),'format':'JSON','time-standard':'UTC'
     }
-    res=_curl_json(BASE+'?'+urlencode(params),65)
+    res=_curl_json(BASE+'?'+urlencode(params),DAILY_MAX_TIME_S)
     if not res.get('ok'):
         return {'ok':False,'source':'NASA POWER - Daily API','detail':res.get('detail'),'preview':res.get('preview')}
     data=res.get('json') or {}
@@ -97,24 +124,20 @@ def query_climatology_nasa(car_geometry:dict[str,Any]):
     try: lon,lat=_centroid(car_geometry)
     except Exception as e: return {'ok':False,'source':'NASA POWER Climatology','detail':f'centroid:{e}'}
     params={'parameters':'PRECTOTCORR,T2M,T2M_MAX,T2M_MIN','community':'AG','longitude':lon,'latitude':lat,'format':'JSON'}
-    res=_curl_json(CLIM_BASE+'?'+urlencode(params),60)
+    res=_curl_json(CLIM_BASE+'?'+urlencode(params),CLIMATOLOGY_MAX_TIME_S)
     if not res.get('ok'): return {'ok':False,'source':'NASA POWER Climatology','detail':res.get('detail')}
-    data=res.get('json') or {}; ps=((data.get('properties') or {}).get('parameter') or {})
-    months=('JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC')
-    rows=[]
-    for m in months:
-        rows.append({'month':m,'rain_mm':_valid((ps.get('PRECTOTCORR') or {}).get(m)),'t_avg_c':_valid((ps.get('T2M') or {}).get(m)),'t_max_c':_valid((ps.get('T2M_MAX') or {}).get(m)),'t_min_c':_valid((ps.get('T2M_MIN') or {}).get(m))})
-    valid=[x for x in rows if any(x.get(k) is not None for k in ('rain_mm','t_avg_c','t_max_c','t_min_c'))]
-    return {'ok':bool(valid),'source':'NASA POWER - Climatology API','latitude':round(lat,6),'longitude':round(lon,6),'months':valid,'note':'Climatologia da grade NASA POWER no centróide; é referência regional, não medição da fazenda.'}
+    parsed=parse_climatology_payload(res.get('json') or {})
+    valid=parsed['months']
+    # rain_mm_day/rain_mm_month: PRECTOTCORR comes in mm/day. t_max_record_c/t_min_record_c: T2M_MAX/T2M_MIN of the
+    # climatology endpoint are the 2001-2020 record, not the mean of daily maxima (F2, checked against the daily series).
+    return {'ok':bool(valid),'source':'NASA POWER - Climatology API','latitude':round(lat,6),'longitude':round(lon,6),'months':valid,'period':parsed['period'],'note':'Climatologia da grade NASA POWER no centróide; é referência regional, não medição da fazenda.'}
 
 
-def build_drought_screening(recent:dict[str,Any],climatology:dict[str,Any]):
-    if not recent.get('ok'):
-        return {'ok':False,'source':'NASA POWER','state':'unknown','detail':'recent_climate_unavailable'}
-    rain=float(recent.get('rain_sum_mm') or 0); n=int(recent.get('available_days') or 0); dry=int(recent.get('dry_days_lt_1mm') or 0)
-    dry_share=round(dry/n*100,1) if n else None
-    # This is deliberately a screening signal, not an official drought index.
-    if n>=25 and rain < 20 and (dry_share or 0)>=80: level='alta atenção'
-    elif n>=25 and rain < 50 and (dry_share or 0)>=65: level='atenção'
-    else: level='sem sinal forte no recorte recente'
-    return {'ok':True,'source':'NASA POWER - triagem derivada','state':level,'rain_sum_mm':rain,'dry_day_share_pct':dry_share,'period_start':recent.get('period_start'),'period_end':recent.get('period_end'),'note':'Triagem operacional baseada em chuva recente e dias secos. Não é SPI/SPEI nem classificação oficial de seca; climatologia é exibida separadamente para contexto.'}
+def build_drought_screening(recent:dict[str,Any],climatology:dict[str,Any],history:dict[str,Any]|None=None):
+    """Recent rain compared with the normal of the same calendar days (F2).
+
+    The old fixed rule (< 50 mm and >= 65 % dry days) measured the dry season, not an anomaly: it flagged
+    34 of 35 years in Curvelo. The declared rule lives in climate_normal_f2.build_rain_vs_normal; ``state`` keeps
+    being the pt-BR label for existing callers, ``status`` is found / not_found / pending.
+    """
+    return build_rain_vs_normal(recent,climatology,history)

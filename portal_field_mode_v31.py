@@ -8,7 +8,10 @@ app = portal_v8.app
 
 SW_JS = r'''
 const RX_VERSION='rx-field-v43';
-const SHELL_CACHE=RX_VERSION+'-shell';
+// W1a: new shell cache name. Service workers from before W1a stored any 200 for '/' under
+// 'rx-field-v43-shell', including the temporary boot page served during a deploy; activate
+// deletes every rx-field-* cache outside the set below, so that stale shell is dropped.
+const SHELL_CACHE=RX_VERSION+'-shell-w1a';
 const DATA_CACHE=RX_VERSION+'-data';
 const TILE_CACHE=RX_VERSION+'-tiles';
 const ASSET_CACHE=RX_VERSION+'-assets';
@@ -16,7 +19,7 @@ const ASSET_CACHE=RX_VERSION+'-assets';
 self.addEventListener('install',event=>{
   self.skipWaiting();
   event.waitUntil(caches.open(SHELL_CACHE).then(async cache=>{
-    try{const r=await fetch('/',{cache:'no-store'});if(r&&r.ok)await cache.put('/',r.clone())}catch(e){}
+    try{const r=await fetch('/',{cache:'no-store'});if(r&&r.ok&&r.headers.get('X-RaioX-Boot')!=='pending'&&r.headers.get('X-RaioX-Boot')!=='failed')await cache.put('/',r.clone())}catch(e){}
   }));
 });
 
@@ -24,6 +27,7 @@ self.addEventListener('activate',event=>{
   event.waitUntil((async()=>{
     const keep=new Set([SHELL_CACHE,DATA_CACHE,TILE_CACHE,ASSET_CACHE]);
     for(const key of await caches.keys())if(key.startsWith('rx-field-')&&!keep.has(key))await caches.delete(key);
+    try{const shell=await caches.open(SHELL_CACHE);for(const r of await shell.keys())if(new URL(r.url).search)await shell.delete(r)}catch(e){}
     await self.clients.claim();
   })());
 });
@@ -33,18 +37,20 @@ async function trimCache(cacheName,maxEntries){
   for(let i=0;i<Math.max(0,keys.length-maxEntries);i++)await cache.delete(keys[i]);
 }
 
-async function networkFirst(req,cacheName,timeoutMs,maxEntries=180){
+async function networkFirst(req,cacheName,timeoutMs,maxEntries=180,key=req){
   const cache=await caches.open(cacheName);
   let timer;
   try{
     const timed=new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('timeout')),timeoutMs)});
     const res=await Promise.race([fetch(req),timed]);
     clearTimeout(timer);
-    if(res&&(res.ok||res.type==='opaque')){await cache.put(req,res.clone()).catch(()=>{});await trimCache(cacheName,maxEntries).catch(()=>{})}
+    // W1a: never keep the temporary boot page as the offline shell.
+    const boot=res&&res.type!=='opaque'?res.headers.get('X-RaioX-Boot'):null;
+    if(res&&(res.ok||res.type==='opaque')&&boot!=='pending'&&boot!=='failed'){await cache.put(key,res.clone()).catch(()=>{});await trimCache(cacheName,maxEntries).catch(()=>{})}
     return res;
   }catch(e){
     clearTimeout(timer);
-    const hit=await cache.match(req);
+    const hit=await cache.match(key);
     if(hit)return hit;
     throw e;
   }
@@ -60,11 +66,11 @@ async function staleWhileRevalidate(event,req,cacheName,maxEntries=180){
   return await update;
 }
 
-async function cacheFirst(req,cacheName){
+async function cacheFirst(req,cacheName,maxEntries=0){
   const cache=await caches.open(cacheName),hit=await cache.match(req);
   if(hit)return hit;
   const res=await fetch(req);
-  if(res&&(res.ok||res.type==='opaque'))await cache.put(req,res.clone()).catch(()=>{});
+  if(res&&(res.ok||res.type==='opaque')){await cache.put(req,res.clone()).catch(()=>{});if(maxEntries)await trimCache(cacheName,maxEntries).catch(()=>{})}
   return res;
 }
 
@@ -74,7 +80,13 @@ self.addEventListener('fetch',event=>{
   const u=new URL(req.url);
 
   if(u.origin===location.origin&&u.pathname==='/'){
-    event.respondWith(networkFirst(req,SHELL_CACHE,2400,4));
+    event.respondWith(networkFirst(req,SHELL_CACHE,2400,4,'/'));
+    return;
+  }
+
+  // W1a: hashed page assets and vendored Leaflet never change under the same URL.
+  if(u.origin===location.origin&&(u.pathname.startsWith('/static/rx/')||u.pathname.startsWith('/static/vendor/'))){
+    event.respondWith(cacheFirst(req,ASSET_CACHE,60));
     return;
   }
 

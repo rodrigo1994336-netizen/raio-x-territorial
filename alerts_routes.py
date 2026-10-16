@@ -37,14 +37,14 @@ def register_alert_routes(app):
         if not store.readiness().get('ready'):raise HTTPException(status_code=503,detail='monitoring_backend_not_ready')
         row=store.set_monitor_enabled(car_code,False)
         if not row:raise HTTPException(status_code=404,detail='monitor_not_found')
-        return {'ok':True,'monitor':row}
+        return {'ok':True,'monitor':{k:v for k,v in row.items() if k!='destination'}}
 
     @app.post('/v1/monitoring/properties/{car_code}/resume')
     def resume_property_monitor(car_code:str):
         if not store.readiness().get('ready'):raise HTTPException(status_code=503,detail='monitoring_backend_not_ready')
         row=store.set_monitor_enabled(car_code,True)
         if not row:raise HTTPException(status_code=404,detail='monitor_not_found')
-        return {'ok':True,'monitor':row}
+        return {'ok':True,'monitor':{k:v for k,v in row.items() if k!='destination'}}
 
     @app.get('/v1/alerts/system-status')
     def alert_system_status():

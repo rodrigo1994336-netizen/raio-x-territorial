@@ -6,8 +6,12 @@ import xml.etree.ElementTree as ET
 
 import httpx
 import deploy_app
+import source_layer_guard as layer_guard
 
 PRODES=deploy_app.PRODES
+# Limite de feições por camada. Resposta nesse limite está cortada ("200 não é todos"):
+# prodes_reading_f2 lê 'limit' e 'number_matched' e trata a camada como incompleta.
+FEATURE_LIMIT=2000
 _CACHE_TTL=6*3600
 _layer_cache={'ts':0.0,'layers':[]}
 _cache_lock=asyncio.Lock()
@@ -66,13 +70,23 @@ async def query_prodes_fast(bbox):
                             'service':'WFS','version':'2.0.0','request':'GetFeature',
                             'typeNames':name,'srsName':'EPSG:4674',
                             'bbox':f'{xmin},{ymin},{xmax},{ymax},EPSG:4674',
-                            'count':'2000','outputFormat':'application/json'
+                            'count':str(FEATURE_LIMIT),'outputFormat':'application/json'
                         })
                         rr.raise_for_status()
-                        data=rr.json();fs=data.get('features') or []
+                        data=rr.json()
+                        if not isinstance(data,dict) or not isinstance(data.get('features'),list):
+                            raise ValueError('wfs_answer_without_features')
+                        fs=data.get('features') or []
                         ms=round((time.monotonic()-t0)*1000)
-                        print(f'RX_PRODES_LAYER={name}:{ms}ms:count={len(fs)}',flush=True)
-                        return {'layer':name,'title':title,'score':score,'count':len(fs),'features':fs,'elapsed_ms':ms} if fs else None
+                        matched=data.get('numberMatched',data.get('totalFeatures'))
+                        matched=matched if isinstance(matched,int) and not isinstance(matched,bool) else None
+                        # H1 + F2: resposta no limite de feições ou com numberMatched maior está cortada.
+                        truncated=len(fs)>=FEATURE_LIMIT or (matched is not None and matched>len(fs))
+                        print(f'RX_PRODES_LAYER={name}:{ms}ms:count={len(fs)}:truncated={truncated}',flush=True)
+                        row={'layer':name,'title':title,'score':score,'count':len(fs),'limit':FEATURE_LIMIT,'number_matched':matched,'features':fs,'elapsed_ms':ms}
+                        if truncated:
+                            return {**row,'truncated':True}
+                        return row if fs else None
                     except Exception as e:
                         ms=round((time.monotonic()-t0)*1000)
                         print(f'RX_PRODES_LAYER_FAIL={name}:{ms}ms:{type(e).__name__}',flush=True)
@@ -83,10 +97,18 @@ async def query_prodes_fast(bbox):
             # layers are exposed separately so a timeout is never misread as no PRODES.
             hits=[x for x in rows if x and x.get('count',0)>0]
             failed=[x for x in rows if x and x.get('error')]
+            truncated=[x.get('layer') for x in rows if x and x.get('truncated')]
+            # H1: "no PRODES intersection" needs every yearly layer answering, complete,
+            # from a live catalog. Polygons found while a layer failed or truncated stay an
+            # answer marked partial (deploy_app.finalize_prodes decides with the CAR geometry).
+            verdict=await asyncio.to_thread(layer_guard.prodes_verdict,[x[1] for x in layers],failed,truncated,bool(hits))
             total_ms=round((time.monotonic()-started)*1000)
-            print(f'RX_PRODES_FAST_READY={total_ms}ms:hits={len(hits)}:failed={len(failed)}:catalog_cache={cached}',flush=True)
+            print(f'RX_PRODES_FAST_READY={total_ms}ms:hits={len(hits)}:failed={len(failed)}:truncated={len(truncated)}:catalog_cache={cached}:state={verdict.get("state")}',flush=True)
             return {
-                'ok':True,
+                'ok':bool(verdict.get('answer')),
+                'source_state':verdict.get('state'),
+                'layer_guard':{k:v for k,v in verdict.items() if k in ('reason','layer')},
+                'truncated_layers':truncated,
                 'candidate_layers':[x[1] for x in layers],
                 'hits':hits,
                 'failed_layers':[{k:x.get(k) for k in ('layer','error','detail','elapsed_ms')} for x in failed],

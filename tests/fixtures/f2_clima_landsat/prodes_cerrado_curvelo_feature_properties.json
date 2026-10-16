@@ -1,0 +1,87 @@
+{
+ "source": "TerraBrasilis WFS prodes-cerrado-nb:yearly_deforestation, bbox do CAR de Curvelo/MG",
+ "recorded": "2026-09-13",
+ "note": "Só as propriedades usadas pelo gate; satellite/sensor ficam como a fonte devolve (Landsat8/OLI até em 2000), para provar que nunca chegam ao cliente.",
+ "features": [
+  {
+   "year": 2021,
+   "class_name": "d2021",
+   "main_class": "DESMATAMENTO",
+   "path_row": "218/73",
+   "image_date": "2021-09-16",
+   "satellite": "Landsat8",
+   "sensor": "OLI",
+   "pub_date": "20260717"
+  },
+  {
+   "year": 2004,
+   "class_name": "d2004",
+   "main_class": "DESMATAMENTO",
+   "path_row": "218/73",
+   "image_date": "2004-07-31",
+   "satellite": "Landsat8",
+   "sensor": "OLI",
+   "pub_date": "20260717"
+  },
+  {
+   "year": 2004,
+   "class_name": "d2004",
+   "main_class": "DESMATAMENTO",
+   "path_row": "218/73",
+   "image_date": "2004-07-31",
+   "satellite": "Landsat8",
+   "sensor": "OLI",
+   "pub_date": "20260717"
+  },
+  {
+   "year": 2006,
+   "class_name": "d2006",
+   "main_class": "DESMATAMENTO",
+   "path_row": "218/73",
+   "image_date": "2006-07-21",
+   "satellite": "Landsat8",
+   "sensor": "OLI",
+   "pub_date": "20260717"
+  },
+  {
+   "year": 2002,
+   "class_name": "d2002",
+   "main_class": "DESMATAMENTO",
+   "path_row": "218/73",
+   "image_date": "2002-07-02",
+   "satellite": "Landsat8",
+   "sensor": "OLI",
+   "pub_date": "20260717"
+  },
+  {
+   "year": 2010,
+   "class_name": "d2010",
+   "main_class": "DESMATAMENTO",
+   "path_row": "218/73",
+   "image_date": "2010-08-01",
+   "satellite": "Landsat8",
+   "sensor": "OLI",
+   "pub_date": "20260717"
+  },
+  {
+   "year": 2014,
+   "class_name": "d2014",
+   "main_class": "DESMATAMENTO",
+   "path_row": "218/73",
+   "image_date": "2014-08-12",
+   "satellite": "Landsat8",
+   "sensor": "OLI",
+   "pub_date": "20260717"
+  },
+  {
+   "year": 2020,
+   "class_name": "d2020",
+   "main_class": "DESMATAMENTO",
+   "path_row": "218/73",
+   "image_date": "2020-09-13",
+   "satellite": "Landsat8",
+   "sensor": "OLI",
+   "pub_date": "20260717"
+  }
+ ]
+}

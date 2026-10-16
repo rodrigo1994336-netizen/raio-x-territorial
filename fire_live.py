@@ -5,7 +5,7 @@ import csv
 import io
 import re
 import unicodedata
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
@@ -84,7 +84,20 @@ async def fetch_recent_foci(file_count: int=6):
                 key=(x.get('datetime'),x.get('satellite'),round(x['latitude'],6),round(x['longitude'],6))
                 if key in seen: continue
                 seen.add(key); foci.append(x)
-        return {'ok':idx.status_code==200,'index_status':idx.status_code,'files':files,'latest_file':selected[-1] if selected else None,'focus_count':len(foci),'foci':foci,'source':'INPE Programa Queimadas - focos CSV 10 min'}
+        # H1: "no fire focus" needs a fresh feed that actually downloaded: the index
+        # answering 200 with no file, a failed file or an old last file is pending.
+        feed_problem=None
+        if idx.status_code!=200: feed_problem=f'index_http_{idx.status_code}'
+        elif not selected: feed_problem='no_focus_files_listed'
+        elif any(f['status']!=200 for f in files): feed_problem='focus_file_failed'
+        else:
+            m=FILE_RE.search(selected[-1])
+            try:
+                latest=datetime.strptime(m.group(1)+m.group(2),'%Y%m%d%H%M').replace(tzinfo=timezone.utc)
+                if datetime.now(timezone.utc)-latest>timedelta(hours=6): feed_problem='focus_feed_stale'
+            except Exception:
+                feed_problem='focus_file_name_unparsed'
+        return {'ok':feed_problem is None,'feed_problem':feed_problem,'index_status':idx.status_code,'files':files,'latest_file':selected[-1] if selected else None,'focus_count':len(foci),'foci':foci,'source':'INPE Programa Queimadas - focos CSV 10 min'}
     except Exception as e:
         return {'ok':False,'error':type(e).__name__,'detail':str(e)[:300],'source':'INPE Programa Queimadas - focos CSV 10 min'}
 

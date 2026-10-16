@@ -1,0 +1,91 @@
+{
+ "source": "NASA POWER daily/point T2M_MAX,T2M_MIN 20010101-20201231, time-standard LST, centróide -18.891297/-44.181978",
+ "recorded": "2026-09-13",
+ "derived": "por mês: média das máximas diárias, máximo absoluto, média das mínimas diárias, mínimo absoluto (resposta de 247 kB reduzida a estas estatísticas)",
+ "months": {
+  "JAN": {
+   "mean_daily_max": 28.97,
+   "abs_max": 37.97,
+   "mean_daily_min": 19.41,
+   "abs_min": 15.96,
+   "n_days": 620
+  },
+  "FEB": {
+   "mean_daily_max": 29.1,
+   "abs_max": 38.17,
+   "mean_daily_min": 19.16,
+   "abs_min": 14.33,
+   "n_days": 565
+  },
+  "MAR": {
+   "mean_daily_max": 28.63,
+   "abs_max": 34.86,
+   "mean_daily_min": 19.09,
+   "abs_min": 14.81,
+   "n_days": 620
+  },
+  "APR": {
+   "mean_daily_max": 28.73,
+   "abs_max": 35.02,
+   "mean_daily_min": 17.89,
+   "abs_min": 11.92,
+   "n_days": 600
+  },
+  "MAY": {
+   "mean_daily_max": 28.04,
+   "abs_max": 34.93,
+   "mean_daily_min": 15.5,
+   "abs_min": 6.99,
+   "n_days": 620
+  },
+  "JUN": {
+   "mean_daily_max": 28.17,
+   "abs_max": 34.36,
+   "mean_daily_min": 14.49,
+   "abs_min": 8.26,
+   "n_days": 600
+  },
+  "JUL": {
+   "mean_daily_max": 28.9,
+   "abs_max": 34.3,
+   "mean_daily_min": 14.08,
+   "abs_min": 7.95,
+   "n_days": 620
+  },
+  "AUG": {
+   "mean_daily_max": 30.9,
+   "abs_max": 36.37,
+   "mean_daily_min": 15.18,
+   "abs_min": 8.83,
+   "n_days": 620
+  },
+  "SEP": {
+   "mean_daily_max": 33.21,
+   "abs_max": 40.24,
+   "mean_daily_min": 17.25,
+   "abs_min": 9.58,
+   "n_days": 600
+  },
+  "OCT": {
+   "mean_daily_max": 33.14,
+   "abs_max": 41.42,
+   "mean_daily_min": 19.15,
+   "abs_min": 12.25,
+   "n_days": 620
+  },
+  "NOV": {
+   "mean_daily_max": 30.29,
+   "abs_max": 39.21,
+   "mean_daily_min": 19.32,
+   "abs_min": 12.67,
+   "n_days": 600
+  },
+  "DEC": {
+   "mean_daily_max": 28.89,
+   "abs_max": 36.21,
+   "mean_daily_min": 19.55,
+   "abs_min": 13.93,
+   "n_days": 620
+  }
+ }
+}

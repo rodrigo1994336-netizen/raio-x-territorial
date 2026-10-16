@@ -29,7 +29,7 @@ async def _extras_v28(result:dict,car_code:str,out_dir:Path):
         v13.query_safras(car_code),
         asyncio.to_thread(query_sicar_details_v2,geom,bbox,10,car_code),
         asyncio.to_thread(v13.query_aerodromes_anac,geom,50.0,12),
-        asyncio.to_thread(v13.query_soilgrids_wcs,geom),
+        asyncio.to_thread(v13.query_soil_texture,geom),
         asyncio.to_thread(v13.query_climatology_nasa,geom),
         v13.query_sif_establishments(props.get('municipio'),props.get('uf'),30),
         return_exceptions=True

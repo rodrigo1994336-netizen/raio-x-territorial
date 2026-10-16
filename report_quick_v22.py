@@ -3,11 +3,13 @@ from __future__ import annotations
 import asyncio
 import time
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 import report_api as base
 import report_v9_patch as prog
 from car_resilient import fetch_car_live_resilient
+from external_process_lifecycle import RequestDisconnected, wait_for_cancelling_processes
+from sicar_lookup_http import lookup_http_error
 
 app=base.app
 
@@ -15,7 +17,7 @@ app.router.routes=[r for r in app.router.routes if getattr(r,'path',None)!='/v1/
 
 
 @app.get('/v1/live/quick/{car_code}')
-async def quick_analysis_v24(car_code:str,deep:bool=False):
+async def quick_analysis_v24(car_code:str,deep:bool=False,request:Request=None):
     code=car_code.upper();t0=time.monotonic()
 
     try:cached_full=base._cache_get(code,time.monotonic())
@@ -24,18 +26,21 @@ async def quick_analysis_v24(car_code:str,deep:bool=False):
         if deep:prog._ensure_deep(code)
         elapsed=round((time.monotonic()-t0)*1000)
         summary=base._report_summary(cached_full)
-        summary['progressive']={'state':'quick-cache','deep_analysis':'ready','elapsed_ms':elapsed}
+        # F1B: the time the cached data was produced travels with it (never the time of this answer).
+        summary['progressive']={'state':'quick-cache','deep_analysis':'ready','elapsed_ms':elapsed,'completed_at':prog.completed_at(code)}
         print(f'RX_QUICK_V24_CACHE={code}:{elapsed}ms:deep={deep}',flush=True)
         return {'ok':True,'mode':'quick-cache','elapsed_ms':elapsed,'analysis':summary,'deep_state':prog._PROGRESS.get(code,{'state':'ready','stage':'complete'})}
 
     cached=prog._quick_get(code)
     if cached is None:
         try:
-            car=await asyncio.wait_for(asyncio.to_thread(fetch_car_live_resilient,code),timeout=6)
+            car=await wait_for_cancelling_processes(asyncio.to_thread(fetch_car_live_resilient,code),6,request=request)
         except asyncio.TimeoutError:
             raise HTTPException(status_code=504,detail='SICAR demorou além de 6 segundos para confirmar o imóvel.')
+        except RequestDisconnected:
+            raise HTTPException(status_code=499,detail='Consulta encerrada: o cliente desistiu.')
         if not car.get('ok'):
-            raise HTTPException(status_code=404 if car.get('not_found') else 502,detail='CAR não localizado ou SICAR temporariamente indisponível.')
+            raise lookup_http_error(car)
         cached={'car':car}
         prog._quick_put(code,cached)
 

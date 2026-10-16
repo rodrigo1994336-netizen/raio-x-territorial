@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>__TITLE__</title>
+<meta name="description" content="Imóvel rural pelo CAR: mapa de satélite, cartão do imóvel e Raio-X das bases públicas oficiais.">
+<meta name="robots" content="noindex">
+<meta name="theme-color" content="#1f4d3a">
+<link rel="preconnect" href="https://server.arcgisonline.com">
+<link rel="preload" href="__FONT_PRELOAD__" as="font" type="font/ttf" crossorigin>
+<link rel="stylesheet" href="__LEAFLET_CSS__">
+<link rel="stylesheet" href="__APP_CSS__">
+<script src="__LEAFLET_JS__" defer></script>
+<script src="__APP_JS__" defer></script>
+</head>
+<body data-route="__ROUTE__" data-car="__CAR__" data-pagina="mapa">
+<svg class="sprite" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg">
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+  <symbol id="i-copiar" viewBox="0 0 24 24"><rect x="8.5" y="8.5" width="11" height="11" rx="2"/><path d="M15.5 8.5V6a1.5 1.5 0 0 0-1.5-1.5H6A1.5 1.5 0 0 0 4.5 6v8A1.5 1.5 0 0 0 6 15.5h2.5"/></symbol>
+  <symbol id="i-compartilhar" viewBox="0 0 24 24"><path d="M12 4v11M7.5 8.5L12 4l4.5 4.5M5 13v5.5A1.5 1.5 0 0 0 6.5 20h11a1.5 1.5 0 0 0 1.5-1.5V13"/></symbol>
+  <symbol id="i-baixar" viewBox="0 0 24 24"><path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 19.5h14"/></symbol>
+  <symbol id="i-abrir" viewBox="0 0 24 24"><path d="M8 10l4 4 4-4"/></symbol>
+  <symbol id="i-voltar" viewBox="0 0 24 24"><path d="M14.5 6L8.5 12l6 6"/></symbol>
+  <symbol id="i-mais" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-menos" viewBox="0 0 24 24"><path d="M5 12h14"/></symbol>
+  <symbol id="i-local" viewBox="0 0 24 24"><circle cx="12" cy="12" r="6.5"/><circle cx="12" cy="12" r="2"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3"/></symbol>
+  <symbol id="i-medir" viewBox="0 0 24 24"><path d="M3.5 15.5l12-12 5 5-12 12z"/><path d="M7.5 11.5l2 2M10.5 8.5l2 2M13.5 5.5l2 2"/></symbol>
+  <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></symbol>
+  <symbol id="i-busca" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6"/><path d="M15 15l5 5"/></symbol>
+  <symbol id="i-mapa" viewBox="0 0 24 24"><path d="M3.5 6.5l5.5-2 6 2 5.5-2v13l-5.5 2-6-2-5.5 2z"/><path d="M9 4.5v13M15 6.5v13"/></symbol>
+  <symbol id="i-prospeccao" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3.5"/><path d="M12 1.5V5M12 19v3.5"/></symbol>
+  <symbol id="i-precos" viewBox="0 0 24 24"><path d="M3.5 12.5V4.5h8l9 9-8 8z"/><circle cx="8" cy="9" r="1.5"/></symbol>
+  <symbol id="i-entrar" viewBox="0 0 24 24"><circle cx="12" cy="8.5" r="3.5"/><path d="M5 20c.8-3.6 3.6-5.5 7-5.5s6.2 1.9 7 5.5"/></symbol>
+</svg>
+<a class="pular" href="#q">Ir para a busca</a>
+<header class="topo">
+  <a class="marca" href="/novo" data-nav="mapa"><span class="marca-sinal" aria-hidden="true"></span><span class="marca-nome">Raio-X Territorial</span></a>
+  <nav class="menu" aria-label="Menu principal">
+    <a href="/novo" data-nav="mapa">Mapa</a>
+    <a href="/novo/prospeccao" data-nav="prospeccao">Prospecção</a>
+    <a href="/novo/precos" data-nav="precos">Preços</a>
+    <a class="entrar" href="/novo/entrar" data-nav="entrar">Entrar</a>
+  </nav>
+</header>
+<main id="conteudo" class="conteudo">
+  <section id="vistaMapa" class="vista-mapa" aria-label="Mapa de imóveis rurais">
+    <div id="mapa" class="mapa" aria-label="Mapa de satélite com os limites dos imóveis do CAR"></div>
+    <form id="busca" class="busca" role="search" autocomplete="off">
+      <div class="busca-campo">
+        <label class="sr" for="q">Buscar por código do CAR, município ou coordenada</label>
+        <input id="q" name="q" type="search" enterkeyhint="search" spellcheck="false" placeholder="CAR, município ou coordenada" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="sugestoes">
+        <button type="submit" class="icone busca-ir" aria-label="Buscar"><svg class="ico" aria-hidden="true" focusable="false"><use href="#i-busca"></use></svg></button>
+      </div>
+      <ul id="sugestoes" class="sugestoes" role="listbox" aria-label="Municípios" hidden></ul>
+      <p id="situacao" class="situacao" role="status" aria-live="polite" hidden></p>
+    </form>
+    <div class="ferramentas" role="toolbar" aria-label="Ferramentas do mapa" aria-orientation="vertical">
+      <button type="button" class="icone" data-ferramenta="mais" aria-label="Aproximar"><svg class="ico" aria-hidden="true" focusable="false"><use href="#i-mais"></use></svg></button>
+      <button type="button" class="icone" data-ferramenta="menos" aria-label="Afastar"><svg class="ico" aria-hidden="true" focusable="false"><use href="#i-menos"></use></svg></button>
+      <span class="ferramentas-fio" aria-hidden="true"></span>
+      <button type="button" class="icone" data-ferramenta="local" aria-label="Minha localização"><svg class="ico" aria-hidden="true" focusable="false"><use href="#i-local"></use></svg></button>
+      <button type="button" class="icone" data-ferramenta="medir" aria-pressed="false" aria-label="Medir distância e área"><svg class="ico" aria-hidden="true" focusable="false"><use href="#i-medir"></use></svg></button>
+      <button type="button" class="icone" data-ferramenta="link" aria-label="Compartilhar o link desta vista"><svg class="ico" aria-hidden="true" focusable="false"><use href="#i-link"></use></svg></button>
+    </div>
+    <div id="medida" class="medida" role="region" aria-label="Medida" hidden>
+      <p id="medidaValor" class="medida-valor" aria-live="polite"></p>
+      <p class="medida-nota">Medida sua, desenhada no mapa. Não é a área declarada no CAR.</p>
+      <div class="medida-acoes">
+        <button type="button" class="botao secundario" data-acao="desfazer-ponto">Desfazer</button>
+        <button type="button" class="botao secundario" data-acao="limpar-medida">Limpar</button>
+        <button type="button" class="botao principal" data-acao="concluir-medida">Concluir</button>
+      </div>
+      <div class="medida-acoes-feita">
+        <button type="button" class="botao secundario" data-acao="continuar-medida">Continuar medindo</button>
+        <button type="button" class="botao secundario" data-acao="apagar-medida">Apagar medida</button>
+      </div>
+    </div>
+    <article id="cartao" class="cartao" aria-labelledby="cartaoTitulo" hidden></article>
+    <aside id="leitura" class="leitura" aria-labelledby="leituraTitulo" hidden></aside>
+  </section>
+  <section id="vistaPagina" class="vista-pagina" hidden></section>
+</main>
+<nav class="abas" aria-label="Menu principal no celular">
+  <a href="/novo" data-nav="mapa"><svg class="ico" aria-hidden="true" focusable="false"><use href="#i-mapa"></use></svg><span>Mapa</span></a>
+  <a href="/novo/prospeccao" data-nav="prospeccao"><svg class="ico" aria-hidden="true" focusable="false"><use href="#i-prospeccao"></use></svg><span>Prospecção</span></a>
+  <a href="/novo/precos" data-nav="precos"><svg class="ico" aria-hidden="true" focusable="false"><use href="#i-precos"></use></svg><span>Preços</span></a>
+  <a href="/novo/entrar" data-nav="entrar"><svg class="ico" aria-hidden="true" focusable="false"><use href="#i-entrar"></use></svg><span>Entrar</span></a>
+</nav>
+<div id="aviso" class="aviso" role="status" aria-live="polite" hidden></div>
+<noscript><p class="sem-js">O mapa do Raio-X precisa de JavaScript ligado no navegador.</p></noscript>
+</body>
+</html>

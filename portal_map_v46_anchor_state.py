@@ -1,6 +1,12 @@
 from __future__ import annotations
 
 import portal_v8
+# O painel rápido remendado aqui é escrito por portal_map_panel_v45, e o botão de leitura completa já
+# chega reescrito por portal_map_v46. Sem declarar a dependência, o remendo depende da ordem de
+# importação e o arranque cai com v46_panel_normalization_helpers_missing / v46_cta_immediate_v45_missing.
+# Importar é idempotente.
+import portal_map_panel_v45  # noqa: F401 - dono da âncora do renderizador do painel rápido (V45)
+import portal_map_v46  # noqa: F401 - dono da âncora do botão de leitura completa (V46)
 
 html = portal_v8.PORTAL_HTML
 
@@ -40,8 +46,8 @@ once(
 # already selected on the map. The authoritative /map-panel request remains the
 # asynchronous enrichment path; a slow upstream CAR must not leave the CTA blank.
 once(
-    " function render(p){const h=q('#rx43SnapshotHost');if(!h||!p)return;h.innerHTML=panelHtml(p);const card=h.querySelector('.rx45-panel-card');if(card)card.__rxSourceAudit=(p.source_audit&&Array.isArray(p.source_audit.registry))?JSON.parse(JSON.stringify(p.source_audit)):null;bind()}\n async function load(car){if(!car||busy)return;",
-    " function render(p){const h=q('#rx43SnapshotHost');if(!h||!p)return;h.innerHTML=panelHtml(p);const card=h.querySelector('.rx45-panel-card');if(card)card.__rxSourceAudit=(p.source_audit&&Array.isArray(p.source_audit.registry))?JSON.parse(JSON.stringify(p.source_audit)):null;bind()}\n window.rxV46RenderV45Immediate=function(p){if(!p)return;const defaults=[{id:'embargo',label:'Embargos',state:'not_consulted'},{id:'prodes',label:'PRODES',state:'not_consulted'},{id:'indigenous_land',label:'Terra Indígena',state:'not_consulted'},{id:'legal_reserve',label:'Reserva Legal',state:'not_consulted'},{id:'conservation_unit',label:'Un. Conservação',state:'not_consulted'},{id:'registry',label:'Matrícula',state:'not_consulted'},{id:'public_forest',label:'Floresta Pública',state:'not_consulted'},{id:'snci',label:'SNCI',state:'not_consulted'}],safe={...p,car_status:p.car_status||p.status,property_type:p.property_type||p.type,risk:p.risk||{state:'not_classified',label:'RISCO NÃO CLASSIFICADO',detail:'As fontes de restrição ainda não foram consultadas neste painel rápido. Fonte não consultada não significa ausência de ocorrência.'},source_audit:p.source_audit||null,compliance_sources:(p.compliance_sources&&p.compliance_sources.length)?p.compliance_sources:defaults};render(safe)};\n async function load(car){if(!car||busy)return;",
+    " function render(p){const h=q('#rx43SnapshotHost');if(!h||!p)return;h.innerHTML=panelHtml(p);const card=h.querySelector('.rx45-panel-card');if(card)card.__rxSourceAudit=(p.source_audit&&Array.isArray(p.source_audit.registry))?JSON.parse(JSON.stringify(p.source_audit)):null;bind();if(card)document.dispatchEvent(new CustomEvent('rx45:panel-rendered',{detail:{car:card.dataset.car||''}}))}\n async function load(car){if(!car||busy)return;",
+    " function render(p){const h=q('#rx43SnapshotHost');if(!h||!p)return;h.innerHTML=panelHtml(p);const card=h.querySelector('.rx45-panel-card');if(card)card.__rxSourceAudit=(p.source_audit&&Array.isArray(p.source_audit.registry))?JSON.parse(JSON.stringify(p.source_audit)):null;bind();if(card)document.dispatchEvent(new CustomEvent('rx45:panel-rendered',{detail:{car:card.dataset.car||''}}))}\n window.rxV46RenderV45Immediate=function(p){if(!p)return;const defaults=[{id:'embargo',label:'Embargos',state:'not_consulted'},{id:'prodes',label:'PRODES',state:'not_consulted'},{id:'indigenous_land',label:'Terra Indígena',state:'not_consulted'},{id:'legal_reserve',label:'Reserva Legal',state:'not_consulted'},{id:'conservation_unit',label:'Un. Conservação',state:'not_consulted'},{id:'registry',label:'Matrícula',state:'not_consulted'},{id:'public_forest',label:'Floresta Pública',state:'not_consulted'},{id:'snci',label:'SNCI',state:'not_consulted'}],safe={...p,car_status:p.car_status||p.status,property_type:p.property_type||p.type,source_audit:p.source_audit||null,compliance_sources:(p.compliance_sources&&p.compliance_sources.length)?p.compliance_sources:defaults};render(safe)};\n async function load(car){if(!car||busy)return;",
     "v46_v45_immediate_renderer_missing",
 )
 once(

@@ -4,6 +4,8 @@ from datetime import datetime, timezone
 from hashlib import sha256
 import json
 
+import mcr_regra_t1
+
 from live_report_adapter import REPORT_DIR, build_technical_map, build_live_payload
 from live_report_adapter_v2 import _patch_autos
 from live_report_adapter_v4 import _patch_fire, _patch_car_limit
@@ -40,7 +42,7 @@ def _patch_prodes_truth(payload:dict,result:dict):
             ['Histórico PRODES completo',unavailable],
             ['Recorte pós-31/07/2019',unavailable],
         ]+original
-        pd['meaning']='A fonte PRODES não respondeu nesta emissão. Indisponibilidade não é tratada como ausência de ocorrência. '+str(pd.get('meaning') or '')
+        pd['meaning']='O mapa de desmatamento do INPE não respondeu nesta emissão. '+str(pd.get('meaning') or '')
         rules=payload.setdefault('interpretation_rules',[])
         rule='Fonte PRODES indisponível nunca é interpretada como zero ocorrência ou ausência de desmatamento.'
         if rule not in rules: rules.append(rule)
@@ -73,7 +75,7 @@ def _patch_prodes_truth(payload:dict,result:dict):
         ['Recorte pós-31/07/2019',
          f"{post.get('occurrence_count',0)} ocorrência(s) • {float(post.get('area_unique_ha') or 0):.6f} ha únicos • {pct_text(post.get('pct_car'))} • anos: {', '.join(str(x) for x in post.get('years') or []) or '—'}"],
         ['Triagem para crédito rural',credit_short],
-        ['Base regulatória','MCR 2-9: verificar supressão de vegetação nativa após 31/07/2019.'],
+        ['Base regulatória',mcr_regra_t1.basis_text(props.get('m_fiscal'),props.get('tipo_imovel'))],
         ['Método de área PRODES','Interseção exata com o CAR + união por lente; sobreposições não são somadas em duplicidade.'],
     ]+original
     pd['meaning']=str(lens.get('explanation') or '')+' '+str(pd.get('meaning') or '')
@@ -132,30 +134,34 @@ def _patch_minerals(payload:dict,result:dict):
     mineral_codes=cm.get('mineral_codes') or []
     rare_count=int(counts.get('terras_raras') or 0)
     rare_signal=bool(cm.get('rare_earth_signal'))
-    mining['critical_process_count']=int(anm.get('critical_process_count') or 0)
+    # H1: ANM pending (or SGB layers that failed) is a pending screening, never 0 / "não identificado".
+    anm_ok=(result.get('anm') or {}).get('ok') is True
+    screen_ok=anm_ok and cm.get('ok') is True
+    mining['critical_process_count']=int(anm.get('critical_process_count') or 0) if anm_ok else 'PENDENTE'
     mining['critical_minerals']=mineral_codes
-    mining['rare_earth_count']=rare_count
-    mining['rare_earth_signal']='SIM' if rare_signal else 'NÃO IDENTIFICADO'
-    mining['rare_earth_source']='ANM/SIGMINE + Serviço Geológico do Brasil (GeoSGB/WMS)'
+    mining['rare_earth_count']=rare_count if anm_ok else 'PENDENTE'
+    mining['rare_earth_signal']='SIM' if rare_signal else ('NÃO IDENTIFICADO' if screen_ok else 'PENDENTE')
+    mining['rare_earth_source']='ANM/SIGMINE + Serviço Geológico do Brasil'
+    if not anm_ok:mining['pending']=True
     mining['critical_rows']=[
-        ['Processos ANM classificados como minerais críticos',mining['critical_process_count']],
-        ['Terras raras - processos ANM',rare_count],
-        ['Sinal geológico / camada SGB para terras raras','SIM' if rare_signal else 'NÃO IDENTIFICADO'],
-        ['Minerais críticos identificados',', '.join(mineral_codes) if mineral_codes else 'Nenhum sinal classificado na consulta'],
+        ['Processos ANM classificados como minerais críticos',mining['critical_process_count'] if anm_ok else 'CONSULTA PENDENTE'],
+        ['Terras raras - processos ANM',rare_count if anm_ok else 'CONSULTA PENDENTE'],
+        ['Sinal geológico / camada SGB para terras raras','SIM' if rare_signal else ('NÃO IDENTIFICADO' if cm.get('ok') is True else 'CONSULTA PENDENTE')],
+        ['Minerais críticos identificados',', '.join(mineral_codes) if mineral_codes else ('Nenhum sinal classificado na consulta' if screen_ok else 'CONSULTA PENDENTE')],
         ['Camadas SGB candidatas',sgb.get('candidate_layer_count') if sgb.get('candidate_layer_count') is not None else 'NÃO DISPONÍVEL'],
         ['Camadas SGB consultadas',sgb.get('queried_layer_count') if sgb.get('queried_layer_count') is not None else 'NÃO DISPONÍVEL'],
     ]
     if rare_signal:
         mining['summary']=(mining.get('summary') or '')+' Há sinal de interesse para terras raras em processo ANM e/ou camada geológica pública do SGB. Isso exige investigação geológica; não comprova jazida, recurso ou reserva economicamente explotável.'
-    elif cm.get('ok'):
+    elif screen_ok:
         mining['summary']=(mining.get('summary') or '')+' A triagem ANM/SGB não identificou sinal classificado de terras raras nesta consulta.'
     else:
         mining['summary']=(mining.get('summary') or '')+' A consulta ao Serviço Geológico do Brasil ficou indisponível ou incompleta nesta emissão.'
     payload['sources'].append({
         'name':'ANM/SIGMINE + SGB/GeoSGB - Minerais críticos e terras raras',
         'description':'Triagem de processos minerários e camadas públicas de interesse geológico/mineral. Não equivale a pesquisa mineral de campo, recurso ou reserva.',
-        'status':'CONSULTADA' if cm.get('ok') else 'PARCIAL',
-        'level':'attention' if rare_signal or not cm.get('ok') else 'ok'
+        'status':'CONSULTADA' if screen_ok else 'CONSULTA PENDENTE',
+        'level':'attention' if rare_signal else ('ok' if screen_ok else 'neutral')
     })
     payload['interpretation_rules'].append('Sinal de terras raras ou favorabilidade geológica é somente triagem de interesse mineral; não comprova ocorrência economicamente explotável, teor, recurso, reserva ou titularidade de direito minerário.')
     return payload

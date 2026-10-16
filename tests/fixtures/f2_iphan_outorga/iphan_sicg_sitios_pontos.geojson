@@ -1,0 +1,91 @@
+{
+ "type": "FeatureCollection",
+ "features": [
+  {
+   "type": "Feature",
+   "id": "sitios.fid--c3e7d4c_1a09cdb934c_-6ab",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -44.1637,
+     -18.9509
+    ]
+   },
+   "geometry_name": "ponto",
+   "properties": {
+    "id_bem": 19976,
+    "identificacao_bem": "Sítio Barra do Luis 01",
+    "co_iphan": "MG3120904BAST00003",
+    "no_logradouro": "Sem localidade",
+    "nu_logradouro": null,
+    "id_natureza": 3,
+    "ds_natureza": "Bem Arqueológico",
+    "codigo_iphan": "BA",
+    "id_classificacao": 286,
+    "ds_classificacao": "Sem classificação",
+    "id_tipo_bem": 4,
+    "ds_tipo_bem": "Sítio",
+    "sg_tipo_bem": "ST",
+    "sintese_bem": null,
+    "dt_cadastro": "2019-05-10Z"
+   },
+   "bbox": [
+    -44.1637,
+    -18.9509,
+    -44.1637,
+    -18.9509
+   ]
+  },
+  {
+   "type": "Feature",
+   "id": "sitios.fid--c3e7d4c_1a09cdb934c_-6aa",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -44.1441,
+     -18.8181
+    ]
+   },
+   "geometry_name": "ponto",
+   "properties": {
+    "id_bem": 27388,
+    "identificacao_bem": "Sítio Rio das Velhas 03",
+    "co_iphan": "MG3120904BAST00004",
+    "no_logradouro": "não informado",
+    "nu_logradouro": null,
+    "id_natureza": 3,
+    "ds_natureza": "Bem Arqueológico",
+    "codigo_iphan": "BA",
+    "id_classificacao": 41,
+    "ds_classificacao": "Pré-colonial",
+    "id_tipo_bem": 4,
+    "ds_tipo_bem": "Sítio",
+    "sg_tipo_bem": "ST",
+    "sintese_bem": "Sítio Rio das Velhas 03, localizado(a) no estado de Minas Gerais, cidade(s) de Curvelo, é um Bem Arqueológico, do tipo Sítio.\r\nTrata-se de sítio no qual foram registrados artefatos líticos e cerâmicos. Está implantado em baixa vertente de baixa declividade, próximo à estrada rural.",
+    "dt_cadastro": "2020-04-09Z"
+   },
+   "bbox": [
+    -44.1441,
+    -18.8181,
+    -44.1441,
+    -18.8181
+   ]
+  }
+ ],
+ "totalFeatures": 2,
+ "numberMatched": 2,
+ "numberReturned": 2,
+ "timeStamp": "2026-09-13T23:04:29.033Z",
+ "crs": {
+  "type": "name",
+  "properties": {
+   "name": "urn:ogc:def:crs:EPSG::4674"
+  }
+ },
+ "bbox": [
+  -44.1637,
+  -18.9509,
+  -44.1441,
+  -18.8181
+ ]
+}

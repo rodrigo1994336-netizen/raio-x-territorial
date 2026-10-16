@@ -29,10 +29,62 @@ jobs:
         run: PYTHONPATH=. python scripts/d0_source_registry_gate.py
       - name: D1a CAR title provenance gate
         run: PYTHONPATH=. python scripts/d1a_identity_title_gate.py
+      - name: W1 WhatsApp and monitoring readiness gate
+        env:
+          RX_RELEASE: OFF
+        run: PYTHONPATH=. python scripts/w1_whatsapp_ready_gate.py
+      - name: F2 CONAB warehouses and DETER alerts gate (rules and positive controls)
+        env:
+          RX_RELEASE: OFF
+        run: PYTHONPATH=. python scripts/f2_conab_deter_gate.py
       - name: R1 report pt-BR presentation gate
         env:
           RX_RELEASE: OFF
         run: PYTHONPATH=. python scripts/r1_report_ptbr_gate.py
+      - name: T2 textos do cliente (sem jargao, sigla solta, nome interno, estado tecnico ou erro cru no portal, em /novo e no PDF; escopo do cartorio fora da tabela de fontes; controles positivos por mutacao)
+        env:
+          RX_RELEASE: V8_OPERATIONAL_ZERO_COST
+        run: PYTHONPATH=. python scripts/t2_textos_cliente_gate.py
+      - name: V2 small truths gate (Brasília time with the note on PDF and screen; only an empty exact SICAR answer is 404, any failure is 503 pending, on the booted report and portal chains and the PDF viewer; rules and positive controls; needs Node)
+        env:
+          RX_RELEASE: OFF
+        run: PYTHONPATH=. python scripts/v2_verdade_pequenas_gate.py
+      - name: H1 empty or broken public layer never becomes "nenhum" gate
+        env:
+          RX_RELEASE: OFF
+        run: PYTHONPATH=. python scripts/h1_camadas_vazias_gate.py
+      - name: F2 INCRA SIGEF/SNCI official source gate
+        env:
+          RX_RELEASE: OFF
+        run: PYTHONPATH=. python scripts/f2_incra_sigef_snci_gate.py
+      - name: Ponte no Brasil gate (token, host list, IP literal, userinfo, port, redirect, private DNS, body/method limits, slot release, slow client, connection cap, per-host TLS, client routing on/off identical, bridge URL never leaks, window rule, real curl; bridge closed by Google IAM - service account key parse, RS256 pure Python byte-identical to cryptography, ID token cache and bounded wait, credential failure is pending never unauthenticated call, Cloud Shell check script, hourly egress cap, first ID token at boot, owner guide bash blocks run with fake gcloud/git/python3 - project lock never touches another project, --project on every call, role/resource/member of each grant, runtime account without roles, key umask, check before deleting keys, new-token notice, reviewed code pin; positive controls incl. code and guide mutations)
+        env:
+          RX_RELEASE: OFF
+        run: PYTHONPATH=. python scripts/ponte_brasil_gate.py
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: F2 PRODES reading gate
+        env:
+          RX_RELEASE: OFF
+        run: PYTHONPATH=. python scripts/f2_prodes_leitura_gate.py
+      - name: W1a fast CAR parcels gate (UF local, cell cache, canvas loader, single-flight, aborted request is not a connection failure; rules and positive controls; needs Node)
+        env:
+          RX_RELEASE: V8_OPERATIONAL_ZERO_COST
+          RX_PORTAL_RSS_BUDGET_MB: '220'
+        run: PYTHONPATH=. python scripts/w1a_imoveis_rapidos_gate.py
+      - name: W1a property link, share menu and offline shell gate (rules and positive controls)
+        env:
+          RX_RELEASE: V8_OPERATIONAL_ZERO_COST
+        run: PYTHONPATH=. python scripts/w1a_link_imovel_gate.py
+      - name: F1B screen gate (no tooltip over the map, full analysis visible in the panel, one request per source, sticky 44 px actions, old engine answer never shown as current, PRODES years and floors, pending rows retried once, sources box follows the analysis; engine state across the cache expiry; part 2 - UF by IBGE borders, municipality search without Nominatim, card with SICAR dates and no jump, report engine wake only with intention and server locks, short state poll; rules and positive controls; needs Node)
+        env:
+          RX_RELEASE: V8_OPERATIONAL_ZERO_COST
+        run: PYTHONPATH=. python scripts/f1b_tela_gate.py
+      - name: O2 tela nova /novo gate (rotas, arquivos com hash, nada escrito sobre o mapa, sem m², sem CPF/CNPJ, sem texto interno, alvos de 44 px, fontes oficiais, regras da leitura no node; controles positivos; needs Node)
+        env:
+          RX_RELEASE: OFF
+        run: PYTHONPATH=. python scripts/o2_tela_nova_gate.py
       - name: Import standalone engines
         env:
           RX_RELEASE: OFF
@@ -43,6 +95,9 @@ jobs:
           import highres_reference, street_level_access, visual_hybrid, terrain_srtm, property_visual_plate_v25
           import prodes_fast_v24, anm_fast_v29, core_retry_fast_v29, territorial_production, landuse_profile_v39
           import report_truth_guard_v16, report_book_style, report_engine_v6, report_engine_v7, report_engine_v8
+          import conab_armazens, deter_alertas
+          import incra_acervo_f2, prodes_reading_f2, climate_normal_f2, prodes_image_platform_f2, iphan_sicg, outorga_vazao, mapbiomas_alerta
+          import report_engine_v10, live_report_adapter_v20
           import live_report_adapter_v18, report_visual_identity_v28, report_extras_perf_v30, heavy_live_api_v20, report_pdf_cache_v21, report_quick_v22, github_oidc_auth, monitoring_store, monitoring_routes, alerts_routes
           sample={'ok':True,'source':'MapBiomas','year':2025,'native_vegetation_share_pct':20,'classes':[{'code':15,'share_pct':55},{'code':39,'share_pct':25}]}
           p=landuse_profile_v39.classify_landuse_profile(sample)
@@ -106,7 +161,7 @@ jobs:
           assert 'RX_IDENTITY_TITLE_GUARD_V49' in html, 'd1a identity guard missing from final portal HTML'
           assert 'd.property.name=x.name' not in html, 'd1a smart-search name injection leaked into final portal HTML'
           required=(
-              'RX_EXPERIENCE_V43','SNAPSHOT DO IMÓVEL','VER ANÁLISE COMPLETA',
+              'RX_EXPERIENCE_V43','RESUMO DO IMÓVEL','VER ANÁLISE COMPLETA',
               'body.rx43-dossier-open #map','rx43-dossier-open','rx43-full-requested',
               'RX_ACTION_RUNTIME_V25','RX_FIELD_MODE_V43','RX_MAP_VISUAL_V32',
               'RX_NAMES_ON_CLICK_ONLY_C1','RX_ADVANCED_SEARCH_V39','rxAdvTrigger','RX_IDENTITY_TITLE_GUARD_V49',
@@ -184,7 +239,10 @@ jobs:
           assert "'method':'osm_named_farm_point_inside_car'" not in identity_src
           assert "'method':'strong_sigef_overlap'" not in identity_src
           assert "'panel_name_eligible':False" in identity_src and 'nunca são promovidas automaticamente a denominação do CAR' in identity_src
-          assert 'resolve_property_identity_sync' in pdf_proxy and 'name=await _report_name' in pdf_proxy and 'RX_PORTAL_PDF_V43_8' in pdf_proxy
+          assert 'resolve_property_identity_sync' in pdf_proxy and 'name=await _name_ou_499' in pdf_proxy and 'RX_PORTAL_PDF_V43_8' in pdf_proxy
+          # o embrulho tem de continuar resolvendo o nome PELA cadeia e converter a desistencia em 499
+          assert 'return await _report_name(' in pdf_proxy and pdf_proxy.count('await _name_ou_499(') == 4
+          assert "raise HTTPException(status_code=499,detail='client_disconnected')" in pdf_proxy
           assert "0.43.4-v43-snapshot-first" in release and 'window.rxVisibleCarCountV43' in release
           assert 'RX_GEOLOCATION_V43=explicit_user_action_only' in release and '_auto_locate' in release
           assert 'RX_VIEWPORT_GUARD_V43=dossier_and_positive_area' in release and '_viewport_loader' in release and '_viewport_bounds' in release
@@ -201,7 +259,8 @@ jobs:
           assert "x?.type==='cafir'" in inverse and 'CAR não vinculado automaticamente' in inverse
           assert "'panel_name_eligible':False" in inverse_runtime and "'car_code':None" in inverse_runtime
           assert 'REFERENCE_ONLY_CENTROID' in legacy_name and 'd.property.name=x.name' not in legacy_name
-          assert 'Fontes pesadas não foram disparadas' in html
+          # T2: o resumo passou a dizer a mesma coisa sem anunciar maquinaria ("fontes pesadas", "disparadas").
+          assert 'As consultas mais demoradas só começam quando você pedir a análise completa.' in html
           assert 'Imóvel rural —' in html
           assert 'z<11' in html
           assert all(uf in html for uf in ('AC','AM','BA','DF','GO','MG','MT','PA','PR','RS','SC','SP','TO'))
@@ -249,6 +308,8 @@ jobs:
           assert rss < 220, f'portal RSS too high in gate: {rss:.1f} MB'
           print('RX_CI_PORTAL_V46_READY',len(paths),'rss_mb=',round(rss,1),'mutation_observers=',observer_count,'intervals=',interval_count,'version=',portal_v8.APP_PORTAL_VERSION,'name_truth=on','cafir_inverse=on','osm_reference_only=on','two_level_map=on')
           PY
+      - name: W1a boot without reload, hashed assets with retry, honest failed page and offline shell gate (rules and positive controls; needs Node)
+        run: PYTHONPATH=. python scripts/w1a_arranque_gate.py
       - name: V41 report bounded-latency, CAR-composition and PRODES truth gate
         env:
           RX_RELEASE: OFF
@@ -275,10 +336,12 @@ jobs:
           assert 'async def _read4' in sent and 'items[:2]' in sent and "'GDAL_HTTP_TIMEOUT':'9'" in sent
           assert 'httpx.Timeout(12,connect=5)' in hi
           assert 'ThreadPoolExecutor' in car and 'CAP_TTL=21600' in car and "'share_pct'" in car
-          assert 'asyncio.wait_for' in extras and "_timed('visual_hybrid'" in extras and ',34)' in extras
+          # M1: o slot usa o prazo que também derruba o curl gerenciado da thread abandonada (scripts/m1_processos_gate.py).
+          assert 'wait_for_cancelling_processes(coro,timeout_s)' in extras and "_timed('visual_hybrid'" in extras and ',34)' in extras
           assert "car['environmental_composition']" in adapter and 'passivo/excedente legal' in adapter
-          for required in ('Histórico PRODES completo','Recorte pós-31/07/2019','ha únicos','% do CAR','Interseção geométrica exata'):
-              assert required in prodes_report, required
+          # F2: the PRODES report rows come from the single reading; the rule itself is proven by
+          # scripts/f2_prodes_leitura_gate.py (step above), never by legacy strings kept alive in code.
+          assert 'apply_reading_to_report_payload' in prodes_report and 'LEGACY_ROW_MARKERS' not in prodes_report
 
           # Deterministic regression: overlapping recent polygons must be unioned, never summed.
           from prodes_lens import derive_prodes_lens
@@ -303,3 +366,81 @@ jobs:
           assert post['area_unique_ha'] < area(r1)+area(r2), (post,area(r1),area(r2))
           print('RX_CI_REPORT_V41_READY PRODES_TWO_LENSES_EXACT_UNION_OK')
           PY
+      - name: F2 clima e satélite PRODES gate (regras e controles positivos)
+        env:
+          RX_RELEASE: OFF
+        run: PYTHONPATH=. python scripts/f2_clima_landsat_gate.py
+      - name: F2 IPHAN oficial e vazão da outorga
+        env:
+          RX_RELEASE: OFF
+        run: PYTHONPATH=. python scripts/f2_iphan_outorga_gate.py
+      - name: F2 alertas de desmatamento validados gate
+        env:
+          RX_RELEASE: OFF
+        run: PYTHONPATH=. python scripts/f2_mapbiomas_alerta_gate.py
+      - name: F2 painel MTE e SINAFLOR gate (estático e funções puras; navegador nos smokes V48)
+        env:
+          RX_RELEASE: OFF
+        run: PYTHONPATH=. python scripts/f2_painel_mte_sinaflor_gate.py --skip-browser
+      - name: F2 relatório V20 ligação gate (PDF real, crédito na página final, pendência e controles positivos)
+        env:
+          RX_RELEASE: OFF
+        run: PYTHONPATH=. python scripts/f2_relatorio_v20_gate.py
+      - name: T1 terra-verdade gate (relevo em % pelas classes da Embrapa, sem "máximo" de percentil, solo nacional sem caixa de MG, sem SoilGrids e sem adjetivo da chuva da POWER, MCR com as datas da Res. CMN 5.303/2026, PDF da cadeia real; controles positivos por mutação no arquivo)
+        env:
+          RX_RELEASE: OFF
+        run: PYTHONPATH=. python scripts/t1_terra_verdade_gate.py
+
+  o2-tela-nova-browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install browser gate dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install fastapi uvicorn httpx playwright
+          python -m playwright install --with-deps chromium
+      - name: O2 tela nova browser gate (Chromium sem rede - leitura nunca fica de outro imóvel, pendente tenta sozinha, município com imóveis ou aviso, Voltar do celular, celular deitado, medida com cartão, Concluir mantém a medida, código inexistente fica no endereço; controles positivos)
+        env:
+          RX_RELEASE: OFF
+        run: PYTHONPATH=. python scripts/o2_tela_nova_browser_gate.py
+
+  base-atualizada:
+    # Trava de processo (16/09): #78 e #79 passaram verdes cada um sobre a base de ANTES do outro e
+    # quebraram juntos. No PR reprova enquanto o ramo nao contiver a ponta da main; no push da main reprova
+    # o merge que ja entrou sobre base velha, mesmo quando os outros portoes ficam verdes por sorte.
+    # fetch-depth: 0 e obrigatorio - sem o historico o proprio portao reprova, nunca passa calado.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Base atualizada antes do merge (verde de ramo so vale sobre a base em que ele entra; regras e controles positivos)
+        env:
+          RX_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python scripts/base_atualizada_gate.py
+
+  m1-processos-linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install gate dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install fastapi httpx shapely pyproj pillow reportlab uvicorn "psycopg[binary]" "redis>=5,<7" "numpy>=2,<3" "rasterio>=1.4,<2" "PyJWT[crypto]>=2.10,<3" "pypdf>=4,<7"
+      - name: M1 processos pendurados gate (Linux /proc - consulta abandonada, prazo do servidor, desligamento, os quatro handlers com prazo e os slots do relatório com curl travado não deixam filho vivo nem pipe aberto; prazo estourado + cliente desistindo não deixa filho nem abre consulta nova nos caminhos de reserva; o escopo chega ao trabalhador do pool; atraso injetado entre nascimento e registro continua certo; wait_for puro e tarefa pronta reprovam; todo processo direto com timeout; RX_PROC_STATS com números conferidos por provas independentes e "indisponivel" quando a leitura não fecha; /v1/diag/processos só com RX_DIAG_TOKEN (senão 404), sem dado sensível; controles positivos por mutação no arquivo)
+        env:
+          RX_RELEASE: OFF
+        run: python scripts/m1_processos_gate.py --exigir-linux

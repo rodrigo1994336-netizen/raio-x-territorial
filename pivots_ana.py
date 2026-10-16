@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import math
-import subprocess
+from external_process_lifecycle import ManagedProcessCancelled, run_managed_process
 from typing import Any
 from urllib.parse import urlencode
 
@@ -10,12 +10,17 @@ from pyproj import CRS, Transformer
 from shapely.geometry import Polygon, shape
 from shapely.ops import transform, unary_union
 
+import source_layer_guard as layer_guard
+
 LAYER='https://portal1.snirh.gov.br/server/rest/services/SFI/PIVOS_2022_SNIRH/MapServer/0'
 QUERY=LAYER+'/query'
 
 
 def _curl_json(url:str,max_time=55):
-    p=subprocess.run(['curl','-sS','--retry','2','--retry-delay','1','--connect-timeout','15','--max-time',str(max_time),'-A','Raio-X-Territorial/0.16-pivots',url],capture_output=True,timeout=max_time+10)
+    try:
+        p=run_managed_process(['curl','-sS','--retry','2','--retry-delay','1','--connect-timeout','15','--max-time',str(max_time),'-A','Raio-X-Territorial/0.16-pivots',url],timeout_seconds=max_time+10)
+    except ManagedProcessCancelled:
+        return {'ok':False,'cancelled':True,'detail':'request_cancelled'}
     if p.returncode:
         return {'ok':False,'detail':p.stderr.decode('utf-8','ignore')[:300]}
     raw=p.stdout
@@ -63,9 +68,10 @@ def query_pivots_ana(car_geometry:dict[str,Any], bbox:list[float], radius_km:flo
     res=_query_bbox(qb)
     if not res.get('ok'):
         return {'ok':False,'source':'ANA / SNIRH - Pivôs Centrais 2022','detail':res.get('detail'),'preview':res.get('preview')}
-    data=res.get('json') or {}
-    if data.get('error'):
-        return {'ok':False,'source':'ANA / SNIRH - Pivôs Centrais 2022','detail':str(data.get('error'))[:500]}
+    data=res.get('json')
+    problem=layer_guard.arcgis_answer_problem(None,data)
+    if problem:
+        return {'ok':False,'source':'ANA / SNIRH - Pivôs Centrais 2022','source_state':'pending','detail':f'consulta_pendente:{problem}'}
     fs=data.get('features') or []
     exact=[]; near=[]; intersections=[]; parsed=0
     for f in fs:
@@ -94,9 +100,11 @@ def query_pivots_ana(car_geometry:dict[str,Any], bbox:list[float], radius_km:flo
     union=unary_union(intersections) if intersections else None
     union_m=transform(tr.transform,union) if union is not None and not union.is_empty else None
     unique_ha=round(float(union_m.area)/10000.0,6) if union_m is not None else 0.0
-    return {
+    out={
         'ok':True,'source':'ANA / SNIRH - Mapeamento Atualizado da Agricultura Irrigada por Pivôs Centrais no Brasil (2022)',
         'layer':LAYER,'reference_year':2022,'feature_count_bbox':len(fs),'parsed_feature_count':parsed,'intersection_count':len(exact),
         'intersection_area_unique_ha':unique_ha,'near_count':len(near),'radius_km':radius_km,
         'intersections':exact[:100],'near':near[:200],'nearest':near[0] if near else None,
     }
+    # H1: an empty envelope only means "no pivot" when the national layer is alive.
+    return layer_guard.apply_verdict(out,layer_guard.zero_verdict('pivos_ana_2022',zero=not fs))

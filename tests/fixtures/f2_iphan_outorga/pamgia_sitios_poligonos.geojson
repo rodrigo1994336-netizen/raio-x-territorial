@@ -1,0 +1,66 @@
+{
+ "type": "FeatureCollection",
+ "crs": {
+  "type": "name",
+  "properties": {
+   "name": "EPSG:4674"
+  }
+ },
+ "features": [
+  {
+   "type": "Feature",
+   "id": 6072,
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       -44.14447452999997,
+       -18.81814595999998
+      ],
+      [
+       -44.144321599999955,
+       -18.818362149999928
+      ],
+      [
+       -44.14353644999994,
+       -18.817861509999943
+      ],
+      [
+       -44.14368933999998,
+       -18.81765435999995
+      ],
+      [
+       -44.14447452999997,
+       -18.81814595999998
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "objectid": 6072,
+    "id_bem": 27388,
+    "identificacao_bem": "Sítio Rio das Velhas 03",
+    "co_iphan": "MG3120904BAST00004",
+    "no_logradouro": "não informado",
+    "no_logradouro_xsi_nil": null,
+    "nu_logradouro": null,
+    "nu_logradouro_xsi_nil": null,
+    "id_natureza": 3,
+    "ds_natureza": "Bem Arqueológico",
+    "codigo_iphan": "BA",
+    "id_classificacao": 41,
+    "ds_classificacao": "Pré-colonial",
+    "id_tipo_bem": 4,
+    "ds_tipo_bem": "Sítio",
+    "sg_tipo_bem": "ST",
+    "sintese_bem": "Sítio Rio das Velhas 03, localizado(a) no estado de Minas Gerais, cidade(s) de Curvelo, é um Bem Arqueológico, do tipo Sítio.\r\nTrata-se de sítio no qual foram registrados artefatos líticos e cerâmicos. Está implantado em baixa vertente de baixa declividade, próximo à estrada rural.",
+    "sintese_bem_xsi_nil": null,
+    "dt_cadastro": "2020-04-09Z",
+    "dt_cadastro_xsi_nil": null,
+    "Shape__Area": 2.4205864310000006e-07,
+    "Shape__Length": 0.002379844272196807
+   }
+  }
+ ]
+}

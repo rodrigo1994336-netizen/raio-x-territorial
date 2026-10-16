@@ -3,7 +3,7 @@ from __future__ import annotations
 import csv
 import io
 import math
-import subprocess
+from external_process_lifecycle import run_managed_process
 import time
 from typing import Any
 from shapely.geometry import shape
@@ -61,7 +61,7 @@ def _haversine(lat1,lon1,lat2,lon2):
 def _fetch_rows():
     now=time.monotonic()
     if _CACHE['rows'] is not None and now-_CACHE['ts']<CACHE_TTL:return _CACHE['rows']
-    p=subprocess.run(['curl','-sS','--retry','2','--retry-delay','1','--connect-timeout','8','--max-time','35','-A','Raio-X-Territorial/0.20-aerodromes',ANAC_CSV],capture_output=True,timeout=42)
+    p=run_managed_process(['curl','-sS','--retry','2','--retry-delay','1','--connect-timeout','8','--max-time','35','-A','Raio-X-Territorial/0.20-aerodromes',ANAC_CSV],timeout_seconds=42)
     if p.returncode:raise RuntimeError(p.stderr.decode('utf-8','ignore')[:220])
     raw=p.stdout
     text=None

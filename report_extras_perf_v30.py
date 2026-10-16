@@ -9,12 +9,14 @@ import live_report_adapter_v17 as v17
 import report_visual_identity_v28 as identity_v28
 from visual_hybrid import build_hybrid_property_imagery
 from sicar_detail_sources_v2 import query_sicar_details_v2
+from external_process_lifecycle import wait_for_cancelling_processes
 
 
 async def _timed(label:str,coro,timeout_s:float):
     t0=time.monotonic()
     try:
-        value=await asyncio.wait_for(coro,timeout=timeout_s)
+        # M1: o prazo que estoura também derruba o curl gerenciado da thread abandonada
+        value=await wait_for_cancelling_processes(coro,timeout_s)
         ok=isinstance(value,dict) and bool(value.get('ok'))
         print(f'RX_EXTRA_STAGE={label}:{round((time.monotonic()-t0)*1000)}ms:ok={ok}',flush=True)
         return value
@@ -35,7 +37,8 @@ async def _extras_v41(result:dict,car_code:str,out_dir:Path):
         _timed('safras',v13.query_safras(car_code),12),
         _timed('sicar_internal',asyncio.to_thread(query_sicar_details_v2,geom,bbox,10,car_code),26),
         _timed('aerodromes',asyncio.to_thread(v13.query_aerodromes_anac,geom,50.0,12),10),
-        _timed('soilgrids',asyncio.to_thread(v13.query_soilgrids_wcs,geom),16),
+        # T1: a leitura tem prazo interno 1 s antes do slot, contado daqui (a fila de threads come parte do slot)
+        _timed('mapbiomas_solo',asyncio.to_thread(v13.query_soil_texture,geom,None,time.monotonic()+15.0),16),
         _timed('climatology',asyncio.to_thread(v13.query_climatology_nasa,geom),12),
         _timed('sif_chain',v13.query_sif_establishments(props.get('municipio'),props.get('uf'),30),12),
     )
