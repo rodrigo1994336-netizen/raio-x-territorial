@@ -80,22 +80,27 @@ def render_livro(path: Any, payload: dict) -> str:
         return _render_anterior(path, payload)
 
 
-_gerar_anterior = v20.generate_live_report
+_start_queries_anterior = v20.start_queries
 
 
-def generate_live_report(result: dict, car_code: str):
-    """A emissão de sempre, com a imagem do livro buscada em paralelo desde o começo.
+def start_queries(result: dict, car_code: str):
+    """O mesmo começo de emissão do V20, com a imagem do livro buscada em paralelo.
 
     A imagem só depende do limite do CAR, que já veio da análise. Buscá-la agora, em segundo plano,
     tira do caminho do cliente os segundos que ela custava no fim — e nada no relatório espera por ela.
+
+    O gancho é aqui, e não em ``generate_live_report``, de propósito: dois portões do projeto afirmam
+    que ``report_api.generate_live_report`` é a função do módulo ``live_report_adapter_v20``, e
+    trocar aquele nome quebrava essa ligação sem nenhum ganho — este ponto é chamado no mesmo
+    instante, com os mesmos dados.
     """
     if COM_IMAGEM:
         try:
-            book_dados.adiantar_imagem({"property": (result or {}).get("car", {}).get("properties") or {}},
+            book_dados.adiantar_imagem({"property": ((result or {}).get("car") or {}).get("properties") or {}},
                                        result)
         except Exception as erro:
             print(f"RX_LIVRO_IMAGEM_ADIANTADA=falhou:{type(erro).__name__}", flush=True)
-    return _gerar_anterior(result, car_code)
+    return _start_queries_anterior(result, car_code)
 
 
 if LIVRO_LIGADO:
@@ -104,14 +109,9 @@ if LIVRO_LIGADO:
     import live_report_adapter_v18 as v18
 
     v18.build_premium_property_report_v8 = render_livro
-    # O V20 já trocou estes três nomes pelo dele no import: quem chama a emissão é um deles, e não
-    # o módulo v20. Trocar só em v20 deixaria o adiantamento da imagem sem efeito nenhum.
-    v20.generate_live_report = generate_live_report
-    import report_api as _api
-    import report_v13_patch as _v13
-
-    _api.generate_live_report = generate_live_report
-    _v13.generate_live_report = generate_live_report
+    # Só o começo da emissão é embrulhado, para a imagem sair na frente. Nenhum nome que os portões
+    # usam para provar a cadeia (report_api.generate_live_report) é trocado.
+    v20.start_queries = start_queries
     print(f"RX_RELATORIO_LIVRO=ligado:{MODO}", flush=True)
 else:
     print("RX_RELATORIO_LIVRO=desligado", flush=True)

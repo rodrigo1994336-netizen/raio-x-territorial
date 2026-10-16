@@ -459,6 +459,14 @@ def regra_ligacao_em(fonte_patch: str, fonte_site: str) -> list[str]:
         problemas.append("sitecustomize não carrega report_livro_patch")
     elif fonte_site.index("import report_v20_patch") > fonte_site.index("import report_livro_patch"):
         problemas.append("o livro é carregado antes do V20 e seria sobrescrito por ele")
+    # O livro troca o DESENHO do PDF; os nomes pelos quais outros portões provam a cadeia continuam
+    # apontando para o V20. Trocar `report_api.generate_live_report` derrubava o v47-block2-contract
+    # e o f2_relatorio_v20 — ganho nenhum, porque o gancho do adiantamento cabe em `start_queries`.
+    for proibido in ("_api.generate_live_report =", "report_api.generate_live_report =",
+                     "v20.generate_live_report =", "_v13.generate_live_report ="):
+        if proibido in fonte_patch:
+            problemas.append(f"report_livro_patch troca um nome que os portões usam para provar a "
+                             f"cadeia: {proibido.strip(' =')}")
     return problemas
 
 
@@ -748,6 +756,52 @@ def main() -> int:
             (ROOT / "sitecustomize.py").read_text(encoding="utf-8"))
 
     controle("padrão do livro trocado para desligado", com_ligacao_quebrada)
+
+    def com_nome_da_cadeia_trocado():
+        """Trocar report_api.generate_live_report derruba dois portões: a regra 7 tem de pegar antes."""
+        return regra_ligacao_em(
+            (ROOT / "report_livro_patch.py").read_text(encoding="utf-8")
+            + "\n_api.generate_live_report = generate_live_report\n",
+            (ROOT / "sitecustomize.py").read_text(encoding="utf-8"))
+
+    controle("nome da cadeia trocado pelo livro", com_nome_da_cadeia_trocado)
+
+    def cadeia_real_intacta():
+        """A cadeia de verdade, com o livro ligado: o livro desenha E o contrato do V20 continua.
+
+        Esta regra existe porque o jeito óbvio de adiantar a imagem — embrulhar
+        ``report_api.generate_live_report`` — passava em tudo aqui e derrubava dois portões
+        vizinhos, que provam a cadeia justamente por aquele nome.
+        """
+        import importlib
+
+        problemas = []
+        try:
+            report_api = importlib.import_module("report_api")
+            importlib.import_module("report_v20_patch")
+            importlib.import_module("report_livro_patch")
+            v20 = importlib.import_module("live_report_adapter_v20")
+            v18 = importlib.import_module("live_report_adapter_v18")
+            if getattr(report_api.generate_live_report, "__module__", "") != "live_report_adapter_v20":
+                problemas.append("report_api.generate_live_report deixou de ser do live_report_adapter_v20 "
+                                 "(quebra o v47-block2-contract e o f2_relatorio_v20)")
+            if getattr(v20.render_v20, "__module__", "") != "report_livro_patch":
+                problemas.append("o livro não está desenhando o PDF na cadeia real")
+            if getattr(v18.build_premium_property_report_v8, "__module__", "") != "report_livro_patch":
+                problemas.append("o V18 continua chamando o desenho antigo")
+            if str(report_api.APP_VERSION) != "0.50.0-f2-verdade-e-lacunas":
+                problemas.append(f"a versão do serviço mudou: {report_api.APP_VERSION}")
+        except Exception as erro:
+            problemas.append(f"a cadeia real não montou: {type(erro).__name__}: {erro}")
+        return problemas
+
+    print("== a cadeia real, com o livro ligado ==")
+    problemas = cadeia_real_intacta()
+    if problemas:
+        for p in problemas:
+            falhar("7 ligação ao serviço (cadeia real)", p)
+    else:
+        print("  ok · 7 ligação ao serviço (cadeia real)")
 
     print()
     if FALHAS:
