@@ -68,18 +68,28 @@ def codigo_do_relatorio(payload) -> dict:
     )
 
 
-def _qr(url: str) -> Drawing:
+def qr_do_codigo(url: str, lado: float = QR_LADO) -> Drawing:
+    """O QR do endereço de conferência. Um desenho só, usado pelos dois formatos do relatório."""
     widget = QrCodeWidget(url, barLevel="M", barBorder=2)
     x0, y0, x1, y1 = widget.getBounds()
-    desenho = Drawing(QR_LADO, QR_LADO, transform=[QR_LADO / (x1 - x0), 0, 0, QR_LADO / (y1 - y0),
-                                                   -x0 * QR_LADO / (x1 - x0), -y0 * QR_LADO / (y1 - y0)])
+    desenho = Drawing(lado, lado, transform=[lado / (x1 - x0), 0, 0, lado / (y1 - y0),
+                                             -x0 * lado / (x1 - x0), -y0 * lado / (y1 - y0)])
     desenho.add(widget)
     return desenho
 
 
-def _codigo_em_duas_linhas(formatado: str) -> str:
+def linhas_do_codigo(formatado: str) -> list[str]:
+    """O código quebrado para caber na linha impressa, sem perder nenhum grupo."""
     grupos = formatado.split("-")
-    return "\n".join(["-".join(grupos[:LINHA_1]), "-".join(grupos[LINHA_1:])]).strip("\n")
+    return [x for x in ("-".join(grupos[:LINHA_1]), "-".join(grupos[LINHA_1:])) if x]
+
+
+def endereco_de_conferencia() -> str:
+    return validacao.base_url().replace("https://", "").replace("http://", "") + validacao.CAMINHO
+
+
+def _codigo_em_duas_linhas(formatado: str) -> str:
+    return "\n".join(linhas_do_codigo(formatado))
 
 
 def bloco_de_autenticidade(payload) -> list:
@@ -87,8 +97,7 @@ def bloco_de_autenticidade(payload) -> list:
     emitido = codigo_do_relatorio(payload)
     if not emitido.get("ok"):
         return []
-    endereco = validacao.base_url().replace("https://", "") + validacao.CAMINHO
-    texto = EXPLICACAO.format(endereco=endereco)
+    texto = EXPLICACAO.format(endereco=endereco_de_conferencia())
     cartao = Table(
         [[
             Table(
@@ -109,7 +118,7 @@ def bloco_de_autenticidade(payload) -> list:
                     ("TOPPADDING", (0, 2), (0, 2), 5),
                 ]),
             ),
-            _qr(emitido["url"]),
+            qr_do_codigo(emitido["url"]),
         ]],
         colWidths=[128 * mm, 37 * mm],
         style=TableStyle([

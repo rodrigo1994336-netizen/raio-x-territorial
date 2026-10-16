@@ -222,6 +222,30 @@ def regras_da_foto() -> dict:
              f"nota fraca: {legenda.get('nota')!r}")
     conferir("R20_LEGENDA_SEM_DATA_NAO_INVENTA_DATA", "nota" not in foto.legenda_de_verdor(),
              "legenda sem data trouxe nota com data")
+
+    # R23: a ponte para o relatório-livro. O livro recorta por caixa em metros, então a
+    # foto só serve quando está na mesma projeção que ele escolheu — e o quadro que ela
+    # cobre tem de ser maior do que o que o livro pede, senão o recorte cai fora da imagem.
+    meta_livro = {"ok": True, "cor_natural_path": str(cor), "crs": "EPSG:32723",
+                  "transform": [10.0, 0.0, 600000.0, 0.0, -10.0, 7900000.0],
+                  "largura_px": 560, "altura_px": 544, "data_cena": "2026-10-12",
+                  "nuvem_pct": 0.1}
+    ponte = foto.imagem_para_o_livro(meta_livro, 32723)
+    conferir("R23_PONTE_PARA_O_LIVRO",
+             bool(ponte) and ponte["bounds_m"] == [600000.0, 7894560.0, 605600.0, 7900000.0]
+             and ponte["date"] == "2026-10-12" and ponte["resolution_m"] == 10
+             and ponte["kind"] == "sentinel2_limpo",
+             f"contrato de imagem do livro fora do lugar: {ponte}")
+    conferir("R23_PONTE_NAO_PROMETE_ALTA_RESOLUCAO",
+             bool(ponte) and ponte.get("legenda_abertura") == "Imagem de satélite"
+             and "alta resolu" not in str(ponte).casefold(),
+             "a ponte deixaria o livro chamar 10 m por ponto de alta resolução")
+    conferir("R23_PROJECAO_DIFERENTE_NAO_ENTRA",
+             foto.imagem_para_o_livro(meta_livro, 32722) is None,
+             "a foto entrou no livro em outra projeção — o limite do CAR cairia fora do lugar")
+    conferir("R23_QUADRO_COBRE_O_QUE_O_LIVRO_PEDE",
+             foto.ENQUADRAMENTO_COBERTO <= 0.62,
+             f"o recorte cobre só {foto.ENQUADRAMENTO_COBERTO:.2f} do quadro que o livro pede")
     return {"pasta": pasta, "cor": cor, "verdor": verdor}
 
 
@@ -517,6 +541,54 @@ def regras_do_pdf() -> None:
     report_api.APP_VERSION = versao_do_servico
 
 
+def regras_do_livro() -> None:
+    """R11/R12 no formato que o cliente recebe hoje: o relatório-livro.
+
+    O livro desenha em tela própria e não passa pela pilha do motor antigo, então provar o
+    bloco num formato não prova nada no outro. O desenho sai pelo mesmo caminho do portão
+    do livro (``livro_v10_gate.desenhar``), e não por uma montagem paralela que envelhece.
+    """
+    import re as _re
+
+    import livro_v10_gate as portao_do_livro
+    import report_api
+    import report_validacao_codigo as validacao
+    import report_validacao_livro as bloco_livro
+
+    com_segredo(SEGREDO)
+    versao_do_servico = report_api.APP_VERSION
+    report_api.APP_VERSION = VERSAO
+    try:
+        payload = portao_do_livro.payload_com_frentes_f2(portao_do_livro.payload_base())
+        payload["property"]["car_code"] = CAR
+        payload["generated_at"] = EMISSAO
+        _pdf, texto, problemas = portao_do_livro.desenhar(payload)
+        plano = " ".join(texto.split())
+        conferir("R11_O_LIVRO_TRAZ_O_CONVITE",
+                 bloco_livro.TITULO in plano and validacao.CAMINHO.lstrip("/") in plano,
+                 "o livro não diz onde conferir")
+        conferir("R10_O_LIVRO_CONTINUA_BEM_ESCRITO", not problemas, f"{problemas[:3]}")
+        grupo = r"[0-9A-HJKMNP-TV-Z]{6}"
+        achado = _re.search(grupo + f"(?:-{grupo})" + "{%d}" % (bloco_livro.bloco_pdf.LINHA_1 - 1)
+                            + r"\s+" + grupo + f"(?:-{grupo})"
+                            + "{%d}" % (validacao.TAMANHO // validacao.GRUPO
+                                        - bloco_livro.bloco_pdf.LINHA_1 - 1), plano)
+        lido = validacao.conferir(validacao.normalizar(achado.group(0))) if achado else {}
+        conferir("R11_CODIGO_DO_LIVRO_CONFERE_DE_VOLTA",
+                 lido.get("estado") == "autentico" and lido.get("car_code") == CAR
+                 and lido.get("emitido_em") == EMISSAO_BR and lido.get("versao_relatorio") == VERSAO,
+                 f"o código lido do livro não confere: {str(lido)[:200]}")
+
+        com_segredo(None)
+        _pdf2, texto_sem, _ = portao_do_livro.desenhar(payload)
+        conferir("R12_SEM_SEGREDO_O_LIVRO_NAO_PROMETE",
+                 bloco_livro.TITULO not in " ".join(texto_sem.split()),
+                 "sem segredo o livro ainda prometeu conferência")
+    finally:
+        com_segredo(SEGREDO)
+        report_api.APP_VERSION = versao_do_servico
+
+
 def regras_da_pagina() -> None:
     import report_validacao_codigo as validacao
     import validacao_publica
@@ -549,7 +621,7 @@ def regras_da_pagina() -> None:
              "a página roda script ou não declara política de conteúdo")
     # Dado pessoal é identificador de gente, não assunto: "titularidade" é o NOME de uma
     # consulta do relatório e pode aparecer; CPF, CNPJ e nome de dono, não.
-    pessoais = [x for x in (r"CPFs?", r"CNPJs?", r"\d{3}\.\d{3}\.\d{3}-\d{2}",
+    pessoais = [x for x in (r"\bCPFs?\b", r"\bCNPJs?\b", r"\d{3}\.\d{3}\.\d{3}-\d{2}",
                             r"\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}", r"(?i)nome do (?:propriet|dono|titular)")
                 if re.search(x, html)]
     conferir("R09_PAGINA_SEM_DADO_PESSOAL", not pessoais, f"a página mostra dado de pessoa: {pessoais}")
@@ -668,6 +740,7 @@ def main() -> int:
     regra_do_caminho_das_imagens()
     regras_do_codigo()
     regras_do_pdf()
+    regras_do_livro()
     regras_da_pagina()
     if FALHAS:
         print(f"RX_R3_FOTO_VALIDADOR_GATE=FAIL falhas={len(FALHAS)}")

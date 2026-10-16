@@ -160,6 +160,20 @@ MUTACOES: dict[str, tuple[str, list[tuple[str, str]]]] = {
     "M37_bloco_de_autenticidade_nao_entra": ("report_blocos_r3.py", [(
         '        if title == SECAO_DA_AUTENTICIDADE:\n            return blocos + bloco_de_autenticidade(payload)',
         '        if False:\n            return blocos')],),
+    "M39_bloco_nao_entra_no_livro": ("report_validacao_livro.py", [(
+        '        if blocos and blocos[-1].nome == "colofao":', '        if False:')],),
+    "M40_livro_promete_sem_poder_conferir": ("report_validacao_livro.py", [(
+        '    if not emitido.get("ok"):\n        return None',
+        '    if not emitido.get("ok"):\n        emitido = {"codigo_formatado": "000000-000000-000000-000000-000000-'
+        '000000-000000-000000-000000", "url": "https://exemplo"}')],),
+    "M41_ponte_em_qualquer_projecao": ("sentinel_limpo.py", [(
+        '    if str(meta["crs"]).upper() != alvo:\n        return None',
+        '    if False:\n        return None')],),
+    "M42_quadro_mais_apertado_do_que_o_livro_pede": ("sentinel_limpo.py", [(
+        "FOLGA = 0.34", "FOLGA = 0.15")],),
+    "M43_ponte_promete_alta_resolucao": ("sentinel_limpo.py", [(
+        '        "legenda_abertura": "Imagem de satélite",',
+        '        "legenda_abertura": "Imagem de satélite de alta resolução",')],),
     "M38_foto_nao_entra_no_relatorio": ("report_blocos_r3.py", [(
         '        if title == SECAO_DA_FOTO:\n            return blocos + blocos_da_foto_limpa(payload)',
         '        if False:\n            return blocos')],),

@@ -77,6 +77,12 @@ LEGENDA_NOTA = ("Verdor medido na cena de {data}: mede quanto a folhagem reflete
 
 ESCALA_MAXIMA = 2.2  # não ampliar a cena mais do que isso: 10 m por pixel é 10 m por pixel
 LARGURA_MINIMA = 560
+# Folga em volta do imóvel. 34% de cada lado dá um quadro de 1,68x o lado maior: cobre o
+# enquadramento que o relatório-livro pede para a figura do imóvel (imóvel em ~62% da
+# largura, ou seja 1,61x) com margem. Recorte mais apertado do que o quadro pedido faria o
+# livro cortar fora da imagem.
+FOLGA = 0.34
+ENQUADRAMENTO_COBERTO = 1 / (1 + 2 * FOLGA)
 
 
 def esticar_cor_natural(vermelho, verde, azul, valido):
@@ -224,6 +230,50 @@ def limite_em_pixels(meta: dict[str, Any], car_geometry: dict[str, Any]) -> list
     return aneis
 
 
+def imagem_para_o_livro(meta: dict[str, Any], epsg_do_livro: str | int) -> dict[str, Any] | None:
+    """A foto limpa no contrato de imagem do relatório-livro, ou None quando não serve.
+
+    O livro recorta a imagem por caixa em metros, e para isso ela precisa estar na MESMA
+    projeção métrica que ele escolheu para o imóvel. A cena do Sentinel-2 quase sempre está
+    (as duas são UTM/WGS84 da mesma zona), mas num imóvel na divisa de zona pode não estar:
+    nesse caso devolve None, e o livro segue com a imagem que ele já tinha. Melhor sem data
+    do que com o limite do CAR caindo no lugar errado.
+
+    Com este dicionário, o livro passa a ter uma figura do imóvel COM data da cena: basta
+    preferi-la em ``Leitura.imagem_media`` e abrir a legenda por ``legenda_abertura``, que
+    não promete alta resolução onde cada ponto cobre 10 m.
+    """
+    if not meta.get("ok") or not meta.get("transform") or not meta.get("crs"):
+        return None
+    alvo = str(epsg_do_livro).upper()
+    if not alvo.startswith("EPSG:"):
+        alvo = f"EPSG:{alvo}"
+    if str(meta["crs"]).upper() != alvo:
+        return None
+    a, _b, c, _d, e, f = meta["transform"]
+    largura, altura = int(meta["largura_px"]), int(meta["altura_px"])
+    minx, maxy = float(c), float(f)
+    maxx, miny = minx + a * largura, maxy + e * altura
+    saida = {
+        "ok": True,
+        "kind": "sentinel2_limpo",
+        "path": meta["cor_natural_path"],
+        "crs": meta["crs"],
+        "bounds_m": [round(v, 2) for v in (minx, miny, maxx, maxy)],
+        "px": [largura, altura],
+        "date": meta.get("data_cena"),
+        "resolution_m": RESOLUCAO_M,
+        "attribution": FONTE,
+        "legenda_abertura": "Imagem de satélite",
+        "enquadramento_coberto": round(ENQUADRAMENTO_COBERTO, 3),
+    }
+    if meta.get("nuvem_pct") is not None:
+        saida["cloud_pct"] = meta["nuvem_pct"]
+    if meta.get("aviso"):  # campo vazio não aparece
+        saida["aviso"] = meta["aviso"]
+    return saida
+
+
 def texto_da_cena(meta: dict[str, Any]) -> str:
     """A linha que o relatório imprime embaixo da foto — fora da imagem, nunca dentro."""
     if not meta.get("ok"):
@@ -293,7 +343,7 @@ async def build_clean_sentinel_photo(car_geometry: dict[str, Any], out_dir: str 
             minx, miny, maxx, maxy = projetada.bounds
             dx = max(maxx - minx, 30)
             dy = max(maxy - miny, 30)
-            folga = max(dx, dy) * 0.18
+            folga = max(dx, dy) * FOLGA
             limites = (minx - folga, miny - folga, maxx + folga, maxy + folga)
             proporcao = max((limites[2] - limites[0]) / (limites[3] - limites[1]), 0.25)
             # Teto honesto de ampliação: o recorte não é esticado muito além do que a cena

@@ -36,7 +36,8 @@ def _load_report_after_report_api():
                 import heavy_live_api_v20  # noqa: F401
                 import report_pdf_cache_v21  # noqa: F401
                 import report_quick_v22  # noqa: F401
-                import report_blocos_r3  # noqa: F401  (R3: foto limpa e código de autenticidade no PDF)
+                import report_blocos_r3  # noqa: F401  (R3: foto limpa e código no formato antigo)
+                import report_validacao_livro  # noqa: F401  (R3: código e QR na última folha do livro)
                 import validacao_publica  # noqa: F401  (R3: /validar público)
                 print('RX_REPORT_V41_RUNTIME=loaded_deferred anm_retry:off extras_bounded:on sicar_parallel:on landuse_batch:on', flush=True)
             except Exception as exc:
