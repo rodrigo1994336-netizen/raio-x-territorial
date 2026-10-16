@@ -7,6 +7,7 @@ from typing import Any
 
 from highres_reference import build_highres_reference_image
 from sentinel_cog import build_sentinel_cog_property_image
+from sentinel_limpo import build_clean_sentinel_photo
 from property_visual_plate_v25 import build_property_visual_plate
 
 
@@ -26,9 +27,12 @@ async def build_hybrid_property_imagery(car_geometry:dict[str,Any],out_path:str|
     high_path=out_path.with_name('property_highres_reference.jpg')
     sentinel_path=out_path.with_name('property_sentinel2_10m.jpg')
     plate_path=out_path.with_name('property_visual_plate_v28.jpg')
-    high,sentinel=await asyncio.gather(
+    high,sentinel,limpa=await asyncio.gather(
         _timed('highres_reference',build_highres_reference_image(car_geometry,high_path)),
         _timed('sentinel_cog_ndvi',build_sentinel_cog_property_image(car_geometry,sentinel_path)),
+        # Terceira lente: o mesmo recorte SEM nada escrito, com a data da cena no metadado.
+        # Quem desenha o limite e a legenda é o relatório (foto_limpa_no_relatorio).
+        _timed('foto_limpa',build_clean_sentinel_photo(car_geometry,out_path.parent)),
     )
 
     t0=time.monotonic()
@@ -51,6 +55,7 @@ async def build_hybrid_property_imagery(car_geometry:dict[str,Any],out_path:str|
     meta={
         'ok':bool(primary),'path':primary,
         'visual_plate':plate,
+        'foto_limpa':limpa,
         'visual_plate_path':plate.get('path') if plate.get('ok') else None,
         'visual_reference':high,
         'sentinel':sentinel,
@@ -67,4 +72,4 @@ async def build_hybrid_property_imagery(car_geometry:dict[str,Any],out_path:str|
     return meta
 
 
-print('RX_VISUAL_HYBRID_V30=timed_property_identity_highres_sentinel_ndvi',flush=True)
+print('RX_VISUAL_HYBRID_V30=timed_property_identity_highres_sentinel_ndvi_foto_limpa',flush=True)

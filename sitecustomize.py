@@ -33,6 +33,8 @@ def _load_report_after_report_api():
                 import heavy_live_api_v20  # noqa: F401
                 import report_pdf_cache_v21  # noqa: F401
                 import report_quick_v22  # noqa: F401
+                import report_blocos_r3  # noqa: F401  (R3: foto limpa e código de autenticidade no PDF)
+                import validacao_publica  # noqa: F401  (R3: /validar público)
                 print('RX_REPORT_V41_RUNTIME=loaded_deferred anm_retry:off extras_bounded:on sicar_parallel:on landuse_batch:on', flush=True)
             except Exception as exc:
                 print(f'RX_REPORT_V41_RUNTIME=failed:{type(exc).__name__}:{str(exc)[:300]}', flush=True)
@@ -108,6 +110,7 @@ def _load_portal_deferred():
                 import portal_feature_smoke  # noqa: F401
                 import portal_map_smoke  # noqa: F401
                 import car_resolver_smoke  # noqa: F401
+                import validacao_publica  # noqa: F401  (R3: /validar público também no portal)
 
                 ready = portal_action_runtime_v25._route_paths()
                 missing = [x for x in portal_action_runtime_v25.REQUIRED_ROUTES if x not in ready]

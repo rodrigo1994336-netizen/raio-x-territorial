@@ -41,6 +41,10 @@ jobs:
         env:
           RX_RELEASE: OFF
         run: PYTHONPATH=. python scripts/r1_report_ptbr_gate.py
+      - name: R3 foto de satelite limpa e validador publico do relatorio (a fonte nao escreve nada na imagem, cena com data, legenda honesta; codigo assinado autoverificavel, pagina /validar, limite de tentativas, PDF imprime e confere; regras e controles positivos)
+        env:
+          RX_RELEASE: OFF
+        run: PYTHONPATH=. python scripts/r3_foto_validador_gate.py
       - name: T2 textos do cliente (sem jargao, sigla solta, nome interno, estado tecnico ou erro cru no portal, em /novo e no PDF; escopo do cartorio fora da tabela de fontes; controles positivos por mutacao)
         env:
           RX_RELEASE: V8_OPERATIONAL_ZERO_COST
@@ -98,6 +102,7 @@ jobs:
           import conab_armazens, deter_alertas
           import incra_acervo_f2, prodes_reading_f2, climate_normal_f2, prodes_image_platform_f2, iphan_sicg, outorga_vazao, mapbiomas_alerta
           import report_engine_v10, live_report_adapter_v20
+          import sentinel_limpo, foto_limpa_no_relatorio, report_validacao_codigo, report_validacao_pdf, report_blocos_r3
           import live_report_adapter_v18, report_visual_identity_v28, report_extras_perf_v30, heavy_live_api_v20, report_pdf_cache_v21, report_quick_v22, github_oidc_auth, monitoring_store, monitoring_routes, alerts_routes
           sample={'ok':True,'source':'MapBiomas','year':2025,'native_vegetation_share_pct':20,'classes':[{'code':15,'share_pct':55},{'code':39,'share_pct':25}]}
           p=landuse_profile_v39.classify_landuse_profile(sample)
