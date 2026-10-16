@@ -60,10 +60,12 @@ jobs:
           fi
       - name: Selection card panel and 10-movement visual gate
         run: python .github/scripts/v46_browser_smoke.py
-      # SICAR mocked: the parcel click used above must reach concave and edge-only parcels, and each broken
-      # click rule (no dispatch, other CAR's card, parcels not interactive, card stuck on the first property clicked)
-      # must fail at its own tag.
-      - name: V46 parcel click helper (concave and edge-only parcels, mutation controls, SICAR mocked)
+      # SICAR mocked: the parcel click used above must reach concave and edge-only parcels and parcels that
+      # only arrive with a cell answering late (the 15/09 flake), and each broken click rule (no dispatch,
+      # other CAR's card, parcels not interactive, card stuck on the first property clicked) must fail at
+      # its own tag. The late-cell scenario carries its own control: the same fixture with a deadline below
+      # the delay has to fail at NO_CLICKABLE_PARCEL.
+      - name: V46 parcel click helper (concave, edge-only and late-cell parcels, mutation controls, SICAR mocked)
         if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
         run: python .github/scripts/v46_browser_smoke.py --click-controls
       # The W1a steps below do not depend on live SICAR (fixtures or a spawned server), so they run even when the

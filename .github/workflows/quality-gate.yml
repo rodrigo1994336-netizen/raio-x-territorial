@@ -41,6 +41,11 @@ jobs:
         env:
           RX_RELEASE: OFF
         run: PYTHONPATH=. python scripts/r1_report_ptbr_gate.py
+      - name: R2 relatorio-livro v10 (contrato dos fatos, zero com alcance, fonte caida nunca vira ausencia, nada inventado, portugues do cliente pelo lint do R1, ocupacao das folhas, livro como formato padrao com volta por RX_RELATORIO_LIVRO=off; controles positivos por mutacao em cada regra)
+        env:
+          RX_RELEASE: OFF
+          RX_LIVRO_IMAGEM: "off"
+        run: PYTHONPATH=. python scripts/livro_v10_gate.py
       - name: R3 foto de satelite limpa e validador publico do relatorio (a fonte nao escreve nada na imagem, cena com data, legenda honesta; codigo assinado autoverificavel, pagina /validar, limite de tentativas, PDF imprime e confere; regras e controles positivos)
         env:
           RX_RELEASE: OFF

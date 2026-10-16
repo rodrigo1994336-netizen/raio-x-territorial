@@ -1,0 +1,5324 @@
+{
+ "_fixture": {
+  "id": "F1",
+  "arquivo": "curvelo_corrigido.json",
+  "versao": 1,
+  "dono": "P0",
+  "escrita_em": "2026-09-13",
+  "regra": "escrita à mão e congelada por hash (curvelo_corrigido.sha256); ninguém edita; a troca pela F1 gerada é um PR só (SPEC 8.1)",
+  "car": "MG-3120904-DFB380BECD7A4323AD8AA68FA14D011F",
+  "payload_base": {
+   "report_id": "RX-20260913T215201Z-A14D011F",
+   "generated_at": "2026-09-13T21:52:01.008410+00:00",
+   "mudancas": [
+    "acrescentados os Fatos _v51 de _fixture.fatos e o book_v10",
+    "agropecuaria.sif_chain.establishments[].fields removido (CPF/CNPJ, razão social, endereço, telefone, e-mail)"
+   ]
+  },
+  "decisoes_do_dono": {
+   "D1": "desligado: p. 1 e mapa da p. 3 com Sentinel-2 e vizinhança (book_v10.base_image kind=sentinel2)",
+   "D2": "ligado: comparação de área pequena abaixo de 5 ha, sem m²",
+   "D3": "desligado: SIF só pela categoria",
+   "D4": "contato só pelo site https://raioxterritorial.com.br",
+   "D5": "frases legais na versão factual",
+   "D6": "ligado: car.composition_v51 encontrado (base mensal de 04/08/2026)",
+   "D7": "fora da fixture (publicação)",
+   "D8": "ligado: IPHAN oficial com vizinhança de 10 km",
+   "D9": "ligado: DETER + alerta validado; nome da fonte só no apêndice (fonte.somente_apendice=true)",
+   "D10": "ligado: SIGEF e SNCI pelo INCRA oficial (nao_encontrado, com data da base)",
+   "D11": "só \"Inscrito no CAR em 28/11/2018\"; car.last_change_v51 fora_desta_edicao",
+   "D12": "esta fixture é a base da amostra aprovável"
+  },
+  "fatos": {
+   "car": "car.registration_date_v51",
+   "car_ultima_alteracao": "car.last_change_v51",
+   "composicao_car": "car.composition_v51",
+   "sigef": "land.sigef_v51",
+   "snci": "land.snci_v51",
+   "prodes": "environment.prodes.occurrences_v51",
+   "bioma": "environment.biome_v51",
+   "embargo_ibama": "environment.embargos_v51.ibama",
+   "embargo_icmbio": "environment.embargos_v51.icmbio",
+   "autos": "enforcement.autos_v51",
+   "ti": "environment.territorial_v51.ti",
+   "uc": "environment.territorial_v51.uc",
+   "quilombola": "environment.territorial_v51.quilombola",
+   "assentamento": "environment.territorial_v51.assentamento",
+   "floresta_publica": "environment.territorial_v51.floresta_publica",
+   "anm": "mining.processes_v51",
+   "regra_credito": "rules.credit_prodes_cmn_v51",
+   "alertas_mensais": "environment.deforestation_alerts_v51",
+   "outorga": "water.grants_v51",
+   "pocos": "water.wells_v51",
+   "pivo": "water.pivots_v51",
+   "climatologia": "water.climatology_v51",
+   "janela_chuva": "water.drought_screening_v51",
+   "sentinel": "satellite_imagery.cover_v51",
+   "mapbiomas": "agropecuaria.landcover_v51",
+   "relevo": "productive.relief_v51",
+   "solo_mapa": "productive.soil_map_v51",
+   "textura_solo": "productive.soil_texture_v51",
+   "soilgrids": "productive.soilgrids_v51",
+   "aptidao": "productive.aptitude_v51",
+   "erosao": "productive.erosion_v51",
+   "ppm": "agropecuaria.livestock_v51",
+   "safras": "agropecuaria.safras_v51",
+   "sif": "infrastructure.sif_v51",
+   "armazens": "infrastructure.warehouses_v51",
+   "sitio_arqueologico": "infrastructure.iphan_v51"
+  },
+  "chaves_da_spec_e_do_plano": [
+   "car.composition_v51",
+   "car.last_change_v51",
+   "car.registration_date_v51",
+   "enforcement.autos_v51",
+   "environment.biome_v51",
+   "environment.deforestation_alerts_v51",
+   "environment.embargos_v51",
+   "environment.prodes.occurrences_v51",
+   "environment.territorial_v51",
+   "infrastructure.iphan_v51",
+   "infrastructure.sif_v51",
+   "infrastructure.warehouses_v51",
+   "land.sigef_v51",
+   "land.snci_v51",
+   "mining.processes_v51",
+   "rules.credit_prodes_cmn_v51",
+   "satellite_imagery.cover_v51",
+   "agropecuaria.safras_v51",
+   "water.drought_screening_v51",
+   "water.grants_v51"
+  ],
+  "chaves_propostas_pela_p0": [
+   "water.wells_v51",
+   "water.pivots_v51",
+   "water.climatology_v51",
+   "agropecuaria.landcover_v51",
+   "productive.relief_v51",
+   "productive.soil_map_v51",
+   "productive.soil_texture_v51",
+   "productive.soilgrids_v51",
+   "productive.aptitude_v51",
+   "productive.erosion_v51",
+   "agropecuaria.livestock_v51"
+  ],
+  "ausentes_de_proposito": {
+   "infrastructure.airports_v51": "distância do aeródromo medida da divisa não foi provada; sem o Fato a linha não existe (2.0.2)",
+   "matricula, ccir, embargos_estaduais": "sempre fora_desta_edicao pelo modelo, sem envelope"
+  },
+  "provas": {
+   "prodes": "r2/fontes/06_divergencias_verdade.md §3; áreas geodésicas GRS80 e largura/faixa de 30 m em UTM 23S refeitas pela P0 sobre as amostras 06_sicar_car_curvelo.geojson e 06_prodes_cerrado_yearly_bbox_curvelo.geojson; prev_image_date pela campanha anterior com feição na mesma cena (218/73) dentro da caixa",
+   "plataforma_landsat": "r2/fontes/06 §2: uma cena por data no catálogo Landsat (LT05 em 31/07/2004 e 21/07/2006)",
+   "embargo_ibama": "camada adm_embargos_ibama_a (a embargos_siscom_brasil do código de hoje está vazia, r2/plano/F4 §0); amostra r2/plano/mcr_raw/emb_curvelo.json",
+   "reconferencia_camadas": {
+    "embargo_ibama": {
+     "camada": "https://pamgia.ibama.gov.br/server/rest/services/01_Publicacoes_Bases/adm_embargos_ibama_a/FeatureServer/0",
+     "registros_na_camada": 91197,
+     "na_caixa_do_car": 0,
+     "controle_caixa_larga": 120,
+     "reconferido_em": "2026-09-14T03:00:30Z"
+    },
+    "embargo_icmbio": {
+     "camada": "https://pamgia.ibama.gov.br/server/rest/services/01_Publicacoes_Bases/adm_embargo_icmbio_a/FeatureServer/0",
+     "registros_na_camada": 8025,
+     "na_caixa_do_car": 0,
+     "controle_caixa_larga": 131,
+     "reconferido_em": "2026-09-14T03:00:36Z"
+    },
+    "autos": {
+     "camada": "https://pamgia.ibama.gov.br/server/rest/services/app_dadosabertos/adm_auto_infracao_p/FeatureServer/0",
+     "registros_na_camada": 710298,
+     "na_caixa_do_car": 0,
+     "controle_caixa_larga": 1317,
+     "reconferido_em": "2026-09-14T03:00:57Z"
+    },
+    "ti": {
+     "camada": "https://pamgia.ibama.gov.br/server/rest/services/01_Publicacoes_Bases/lim_terra_indigena_a/FeatureServer/12",
+     "registros_na_camada": 627,
+     "na_caixa_do_car": 0,
+     "controle_caixa_larga": 2,
+     "reconferido_em": "2026-09-14T03:01:03Z"
+    },
+    "uc": {
+     "camada": "https://pamgia.ibama.gov.br/server/rest/services/BasesSincronizadas/lim_unidades_conserva%C3%A7%C3%A3o_mma_a/FeatureServer/0",
+     "registros_na_camada": 3471,
+     "na_caixa_do_car": 0,
+     "controle_caixa_larga": 64,
+     "reconferido_em": "2026-09-14T03:01:04Z"
+    },
+    "quilombola": {
+     "camada": "https://pamgia.ibama.gov.br/server/rest/services/BasesSincronizadas/lim_quilombos_incra_a/FeatureServer/0",
+     "registros_na_camada": 440,
+     "na_caixa_do_car": 0,
+     "controle_caixa_larga": 3,
+     "reconferido_em": "2026-09-14T03:01:05Z"
+    },
+    "assentamento": {
+     "camada": "https://pamgia.ibama.gov.br/server/rest/services/01_Publicacoes_Bases/assentamentos_incra/FeatureServer/1",
+     "registros_na_camada": 8377,
+     "na_caixa_do_car": 0,
+     "controle_caixa_larga": 14,
+     "reconferido_em": "2026-09-14T03:01:05Z"
+    },
+    "floresta_publica": {
+     "camada": "https://pamgia.ibama.gov.br/server/rest/services/01_Publicacoes_Bases/lim_floresta_publica_a/FeatureServer/8",
+     "registros_na_camada": 4763,
+     "na_caixa_do_car": 0,
+     "controle_caixa_larga": 32,
+     "reconferido_em": "2026-09-14T03:01:11Z"
+    },
+    "anm": {
+     "camada": "https://geo.anm.gov.br/arcgis/rest/services/SIGMINE/dados_anm/FeatureServer/0",
+     "registros_na_camada": 269631,
+     "na_caixa_do_car": 0,
+     "controle_caixa_larga": 7902,
+     "reconferido_em": "2026-09-14T03:01:12Z"
+    }
+   },
+   "composicao_car": "r2/fontes/01_car_composicao_datas.md §2",
+   "sigef_snci": "r2/fontes/02_snci_incra.md; manifest da branch f2/incra_sigef_snci (0 feições nas 4 camadas, 14/09/2026 00:02:09 UTC)",
+   "alertas": "r2/fontes/03_alertas_desmatamento.md §1 (amostras deter_cerrado_intersects_imovel.json e mba_ruralProperty_curvelo.json)",
+   "armazens": "r2/fontes/04_conab_armazens_safras.md §1",
+   "iphan_outorga": "r2/fontes/05_iphan_raio_outorga_vazao.md §1.2 e §2.2",
+   "regra_credito": "r2/plano/F4_checagem_mcr.md §1.3; r2/plano/mcr_raw/res_5303.txt",
+   "janela_chuva": "branch f2/clima_landsat (normal 16,52 mm = 19 d × 0,25 + 11 d × 1,07 mm/dia); série diária 1991–2025 recontada pela P0: 31 de 35 anos com menos chuva na janela",
+   "terra": "r2/plano/F1_terra_producao.md itens 1–5, 10, 11 e 13; amostras r2/plano/terra_amostras/p1_*, p2_*, p3_*",
+   "safras_ano": "2024: 1.500 ha × 1.760 kg/ha = 2.640 t (soja) e 650 ha × 3.080 kg/ha = 2.002 t (milho), iguais à tabela SIDRA 5457 de 2024 (F1 item 13)",
+   "imagens": "cena S2B_23KNV_20260828_0_L2A lida por faixa (B02, B03, B04, B08), reprojetada para EPSG:31983, bilinear, sem texto gravado"
+  },
+  "divergencias_com_a_spec": [
+   "relevo: a SPEC 2.7 usa classes em graus do SRTM (33/48/19%); a leitura corrigida usa Copernicus DEM com as classes da Embrapa em % (11/62/24,5/2,5%) e graus só na leitura legal; Fato relevo substitui o srtm da tabela 2.0.2",
+   "solo: a SPEC 2.7 usa Cambissolo distrófico (IDE-Sisema, só MG) e textura média do SoilGrids; a leitura corrigida usa o IBGE nacional (Argissolo Vermelho Eutrófico ~6/10 + Cambissolo Háplico ~4/10) e a textura do MapBiomas Solo (argilosa, 47–49%); SoilGrids fica como segunda opinião (pH)",
+   "janela de chuva: a SPEC 0.3 item 2 e o PLANO L14 mandam \"sem adjetivo\" quando o normal da janela é < 30 mm; a decisão desta fixture é \"acima do normal\" (31,46 contra 16,52 mm; 31 de 35 anos choveram menos), sem alerta de seca; esperado_abaixo_30mm=true fica gravado para a P2/P7 decidirem a frase",
+   "PRODES 2006: a área dentro é 14,278854 ha geodésica (14,28 ha, a mesma dos outros três recortes e do payload); 14,27 ha é a área em UTM 23S (14,270057)",
+   "prev_image_date de 2006: a camada inteira tem 1 feição em 2005; a regra literal da SPEC 2.3 escolheria 2005 e daria null; a fixture segue o exemplo de Curvelo da própria SPEC (31/07/2004)",
+   "embargo ICMBio: a camada do PAMGIA é \"Embargos (2022)\", com autos até 08/02/2022; o texto de ausência precisa dizer essa data",
+   "poços: contagem de 27 no raio de 20 km vem do filtro com o ×1,15 que a P4 corrige; o número pode mudar na F1 gerada"
+  ]
+ },
+ "report_id": "RX-20260913T215201Z-A14D011F",
+ "generated_at": "2026-09-13T21:52:01.008410+00:00",
+ "source_version": "Raio-X Territorial V24 • V17 completo + evidência de acesso/via pública + renderização única + pipeline cronometrado.",
+ "property": {
+  "name": "",
+  "car_code": "MG-3120904-DFB380BECD7A4323AD8AA68FA14D011F",
+  "municipality": "Curvelo",
+  "uf": "MG",
+  "area_ha": 14.795,
+  "name_source": "SICAR sem denominação pública"
+ },
+ "map_image_path": "\\tmp\\raiox_reports\\RX-20260913T215201Z-A14D011F\\property_visual_plate_v28.jpg",
+ "car_map_image_path": "\\tmp\\raiox_reports\\RX-20260913T215201Z-A14D011F\\property_visual_plate_v28.jpg",
+ "problem_map_image_path": "\\tmp\\raiox_reports\\RX-20260913T215201Z-A14D011F\\property_visual_plate_v28.jpg",
+ "environment_map_image_path": "\\tmp\\raiox_reports\\RX-20260913T215201Z-A14D011F\\property_visual_plate_v28.jpg",
+ "car": {
+  "status": "AT",
+  "type": "IRU",
+  "fiscal_modules": 0.3699,
+  "analysis_status": "Aguardando análise",
+  "summary": "CAR MG-3120904-DFB380BECD7A4323AD8AA68FA14D011F • situação AT • Aguardando análise.",
+  "fields": [
+   [
+    "Código CAR",
+    "MG-3120904-DFB380BECD7A4323AD8AA68FA14D011F"
+   ],
+   [
+    "Município",
+    "Curvelo"
+   ],
+   [
+    "UF",
+    "MG"
+   ],
+   [
+    "Área declarada",
+    "14.795 ha"
+   ],
+   [
+    "Módulos fiscais",
+    0.3699
+   ],
+   [
+    "Status do imóvel",
+    "AT"
+   ],
+   [
+    "Tipo do imóvel",
+    "IRU"
+   ],
+   [
+    "Condição",
+    "Aguardando análise"
+   ],
+   [
+    "Fonte",
+    "SICAR / WFS público"
+   ],
+   [
+    "Consulta",
+    "2026-09-13T21:52:01.008410+00:00"
+   ]
+  ],
+  "areas": [
+   [
+    "APP / Reserva Legal / vegetação / consolidada",
+    "NÃO CONSULTADO NESTA FONTE"
+   ]
+  ],
+  "environmental_composition": [],
+  "registration_date_v51": {
+   "estado": "encontrado",
+   "valor": "2018-11-28",
+   "unidade": "data",
+   "fonte": {
+    "id": "sicar_wfs",
+    "nome_publico": "SICAR — Cadastro Ambiental Rural",
+    "licenca": null,
+    "citacao": "Serviço Florestal Brasileiro. SICAR, serviço WFS público (geoserver.car.gov.br), camada sicar:sicar_imoveis_mg."
+   },
+   "data_base": null,
+   "consultado_em": "2026-09-13T21:52:01Z",
+   "limites": [],
+   "motivo": null,
+   "texto_base": "Inscrito no CAR em 28/11/2018."
+  },
+  "last_change_v51": {
+   "estado": "fora_desta_edicao",
+   "valor": null,
+   "unidade": null,
+   "fonte": {
+    "id": "sicar_wfs",
+    "nome_publico": "SICAR — Cadastro Ambiental Rural",
+    "licenca": null,
+    "citacao": null
+   },
+   "data_base": null,
+   "consultado_em": null,
+   "limites": [],
+   "motivo": null,
+   "texto_base": "A data de última alteração do CAR não faz parte desta edição."
+  },
+  "composition_v51": {
+   "estado": "encontrado",
+   "valor": {
+    "area_ha": 14.795,
+    "area_liquida_ha": 14.795,
+    "servidao_ha": {
+     "estado": "nao_encontrado"
+    },
+    "uso_consolidado_ha": 12.5701,
+    "vegetacao_nativa_ha": {
+     "estado": "nao_encontrado"
+    },
+    "app": {
+     "total_ha": 1.4547,
+     "em_consolidada_ha": 0.0586,
+     "a_recompor_ha": 1.3961
+    },
+    "reserva_legal": {
+     "declarada": {
+      "estado": "nao_encontrado"
+     },
+     "regra_geral_pct": 20,
+     "regra_geral_ha": 2.959,
+     "pequeno_imovel_art67": true,
+     "analise_orgao": "Aguardando análise"
+    },
+    "agua_declarada_ha": 0.4108,
+    "sem_classificacao_declarada_ha": 1.8155,
+    "temas_com_snapshot": [
+     "app",
+     "reserva_legal",
+     "vegetacao_nativa",
+     "area_consolidada",
+     "area_pousio",
+     "servidao_administrativa",
+     "uso_restrito",
+     "hidrografia"
+    ]
+   },
+   "unidade": "ha",
+   "fonte": {
+    "id": "bd_br_sfb_sicar",
+    "nome_publico": "SICAR — base oficial de downloads (via Base dos Dados)",
+    "licenca": "CC BY 4.0",
+    "citacao": "Serviço Florestal Brasileiro, base de downloads do SICAR, redistribuída pela Base dos Dados (basedosdados.br_sfb_sicar), extração de MG de 04/08/2026."
+   },
+   "data_base": "2026-08-04",
+   "consultado_em": "2026-09-13T23:11:00Z",
+   "limites": [
+    "o que o dono declarou no CAR; o órgão ambiental ainda não conferiu"
+   ],
+   "motivo": null,
+   "texto_base": "O que o dono declarou no CAR, na base oficial de 04/08/2026: uso consolidado declarado de 12,57 ha e Área de Preservação Permanente (APP) de 1,45 ha, dos quais 1,40 ha a recompor. Nenhuma Reserva Legal declarada; pela regra geral seriam 2,96 ha; imóvel pequeno tem regra própria; o órgão ainda não analisou. Nenhuma vegetação nativa declarada. 1,82 ha são área sem classificação declarada no CAR."
+  }
+ },
+ "land": {
+  "summary": "SIGEF público consultado nesta emissão: 0 parcela(s) candidata(s) no envelope do imóvel. SNCI/CCIR, matrícula, ônus e titularidade são integrações registrais/cadastrais separadas e permanecem preparadas para ativação por fonte legalmente habilitada; não são inferidas do CAR.",
+  "risk": "ATENÇÃO",
+  "certifications": [
+   [
+    "SIGEF",
+    "CONSULTADO",
+    0,
+    "Espelho público SIGEF/INCRA disponibilizado no PAMGIA/IBAMA"
+   ],
+   [
+    "SNCI",
+    "INTEGRAÇÃO PREPARADA — OFF",
+    "—",
+    "Ativação depende de fonte/credencial legalmente habilitada."
+   ]
+  ],
+  "matrix": [
+   [
+    "CAR",
+    "AT",
+    "14.795 ha",
+    "Cadastro ambiental consultado"
+   ],
+   [
+    "SIGEF",
+    "0 parcela(s)",
+    "-",
+    "Não equivale a matrícula imobiliária"
+   ],
+   [
+    "Matrícula",
+    "INTEGRAÇÃO RESTRITA — OFF",
+    "—",
+    "Não inferido do CAR; conector preparado para provedor/fonte autorizada."
+   ],
+   [
+    "Detentor/titular",
+    "INTEGRAÇÃO RESTRITA — OFF",
+    "—",
+    "Não inferido do CAR; conector preparado para provedor/fonte autorizada."
+   ]
+  ],
+  "evidence": {
+   "score": "LIMITADA",
+   "text": "CAR e consulta SIGEF não comprovam, por si sós, titularidade registral atual. Matrícula e cadeia dominial não foram consultadas neste ciclo."
+  },
+  "sigef_v51": {
+   "estado": "nao_encontrado",
+   "valor": {
+    "parcelas": [],
+    "camadas_consultadas": [
+     "certificada_sigef_particular_mg",
+     "certificada_sigef_publico_mg"
+    ]
+   },
+   "unidade": "parcelas",
+   "fonte": {
+    "id": "incra_wfs_sigef",
+    "nome_publico": "INCRA — SIGEF (Acervo Fundiário)",
+    "licenca": "o serviço declara: vedado o uso comercial",
+    "citacao": "INCRA, Acervo Fundiário, WFS i3Geo (acervofundiario.incra.gov.br), temas certificada_sigef_particular_mg e certificada_sigef_publico_mg."
+   },
+   "data_base": "2026-09-11",
+   "consultado_em": "2026-09-14T00:02:09Z",
+   "limites": [
+    "parcelas certificadas no SIGEF, particulares e públicas"
+   ],
+   "motivo": null,
+   "texto_base": "Não há parcela certificada no SIGEF (INCRA) sobre o imóvel, na base de 11/09/2026."
+  },
+  "snci_v51": {
+   "estado": "nao_encontrado",
+   "valor": {
+    "certificacoes": [],
+    "camadas_consultadas": [
+     "imoveiscertificados_privado_mg",
+     "imoveiscertificados_publico_mg"
+    ]
+   },
+   "unidade": "certificações",
+   "fonte": {
+    "id": "incra_wfs_snci",
+    "nome_publico": "INCRA — SNCI (Acervo Fundiário)",
+    "licenca": "o serviço declara: vedado o uso comercial",
+    "citacao": "INCRA, Acervo Fundiário, WFS i3Geo (acervofundiario.incra.gov.br), temas imoveiscertificados_privado_mg e imoveiscertificados_publico_mg."
+   },
+   "data_base": null,
+   "consultado_em": "2026-09-14T00:02:09Z",
+   "limites": [
+    "certificações de 2004 a 2015; a base não recebe registros novos"
+   ],
+   "motivo": null,
+   "texto_base": "Não há certificação antiga do INCRA (SNCI, de 2004 a 2015) sobre o imóvel, na consulta de 13/09/2026."
+  }
+ },
+ "environment": {
+  "prodes": {
+   "count": 4,
+   "area_ha": 14.496704,
+   "status": "ATENÇÃO",
+   "summary": "4 ocorrências PRODES intersectam o imóvel; a legalidade depende de data, autorização e enquadramento aplicável.",
+   "rows": [
+    [
+     "Histórico PRODES completo",
+     "4 ocorrência(s) • 14.496704 ha únicos • 97.98% do CAR • anos: 2004, 2006, 2014, 2021"
+    ],
+    [
+     "Recorte pós-31/07/2019",
+     "1 ocorrência(s) • 0.027909 ha únicos • 0.19% do CAR • anos: 2021"
+    ],
+    [
+     "Triagem para crédito rural",
+     "Há detecção PRODES posterior a 31/07/2019. Para crédito rural, a ocorrência deve ser conferida conforme o MCR vigente e a documentação ambiental aplicável; isso não equivale automaticamente a impedimento definitivo."
+    ],
+    [
+     "Base regulatória",
+     "MCR 2-9: verificação de supressão de vegetação nativa após 31/07/2019."
+    ],
+    [
+     "Método de área PRODES",
+     "Interseção geométrica exata com o CAR + união das geometrias por lente; sobreposições não são somadas em duplicidade."
+    ],
+    [
+     "Ocorrências exatas",
+     4
+    ],
+    [
+     "Área única intersectada",
+     "14.496704 ha"
+    ],
+    [
+     "Percentual do CAR",
+     "97.98%"
+    ],
+    [
+     "Anos identificados",
+     "2004, 2006, 2014, 2021"
+    ],
+    [
+     "Fonte",
+     "INPE / TerraBrasilis / PRODES"
+    ],
+    [
+     "Ano",
+     2004
+    ],
+    [
+     "Área intersectada",
+     "0.13805 ha"
+    ],
+    [
+     "Imagem",
+     "Landsat8/OLI • 2004-07-31"
+    ],
+    [
+     "Ano",
+     2006
+    ],
+    [
+     "Área intersectada",
+     "14.278854 ha"
+    ],
+    [
+     "Imagem",
+     "Landsat8/OLI • 2006-07-21"
+    ],
+    [
+     "Ano",
+     2014
+    ],
+    [
+     "Área intersectada",
+     "0.051891 ha"
+    ],
+    [
+     "Imagem",
+     "Landsat8/OLI • 2014-08-12"
+    ]
+   ],
+   "meaning": "O Raio-X mantém o histórico PRODES completo e, separadamente, destaca o recorte pós-31/07/2019. Em ambas as lentes, a área é a união das geometrias resultantes da interseção exata com o CAR, evitando dupla contagem. PRODES mapeia desmatamento. A interseção não prova, isoladamente, infração ambiental; é necessário considerar data, autorizações, área consolidada e demais regras aplicáveis.",
+   "lens": {
+    "historical": {
+     "occurrence_count": 4,
+     "area_unique_ha": 14.496704,
+     "pct_car": 97.9838,
+     "years": [
+      2004,
+      2006,
+      2014,
+      2021
+     ]
+    },
+    "post_2019_07_31": {
+     "occurrence_count": 1,
+     "area_unique_ha": 0.027909,
+     "pct_car": 0.1886,
+     "years": [
+      2021
+     ],
+     "cutoff": "2019-07-31"
+    },
+    "credit_screening": {
+     "mcr_check_required": true,
+     "fiscal_modules": 0.3699,
+     "reading": "Há detecção PRODES posterior a 31/07/2019. Para crédito rural, a ocorrência deve ser conferida conforme o MCR vigente e a documentação ambiental aplicável; isso não equivale automaticamente a impedimento definitivo.",
+     "regulatory_basis": "MCR 2-9: verificação de supressão de vegetação nativa após 31/07/2019."
+    },
+    "calculation_method": "exact_geometry_union_after_intersection",
+    "explanation": "O Raio-X mantém o histórico PRODES completo e, separadamente, destaca o recorte pós-31/07/2019. Em ambas as lentes, a área é a união das geometrias resultantes da interseção exata com o CAR, evitando dupla contagem."
+   },
+   "occurrences_v51": {
+    "estado": "encontrado",
+    "valor": {
+     "occurrences": [
+      {
+       "id": "e52d88eb-216e-4123-9a89-347d40148810",
+       "year": 2004,
+       "image_date": "2004-07-31",
+       "prev_image_date": "2002-07-02",
+       "area_inside_ha": 0.13805,
+       "feature_area_ha": 24.8883,
+       "inner_mean_width_m": 7.7,
+       "share_of_feature_pct": 0.55,
+       "share_in_30m_band_pct": 100.0,
+       "pieces_inside": 1,
+       "classe": "divisa",
+       "periodo_legal": "ate_2008_07_22",
+       "plataforma": "Landsat 5 / TM",
+       "plataforma_anterior": "Landsat 7 / ETM+",
+       "layer": "prodes-cerrado-nb:yearly_deforestation",
+       "layer_kind": "yearly_deforestation",
+       "path_row": "218/73"
+      },
+      {
+       "id": "059292e7-4741-4361-91fc-064a30e51651",
+       "year": 2006,
+       "image_date": "2006-07-21",
+       "prev_image_date": "2004-07-31",
+       "area_inside_ha": 14.278854,
+       "feature_area_ha": 42.0138,
+       "inner_mean_width_m": 154.6,
+       "share_of_feature_pct": 33.99,
+       "share_in_30m_band_pct": 29.4,
+       "pieces_inside": 1,
+       "classe": "dentro",
+       "periodo_legal": "ate_2008_07_22",
+       "plataforma": "Landsat 5 / TM",
+       "plataforma_anterior": "Landsat 5 / TM",
+       "layer": "prodes-cerrado-nb:yearly_deforestation",
+       "layer_kind": "yearly_deforestation",
+       "path_row": "218/73"
+      },
+      {
+       "id": "07f98d63-b0ce-4f58-b00f-9390b38e5209",
+       "year": 2014,
+       "image_date": "2014-08-12",
+       "prev_image_date": null,
+       "area_inside_ha": 0.051891,
+       "feature_area_ha": 2.7348,
+       "inner_mean_width_m": 9.3,
+       "share_of_feature_pct": 1.9,
+       "share_in_30m_band_pct": 100.0,
+       "pieces_inside": 1,
+       "classe": "divisa",
+       "periodo_legal": "ate_2019_07_31",
+       "plataforma": "Landsat 8 / OLI",
+       "plataforma_anterior": null,
+       "layer": "prodes-cerrado-nb:yearly_deforestation",
+       "layer_kind": "yearly_deforestation",
+       "path_row": "218/73"
+      },
+      {
+       "id": "2ce0e5b9-c371-4e92-bf1b-97a25ad72602",
+       "year": 2021,
+       "image_date": "2021-09-16",
+       "prev_image_date": "2020-09-13",
+       "area_inside_ha": 0.027909,
+       "feature_area_ha": 1.5103,
+       "inner_mean_width_m": 4.2,
+       "share_of_feature_pct": 1.85,
+       "share_in_30m_band_pct": 100.0,
+       "pieces_inside": 3,
+       "classe": "divisa",
+       "periodo_legal": "depois_2019_07_31",
+       "plataforma": "Landsat 8 / OLI",
+       "plataforma_anterior": "Landsat 8 / OLI",
+       "layer": "prodes-cerrado-nb:yearly_deforestation",
+       "layer_kind": "yearly_deforestation",
+       "path_row": "218/73"
+      }
+     ],
+     "union_inside_ha": 14.496704,
+     "area_car_ha": 14.795,
+     "metodo_area": "geodésica GRS80 da interseção com o limite do CAR",
+     "metodo_classe": "divisa quando largura média < 30 m e parte interna < 10% da mancha e >= 90% da parte interna na faixa de 30 m do limite; senão dentro"
+    },
+    "unidade": "ha",
+    "fonte": {
+     "id": "inpe_prodes_cerrado",
+     "nome_publico": "INPE — PRODES Cerrado (TerraBrasilis)",
+     "licenca": "CC BY-SA 4.0",
+     "citacao": "INPE. PRODES Cerrado, desmatamento anual, TerraBrasilis (WFS prodes-cerrado-nb:yearly_deforestation), publicação de 17/07/2026."
+    },
+    "data_base": "2026-07-17",
+    "consultado_em": "2026-09-13T21:52:01Z",
+    "limites": [
+     "manchas recortadas pelo limite declarado no CAR",
+     "no Cerrado, até 2012 o mapa saiu a cada dois anos"
+    ],
+    "motivo": null,
+    "texto_base": "Dentro do imóvel: vegetação nativa retirada em 14,28 ha (97% da área), percebida entre as imagens de 31/07/2004 e 21/07/2006, antes de 22/07/2008. Na divisa: três manchas quase inteiras fora do imóvel (2004, 2014 e 2021) encostam no limite em faixas de 4 a 9 m, estreitas demais para o satélite separar (0,14 · 0,05 · 0,03 ha). Nada depois de 31/07/2019 dentro do imóvel; a faixa de 2021 na divisa é posterior a essa data."
+   }
+  },
+  "unique_problem_area_ha": 0,
+  "unique_problem_area_pct": 0,
+  "layer_rows": [
+   [
+    "Terra Indígena",
+    "0 ocorrência(s) • 0.0 ha (0.0%)",
+    "FUNAI / IBAMA-PAMGIA"
+   ],
+   [
+    "Unidade de Conservação",
+    "0 ocorrência(s) • 0.0 ha (0.0%)",
+    "CNUC/MMA / IBAMA-PAMGIA"
+   ],
+   [
+    "Território Quilombola",
+    "0 ocorrência(s) • 0.0 ha (0.0%)",
+    "INCRA / IBAMA-PAMGIA"
+   ],
+   [
+    "Assentamento",
+    "0 ocorrência(s) • 0.0 ha (0.0%)",
+    "INCRA / IBAMA-PAMGIA"
+   ],
+   [
+    "PRODES",
+    "4 ocorrência(s) • 14.496704 ha",
+    "INPE/TerraBrasilis"
+   ],
+   [
+    "Embargo IBAMA",
+    "0 ocorrência(s)",
+    "IBAMA/PAMGIA"
+   ],
+   [
+    "Floresta Pública — SFB",
+    "0 ocorrência(s) • 0.0 ha (0.0%)",
+    "Serviço Florestal Brasileiro / IBAMA-PAMGIA"
+   ],
+   [
+    "Sítio Arqueológico — IPHAN",
+    "0 ocorrência(s) • 0.0 ha (0.0%)",
+    "IPHAN / IBAMA-PAMGIA"
+   ]
+  ],
+  "car_integrity_table_rows": [],
+  "biome_v51": {
+   "estado": "encontrado",
+   "valor": {
+    "bioma": "Cerrado",
+    "pct_car": 100.0
+   },
+   "unidade": "%",
+   "fonte": {
+    "id": "inpe_biomas_brasil",
+    "nome_publico": "INPE — limites de biomas (TerraBrasilis)",
+    "licenca": null,
+    "citacao": "INPE, TerraBrasilis, camada prodes-brasil-nb:biomas_brasil."
+   },
+   "data_base": null,
+   "consultado_em": "2026-09-13T21:52:01Z",
+   "limites": [],
+   "motivo": null,
+   "texto_base": "O imóvel fica no Cerrado."
+  },
+  "embargos_v51": {
+   "ibama": {
+    "estado": "nao_encontrado",
+    "valor": {
+     "quantidade": 0
+    },
+    "unidade": "embargos",
+    "fonte": {
+     "id": "ibama_adm_embargos",
+     "nome_publico": "IBAMA — áreas embargadas",
+     "licenca": null,
+     "citacao": "IBAMA, camada adm_embargos_ibama_a (PAMGIA, 01_Publicacoes_Bases)."
+    },
+    "data_base": "2026-09-12",
+    "consultado_em": "2026-09-14T02:06:54Z",
+    "limites": [
+     "só embargos desenhados no mapa; embargo sem mapa só aparece na consulta por CPF ou CNPJ"
+    ],
+    "motivo": null,
+    "texto_base": "Nenhum embargo do IBAMA desenhado no mapa sobre a área, na consulta de 13/09/2026."
+   },
+   "icmbio": {
+    "estado": "nao_encontrado",
+    "valor": {
+     "quantidade": 0
+    },
+    "unidade": "embargos",
+    "fonte": {
+     "id": "icmbio_adm_embargos",
+     "nome_publico": "ICMBio — embargos (IBAMA, PAMGIA)",
+     "licenca": null,
+     "citacao": "ICMBio, camada adm_embargo_icmbio_a \"Embargos (2022) - ICMBio\" (PAMGIA, 01_Publicacoes_Bases)."
+    },
+    "data_base": "2022-02-08",
+    "consultado_em": "2026-09-13T21:52:01Z",
+    "limites": [
+     "só embargos desenhados no mapa",
+     "a camada publicada vai até autos de 08/02/2022"
+    ],
+    "motivo": null,
+    "texto_base": "Nenhum embargo do ICMBio desenhado no mapa sobre a área, na base publicada com autos até 08/02/2022."
+   },
+   "items": []
+  },
+  "territorial_v51": {
+   "ti": {
+    "estado": "nao_encontrado",
+    "valor": {
+     "quantidade": 0,
+     "area_ha_no_car": 0.0
+    },
+    "unidade": "áreas",
+    "fonte": {
+     "id": "funai_terras_indigenas",
+     "nome_publico": "FUNAI — terras indígenas (IBAMA, PAMGIA)",
+     "licenca": null,
+     "citacao": "Painel de Informações Ambientais do IBAMA (PAMGIA), serviços ArcGIS públicos."
+    },
+    "data_base": null,
+    "consultado_em": "2026-09-13T21:52:01Z",
+    "limites": [
+     "interseção com o limite declarado no CAR"
+    ],
+    "motivo": null,
+    "texto_base": "O imóvel não se sobrepõe a terra indígena nas bases consultadas em 13/09/2026."
+   },
+   "uc": {
+    "estado": "nao_encontrado",
+    "valor": {
+     "quantidade": 0,
+     "area_ha_no_car": 0.0
+    },
+    "unidade": "áreas",
+    "fonte": {
+     "id": "mma_cnuc",
+     "nome_publico": "MMA — unidades de conservação (CNUC; IBAMA, PAMGIA)",
+     "licenca": null,
+     "citacao": "Painel de Informações Ambientais do IBAMA (PAMGIA), serviços ArcGIS públicos."
+    },
+    "data_base": null,
+    "consultado_em": "2026-09-13T21:52:01Z",
+    "limites": [
+     "interseção com o limite declarado no CAR"
+    ],
+    "motivo": null,
+    "texto_base": "O imóvel não se sobrepõe a unidade de conservação nas bases consultadas em 13/09/2026."
+   },
+   "quilombola": {
+    "estado": "nao_encontrado",
+    "valor": {
+     "quantidade": 0,
+     "area_ha_no_car": 0.0
+    },
+    "unidade": "áreas",
+    "fonte": {
+     "id": "incra_quilombolas",
+     "nome_publico": "INCRA — territórios quilombolas (IBAMA, PAMGIA)",
+     "licenca": null,
+     "citacao": "Painel de Informações Ambientais do IBAMA (PAMGIA), serviços ArcGIS públicos."
+    },
+    "data_base": null,
+    "consultado_em": "2026-09-13T21:52:01Z",
+    "limites": [
+     "interseção com o limite declarado no CAR"
+    ],
+    "motivo": null,
+    "texto_base": "O imóvel não se sobrepõe a território quilombola nas bases consultadas em 13/09/2026."
+   },
+   "assentamento": {
+    "estado": "nao_encontrado",
+    "valor": {
+     "quantidade": 0,
+     "area_ha_no_car": 0.0
+    },
+    "unidade": "áreas",
+    "fonte": {
+     "id": "incra_assentamentos",
+     "nome_publico": "INCRA — assentamentos (IBAMA, PAMGIA)",
+     "licenca": null,
+     "citacao": "Painel de Informações Ambientais do IBAMA (PAMGIA), serviços ArcGIS públicos."
+    },
+    "data_base": null,
+    "consultado_em": "2026-09-13T21:52:01Z",
+    "limites": [
+     "interseção com o limite declarado no CAR"
+    ],
+    "motivo": null,
+    "texto_base": "O imóvel não se sobrepõe a assentamento nas bases consultadas em 13/09/2026."
+   },
+   "floresta_publica": {
+    "estado": "nao_encontrado",
+    "valor": {
+     "quantidade": 0,
+     "area_ha_no_car": 0.0
+    },
+    "unidade": "áreas",
+    "fonte": {
+     "id": "sfb_florestas_publicas",
+     "nome_publico": "SFB — florestas públicas (IBAMA, PAMGIA)",
+     "licenca": null,
+     "citacao": "Painel de Informações Ambientais do IBAMA (PAMGIA), serviços ArcGIS públicos."
+    },
+    "data_base": null,
+    "consultado_em": "2026-09-13T21:52:01Z",
+    "limites": [
+     "interseção com o limite declarado no CAR"
+    ],
+    "motivo": null,
+    "texto_base": "O imóvel não se sobrepõe a floresta pública nas bases consultadas em 13/09/2026."
+   }
+  },
+  "deforestation_alerts_v51": {
+   "estado": "nao_encontrado",
+   "valor": {
+    "eventos": [],
+    "fontes": {
+     "inpe_deter": {
+      "estado": "nao_encontrado",
+      "area_minima_ha": 3,
+      "ultima_imagem": "2026-09-04",
+      "consultado_em": "2026-09-13T23:01:31Z"
+     },
+     "mapbiomas_alerta": {
+      "estado": "nao_encontrado",
+      "ultima_publicacao": "2026-09-08",
+      "deteccao_mais_recente_publicada": "2026-07-31",
+      "consultado_em": "2026-09-13T23:06:45Z"
+     }
+    }
+   },
+   "unidade": "alertas",
+   "fonte": {
+    "id": "inpe_deter_mapbiomas_alerta",
+    "nome_publico": "INPE — DETER Cerrado; MapBiomas Alerta",
+    "licenca": "DETER: CC BY-SA 4.0; MapBiomas Alerta: CC BY-SA 3.0 BR, conteúdo adaptado",
+    "citacao": "INPE, DETER Cerrado (TerraBrasilis, deter-cerrado-nb:deter_cerrado); MapBiomas Alerta (plataforma.alerta.mapbiomas.org), consulta por código do CAR.",
+    "somente_apendice": true
+   },
+   "data_base": "2026-09-08",
+   "consultado_em": "2026-09-13T23:06:45Z",
+   "limites": [
+    "alertas de desmatamento a partir de 3 ha"
+   ],
+   "motivo": null,
+   "texto_base": "Nenhum alerta recente de desmatamento sobre o imóvel, nem alerta de desmatamento validado, na consulta de 13/09/2026."
+  }
+ },
+ "enforcement": {
+  "embargo_count": 0,
+  "embargo_summary": "Nenhum embargo IBAMA intersectante foi localizado na consulta atual.",
+  "embargo_status": "BAIXO",
+  "auto_count": 0,
+  "fine_total_text": "R$ 0,00",
+  "autos": [],
+  "autos_v51": {
+   "estado": "nao_encontrado",
+   "valor": {
+    "quantidade": 0
+   },
+   "unidade": "autos",
+   "fonte": {
+    "id": "ibama_autos_infracao",
+    "nome_publico": "IBAMA — autos de infração",
+    "licenca": null,
+    "citacao": "IBAMA, camada adm_auto_infracao_p (PAMGIA, app_dadosabertos)."
+   },
+   "data_base": "2026-09-10",
+   "consultado_em": "2026-09-13T21:52:01Z",
+   "limites": [
+    "busca pelo local do auto; auto de infração é lavrado contra pessoa ou empresa"
+   ],
+   "motivo": null,
+   "texto_base": "Nenhum auto de infração do IBAMA com local dentro do imóvel, na consulta de 13/09/2026."
+  }
+ },
+ "mining": {
+  "process_count": 0,
+  "overlap_area_ha": 0.0,
+  "rare_earth_count": 0,
+  "max_maturity": "-",
+  "summary": "Nenhum processo ANM intersectante foi localizado na consulta atual. A triagem ANM/SGB não identificou sinal classificado de terras raras nesta consulta.",
+  "risk": "BAIXO",
+  "processes": [],
+  "critical_process_count": 0,
+  "critical_minerals": [],
+  "rare_earth_signal": "NÃO IDENTIFICADO",
+  "rare_earth_source": "ANM/SIGMINE + Serviço Geológico do Brasil (GeoSGB/WMS)",
+  "critical_rows": [
+   [
+    "Processos ANM classificados como minerais críticos",
+    0
+   ],
+   [
+    "Terras raras - processos ANM",
+    0
+   ],
+   [
+    "Sinal geológico / camada SGB para terras raras",
+    "NÃO IDENTIFICADO"
+   ],
+   [
+    "Minerais críticos identificados",
+    "Nenhum sinal classificado na consulta"
+   ],
+   [
+    "Camadas SGB candidatas",
+    1
+   ],
+   [
+    "Camadas SGB consultadas",
+    1
+   ]
+  ],
+  "processes_v51": {
+   "estado": "nao_encontrado",
+   "valor": {
+    "quantidade": 0,
+    "processos": []
+   },
+   "unidade": "processos",
+   "fonte": {
+    "id": "anm_sigmine",
+    "nome_publico": "ANM — SIGMINE (processos minerários)",
+    "licenca": null,
+    "citacao": "Agência Nacional de Mineração, SIGMINE, serviço ArcGIS dados_anm."
+   },
+   "data_base": null,
+   "consultado_em": "2026-09-13T21:52:01Z",
+   "limites": [
+    "processos cujo polígono cruza o limite declarado no CAR"
+   ],
+   "motivo": null,
+   "texto_base": "Nenhum processo de mineração da ANM sobre o imóvel, na consulta de 13/09/2026."
+  }
+ },
+ "productive": {
+  "aptitude_rows": [
+   [
+    "4(p)  Aptidão RESTRITA para pastagem plantada e INAPTA para lavouras.",
+    "8.45 ha • 57.1% do imóvel"
+   ],
+   [
+    "6  Terras INAPTAS para uso agrícola, indicadas para a preservação de flora e fauna.",
+    "6.36 ha • 42.9% do imóvel"
+   ]
+  ],
+  "soil_rows": [
+   [
+    "Argila — 0–5 cm",
+    "32.7 %"
+   ],
+   [
+    "Areia — 0–5 cm",
+    "35.2 %"
+   ],
+   [
+    "Silte — 0–5 cm",
+    "32.8 %"
+   ],
+   [
+    "pH em H₂O — 0–5 cm",
+    "5.4"
+   ],
+   [
+    "Carbono orgânico — 0–5 cm",
+    "18.5 g/kg"
+   ],
+   [
+    "CTC a pH 7 — 0–5 cm",
+    "9.4 cmol(c)/kg"
+   ],
+   [
+    "Nitrogênio total — 0–5 cm",
+    "1.64 g/kg"
+   ],
+   [
+    "Leitura",
+    "Predições SoilGrids em grade de 250 m amostradas no entorno do centróide do imóvel. Não substituem análise laboratorial de solo nem amostragem agronômica da propriedade."
+   ],
+   [
+    "Classes pedológicas identificadas",
+    "Cambissolo háplico Tb distrófico"
+   ],
+   [
+    "Interseções exatas",
+    1
+   ],
+   [
+    "Área intersectada somada",
+    "14.80 ha"
+   ],
+   [
+    "Camada",
+    "IDE:ide_1502_mg_mapa_solos_pol"
+   ]
+  ],
+  "terrain_kpis": [
+   {
+    "label": "Altitude",
+    "value": "657.0 m",
+    "note": "faixa 645.0–668.0 m • SRTM ~30 m",
+    "status": "CONSULTADA",
+    "level": "ok"
+   },
+   {
+    "label": "Declividade",
+    "value": "4.04° mediana",
+    "note": "média 5.01° • P90 9.43°",
+    "status": "CONSULTADA",
+    "level": "ok"
+   },
+   {
+    "label": "Declive ≤ 8°",
+    "value": "81.0%",
+    "note": "participação raster do CAR; indicador topográfico, não laudo de mecanização",
+    "status": "CONSULTADA",
+    "level": "info"
+   },
+   {
+    "label": "Aptidão",
+    "value": "2 classe(s)",
+    "note": "área e % calculados sobre o CAR",
+    "status": "CONSULTADA",
+    "level": "ok"
+   }
+  ],
+  "erosion_rows": [
+   [
+    "Muito baixo",
+    "interseção exata; 1 feição(ões) no total"
+   ]
+  ],
+  "landcover_rows": [
+   [
+    "MapBiomas — Pastagem",
+    "12.6398 ha • 85.38% do imóvel"
+   ],
+   [
+    "MapBiomas — Outras lavouras temporárias",
+    "1.6449 ha • 11.11% do imóvel"
+   ],
+   [
+    "MapBiomas — Rio/lago/oceano",
+    "0.5194 ha • 3.51% do imóvel"
+   ],
+   [
+    "INDISPONÍVEL",
+    "-"
+   ]
+  ],
+  "agro_rows": [
+   [
+    "Bovino",
+    "94375.0 cabeças • 2024 • variação -1.09% vs 2023",
+    "MUNICÍPIO — IBGE/PPM"
+   ],
+   [
+    "Bubalino",
+    "203.0 cabeças • 2024 • variação +12.15% vs 2023",
+    "MUNICÍPIO — IBGE/PPM"
+   ],
+   [
+    "Equino",
+    "2995.0 cabeças • 2024 • variação -3.39% vs 2023",
+    "MUNICÍPIO — IBGE/PPM"
+   ],
+   [
+    "Suíno - total",
+    "32706.0 cabeças • 2024 • variação +3.35% vs 2023",
+    "MUNICÍPIO — IBGE/PPM"
+   ],
+   [
+    "Suíno - matrizes de suínos",
+    "2077.0 cabeças • 2024 • variação +3.33% vs 2023",
+    "MUNICÍPIO — IBGE/PPM"
+   ],
+   [
+    "Caprino",
+    "69.0 cabeças • 2024 • variação -8.00% vs 2023",
+    "MUNICÍPIO — IBGE/PPM"
+   ],
+   [
+    "Ovino",
+    "250.0 cabeças • 2024 • variação -50.20% vs 2023",
+    "MUNICÍPIO — IBGE/PPM"
+   ],
+   [
+    "Água outorgada/próxima",
+    "{\"inside\": 1, \"near\": 7}",
+    "imóvel/vizinhança"
+   ],
+   [
+    "Clima recente",
+    "{\"rain_30d_mm\": 31.46, \"temp_avg_c\": 25.638}",
+    "centroide do imóvel"
+   ],
+   [
+    "Pivôs",
+    "{\"inside\": 0, \"near\": 0}",
+    "imóvel/vizinhança"
+   ],
+   [
+    "Solo",
+    "[]",
+    "interseção cartográfica"
+   ],
+   [
+    "Aptidão agrícola",
+    "[]",
+    "interseção cartográfica"
+   ],
+   [
+    "Declividade",
+    "[]",
+    "interseção cartográfica"
+   ]
+  ],
+  "agro_carrying_capacity_note": "Lotação animal (UA/ha) não é estimada sem dados de forragem, manejo, estação, suplementação e validação agronômica. O Raio-X não inventa capacidade de suporte.",
+  "pasture_status": "worker/import prepared",
+  "pasture_note": "Os dados são públicos/abertos; o processamento raster por polígono precisa rodar no worker para retornar métricas reais da propriedade.",
+  "terrain_srtm": {
+   "ok": true,
+   "source": "SRTM 1 arc-second (~30 m) via Mapzen/Tilezen Terrain Tiles — AWS Open Data",
+   "tiles": [
+    "S19W045"
+   ],
+   "errors": [],
+   "elevation_min_m": 645.0,
+   "elevation_mean_m": 656.9,
+   "elevation_median_m": 657.0,
+   "elevation_max_m": 668.0,
+   "elevation_sample_pixels": 163,
+   "slope_mean_deg": 5.01,
+   "slope_median_deg": 4.04,
+   "slope_p90_deg": 9.43,
+   "slope_max_deg": 14.07,
+   "slope_classes": [
+    {
+     "class": "0–3°",
+     "share_pct": 32.52
+    },
+    {
+     "class": "3–8°",
+     "share_pct": 48.47
+    },
+    {
+     "class": "8–20°",
+     "share_pct": 19.02
+    },
+    {
+     "class": "20–45°",
+     "share_pct": 0.0
+    },
+    {
+     "class": ">45°",
+     "share_pct": 0.0
+    }
+   ],
+   "slope_sample_pixels": 163,
+   "note": "Modelo digital de elevação SRTM (~30 m). Altitude e declividade são triagem topográfica raster; não substituem levantamento topográfico/geodésico de campo."
+  },
+  "relief_v51": {
+   "estado": "encontrado",
+   "valor": {
+    "modelo": "Copernicus DEM GLO-30",
+    "pixels": 163,
+    "altitude_min_m": 641,
+    "altitude_max_m": 665,
+    "altitude_mediana_m": 655,
+    "inclinacao_mediana_pct": 6.0,
+    "inclinacao_p90_pct": 13.2,
+    "classes_embrapa_pct": [
+     {
+      "classe": "plano",
+      "faixa": "0–3%",
+      "pct": 11.0
+     },
+     {
+      "classe": "suave ondulado",
+      "faixa": "3–8%",
+      "pct": 62.0
+     },
+     {
+      "classe": "ondulado",
+      "faixa": "8–20%",
+      "pct": 24.5
+     },
+     {
+      "classe": "forte ondulado",
+      "faixa": "20–45%",
+      "pct": 2.5
+     },
+     {
+      "classe": "montanhoso",
+      "faixa": "45–75%",
+      "pct": 0.0
+     },
+     {
+      "classe": "escarpado",
+      "faixa": ">75%",
+      "pct": 0.0
+     }
+    ],
+    "leitura_legal_graus": {
+     "acima_de_25_graus_pct": 0.0,
+     "acima_de_45_graus_pct": 0.0,
+     "base": "Lei 12.651/2012, art. 11 e art. 4º, V"
+    }
+   },
+   "unidade": "%",
+   "fonte": {
+    "id": "copernicus_dem_glo30",
+    "nome_publico": "Copernicus DEM GLO-30 (ESA), via AWS Open Data",
+    "licenca": "uso comercial permitido com atribuição",
+    "citacao": "Copernicus DEM GLO-30, © DLR e Airbus, fornecido pela ESA."
+   },
+   "data_base": null,
+   "consultado_em": "2026-09-14T00:22:32Z",
+   "limites": [
+    "modelo de terreno de 30 m; não substitui levantamento topográfico"
+   ],
+   "motivo": null,
+   "texto_base": "Cerca de 7 em cada 10 partes do terreno são planas ou suavemente onduladas (73%); o resto é ondulado ou forte ondulado. Nenhuma parte tem inclinação acima de 25°, a partir da qual a lei restringe o uso (Lei 12.651/2012, art. 11)."
+  },
+  "soil_map_v51": {
+   "estado": "encontrado",
+   "valor": {
+    "escala": "1:250.000",
+    "unidades": [
+     {
+      "codigo": "PVe34",
+      "classe": "Argissolo Vermelho Eutrófico típico",
+      "pct_mapa": 57.1,
+      "fracao_texto": "cerca de 6 em cada 10 partes",
+      "componentes": [
+       "Argissolo Vermelho",
+       "Cambissolo Háplico",
+       "Neossolo Litólico"
+      ],
+      "relevo_descrito_no_mapa": "forte ondulado e montanhoso"
+     },
+     {
+      "codigo": "CXbd69",
+      "classe": "Cambissolo Háplico Tb Distrófico típico e petroplíntico",
+      "pct_mapa": 42.9,
+      "fracao_texto": "cerca de 4 em cada 10 partes",
+      "componentes": [
+       "Cambissolo Háplico",
+       "Latossolo Vermelho",
+       "Argissolo Vermelho-Amarelo"
+      ],
+      "relevo_descrito_no_mapa": "suave ondulado e ondulado"
+     }
+    ],
+    "geomorfologia": "Depressão do Médio Rio São Francisco"
+   },
+   "unidade": "%",
+   "fonte": {
+    "id": "ibge_bdia_pedologia",
+    "nome_publico": "IBGE — Base de Dados e Informações Ambientais (pedologia)",
+    "licenca": null,
+    "citacao": "IBGE, BDiA, Base Contínua de Pedologia 1:250.000 (BDIA:pedo_area)."
+   },
+   "data_base": null,
+   "consultado_em": "2026-09-14T00:16:55Z",
+   "limites": [
+    "mapa regional; descreve a região, não mede o imóvel"
+   ],
+   "motivo": null,
+   "texto_base": "O mapa oficial de solos do IBGE, em escala regional, põe o imóvel em duas manchas: Argissolo Vermelho Eutrófico (cerca de 6 em cada 10 partes) e Cambissolo Háplico (cerca de 4 em 10)."
+  },
+  "soil_texture_v51": {
+   "estado": "encontrado",
+   "valor": {
+    "modelo": "MapBiomas Solo, coleção 2",
+    "resolucao_m": 30,
+    "pixels": 173,
+    "camadas": [
+     {
+      "profundidade_cm": "0–10",
+      "argila_pct": {
+       "mediana": 47,
+       "min": 39,
+       "max": 54
+      }
+     },
+     {
+      "profundidade_cm": "0–30",
+      "argila_pct": {
+       "mediana": 49,
+       "min": 40,
+       "max": 58
+      },
+      "areia_pct": {
+       "mediana": 18,
+       "min": 15,
+       "max": 22
+      },
+      "silte_pct": {
+       "mediana": 33,
+       "min": 25,
+       "max": 41
+      }
+     }
+    ],
+    "classe_textural": "argilosa",
+    "regra_classe": "SiBCS: argila de 35% a 60%"
+   },
+   "unidade": "%",
+   "fonte": {
+    "id": "mapbiomas_solo",
+    "nome_publico": "MapBiomas Solo (coleção 2)",
+    "licenca": "CC BY 4.0",
+    "citacao": "Projeto MapBiomas, MapBiomas Solo, coleção 2, granulometria de 0 a 30 cm."
+   },
+   "data_base": null,
+   "consultado_em": "2026-09-14T00:59:32Z",
+   "limites": [
+    "estimativa de modelo; não substitui análise de laboratório"
+   ],
+   "motivo": null,
+   "texto_base": "Solo argiloso: cerca de metade argila (47% a 49%) na camada de 0 a 30 cm, pela estimativa do MapBiomas Solo."
+  },
+  "soilgrids_v51": {
+   "estado": "encontrado",
+   "valor": {
+    "profundidade_cm": "0–5",
+    "grade_m": 250,
+    "ph_h2o": 5.4,
+    "argila_pct": 32.7,
+    "areia_pct": 35.2,
+    "silte_pct": 32.8,
+    "carbono_organico_g_kg": 18.5,
+    "ctc_cmolc_kg": 9.4,
+    "nitrogenio_g_kg": 1.64,
+    "diverge_da_textura_mapbiomas": true
+   },
+   "unidade": "pH",
+   "fonte": {
+    "id": "isric_soilgrids",
+    "nome_publico": "ISRIC — SoilGrids",
+    "licenca": "CC BY 4.0",
+    "citacao": "ISRIC World Soil Information, SoilGrids 250 m."
+   },
+   "data_base": null,
+   "consultado_em": "2026-09-13T21:52:01Z",
+   "limites": [
+    "estimativa de modelo em quadrados de 250 m; não substitui análise de laboratório"
+   ],
+   "motivo": null,
+   "texto_base": "Na camada de cima, pela estimativa do SoilGrids, o solo é moderadamente ácido (pH 5,4). A argila desse modelo (33%) diverge da do MapBiomas Solo; a análise de solo decide."
+  },
+  "aptitude_v51": {
+   "estado": "encontrado",
+   "valor": {
+    "classes": [
+     {
+      "codigo": "4(p)",
+      "descricao": "aptidão restrita para pastagem plantada, inapta para lavouras",
+      "pct_mapa": 57.1,
+      "limitacoes": [
+       "erosão",
+       "mecanização"
+      ]
+     },
+     {
+      "codigo": "6",
+      "descricao": "inapta para uso agrícola, indicada para preservação",
+      "pct_mapa": 42.9,
+      "componentes_secundarios": [
+       "Latossolo Vermelho 2(ab)c",
+       "Argissolo Vermelho-Amarelo 2(b)c"
+      ]
+     }
+    ]
+   },
+   "unidade": "%",
+   "fonte": {
+    "id": "embrapa_aptidao_agr_bra",
+    "nome_publico": "Embrapa — aptidão agrícola das terras do Brasil",
+    "licenca": null,
+    "citacao": "Embrapa, GeoInfo, camada geonode:aptidao_agr_bra."
+   },
+   "data_base": null,
+   "consultado_em": "2026-09-14T00:16:55Z",
+   "limites": [
+    "mapa regional; indica a vocação da região, não se o uso de hoje é permitido"
+   ],
+   "motivo": null,
+   "texto_base": "No mapa regional de aptidão agrícola, pouco mais da metade da área aparece como apta, com restrições, só para pasto plantado; o restante aparece como sem aptidão agrícola, indicada para preservação."
+  },
+  "erosion_v51": {
+   "estado": "encontrado",
+   "valor": {
+    "erodibilidade": [
+     {
+      "unidade": "PVe34",
+      "classe": "média",
+      "fator_k": 0.0285,
+      "pct_mapa": 57.1
+     },
+     {
+      "unidade": "CXbd69",
+      "classe": "alta",
+      "fator_k": 0.0435,
+      "pct_mapa": 42.9
+     }
+    ]
+   },
+   "unidade": "classe",
+   "fonte": {
+    "id": "embrapa_erodibilidade_2024",
+    "nome_publico": "Embrapa — erodibilidade dos solos do Brasil (2024)",
+    "licenca": null,
+    "citacao": "Embrapa, GeoInfo, camada bra_erodibilidade_2024_sirgas2000."
+   },
+   "data_base": null,
+   "consultado_em": "2026-09-14T00:16:56Z",
+   "limites": [
+    "fragilidade do solo à erosão, pelo mapa; não é medição de perda de solo"
+   ],
+   "motivo": null,
+   "texto_base": "Pelo mapa da Embrapa, o solo tem fragilidade alta à erosão em cerca de 4 de cada 10 partes do imóvel e média no restante."
+  }
+ },
+ "water": {
+  "grant_count": 1,
+  "pivot_count": 0,
+  "rain_30d": "31.46 mm",
+  "rain_period": "20260813 a 20260911 • 30 dias válidos",
+  "grants": [
+   [
+    "17849/2019",
+    "1309443/2020",
+    "Deferido",
+    "Subterrâneo • IGAM",
+    "DENTRO"
+   ]
+  ],
+  "rain_rows": [
+   [
+    "Precipitação acumulada - janela recente",
+    "31.46 mm"
+   ],
+   [
+    "Precipitação média diária",
+    "1.05 mm/dia"
+   ],
+   [
+    "Temperatura média",
+    "25.64 °C"
+   ],
+   [
+    "Máxima diária média",
+    "33.12 °C"
+   ],
+   [
+    "Mínima diária média",
+    "19.03 °C"
+   ],
+   [
+    "Umidade relativa média",
+    "50.8 %"
+   ],
+   [
+    "Radiação solar média",
+    "NÃO DISPONÍVEL"
+   ],
+   [
+    "Dias secos (< 1 mm)",
+    23
+   ],
+   [
+    "Dias com chuva forte (≥ 20 mm)",
+    0
+   ],
+   [
+    "Último dado climático disponível",
+    "20260911"
+   ],
+   [
+    "Climatologia JAN",
+    "chuva 6.08 mm/dia • média 23.97 °C • máx 37.97 °C • mín 15.96 °C"
+   ],
+   [
+    "Climatologia FEB",
+    "chuva 4.65 mm/dia • média 23.88 °C • máx 38.17 °C • mín 14.33 °C"
+   ],
+   [
+    "Climatologia MAR",
+    "chuva 4.89 mm/dia • média 23.5 °C • máx 34.86 °C • mín 14.81 °C"
+   ],
+   [
+    "Climatologia APR",
+    "chuva 1.78 mm/dia • média 22.83 °C • máx 35.02 °C • mín 11.92 °C"
+   ],
+   [
+    "Climatologia MAY",
+    "chuva 0.77 mm/dia • média 21.13 °C • máx 34.93 °C • mín 6.99 °C"
+   ],
+   [
+    "Climatologia JUN",
+    "chuva 0.22 mm/dia • média 20.62 °C • máx 34.36 °C • mín 8.26 °C"
+   ],
+   [
+    "Climatologia JUL",
+    "chuva 0.18 mm/dia • média 20.86 °C • máx 34.3 °C • mín 7.95 °C"
+   ],
+   [
+    "Climatologia AUG",
+    "chuva 0.25 mm/dia • média 22.56 °C • máx 36.37 °C • mín 8.83 °C"
+   ],
+   [
+    "Climatologia SEP",
+    "chuva 1.07 mm/dia • média 24.86 °C • máx 40.24 °C • mín 9.58 °C"
+   ],
+   [
+    "Climatologia OCT",
+    "chuva 2.72 mm/dia • média 25.85 °C • máx 41.42 °C • mín 12.25 °C"
+   ],
+   [
+    "Climatologia NOV",
+    "chuva 5.78 mm/dia • média 24.44 °C • máx 39.21 °C • mín 12.67 °C"
+   ],
+   [
+    "Climatologia DEC",
+    "chuva 8.05 mm/dia • média 23.96 °C • máx 36.21 °C • mín 13.93 °C"
+   ],
+   [
+    "Triagem de seca recente",
+    "atenção • dias secos 76.7%"
+   ]
+  ],
+  "meaning": "Foram localizados 1 ponto(s) de outorga estadual/federal intersectando o polígono do imóvel. A vigência e os efeitos de cada ato devem ser conferidos no processo/portaria correspondente.",
+  "groundwater": {
+   "ok": true,
+   "source": "SGB/SIAGAS Hosted — Poços",
+   "consultation_state": "consulted",
+   "attempts": [
+    {
+     "source": "SGB/SIAGAS Hosted — Poços",
+     "strategy": "distance",
+     "ok": true,
+     "count": 27
+    }
+   ],
+   "latitude": -18.891297,
+   "longitude": -44.181978,
+   "search_radius_km": 20.0,
+   "well_count": 27,
+   "groundwater_evidence": "forte",
+   "confidence": "alta",
+   "well_depth_median_m": 60.0,
+   "well_depth_mean_m": 70.35,
+   "well_depth_sample_n": 23,
+   "static_water_level_median_m": 14.0,
+   "static_water_level_sample_n": 12,
+   "dynamic_water_level_median_m": 33.85,
+   "dynamic_water_level_sample_n": 13,
+   "specific_yield_median": 1.07,
+   "specific_yield_sample_n": 12,
+   "ph_median": 7.9,
+   "ph_sample_n": 5,
+   "dominant_aquifers": [
+    {
+     "name": "Paraopeba",
+     "count": 13
+    },
+    {
+     "name": "Santa helena",
+     "count": 1
+    }
+   ],
+   "dominant_uses": [
+    {
+     "name": "Abastecimento urbano",
+     "count": 6
+    },
+    {
+     "name": "Pecuária",
+     "count": 6
+    },
+    {
+     "name": "Abastecimento doméstico",
+     "count": 2
+    },
+    {
+     "name": "Irrigação",
+     "count": 1
+    }
+   ],
+   "nearest_wells": [
+    {
+     "id": 3100002195,
+     "distance_km": 0.98,
+     "municipality": "Curvelo",
+     "uf": "MG",
+     "local": "JATAI                         ",
+     "name": null,
+     "nature": "Poço de monitoramento",
+     "situation": "Equipado",
+     "water_use": null,
+     "aquifer": "Paraopeba",
+     "well_depth_m": 26.0,
+     "static_level_m": null,
+     "dynamic_level_m": null,
+     "specific_yield": null,
+     "ph": null,
+     "conductivity": null,
+     "latitude": -18.9,
+     "longitude": -44.183333
+    },
+    {
+     "id": 3100002201,
+     "distance_km": 4.56,
+     "municipality": "Curvelo",
+     "uf": "MG",
+     "local": "SACO NOVO                     ",
+     "name": null,
+     "nature": "Poço de monitoramento",
+     "situation": "Equipado",
+     "water_use": null,
+     "aquifer": "Paraopeba",
+     "well_depth_m": 35.0,
+     "static_level_m": null,
+     "dynamic_level_m": null,
+     "specific_yield": null,
+     "ph": null,
+     "conductivity": null,
+     "latitude": -18.866666,
+     "longitude": -44.216666
+    },
+    {
+     "id": 3100002169,
+     "distance_km": 6.64,
+     "municipality": "Curvelo",
+     "uf": "MG",
+     "local": "FAZENDA BOA SORTE             ",
+     "name": null,
+     "nature": "Poço tubular",
+     "situation": "Equipado",
+     "water_use": null,
+     "aquifer": "Paraopeba",
+     "well_depth_m": 91.0,
+     "static_level_m": 14.0,
+     "dynamic_level_m": 22.0,
+     "specific_yield": 2.88,
+     "ph": 7.80000019,
+     "conductivity": 230.0,
+     "latitude": -18.833333,
+     "longitude": -44.166666
+    },
+    {
+     "id": 3100002094,
+     "distance_km": 8.29,
+     "municipality": "Cordisburgo",
+     "uf": "MG",
+     "local": "BARRA DO LUIZ PEREIRA         ",
+     "name": null,
+     "nature": "Poço de monitoramento",
+     "situation": "Equipado",
+     "water_use": null,
+     "aquifer": "Paraopeba",
+     "well_depth_m": 18.0,
+     "static_level_m": null,
+     "dynamic_level_m": null,
+     "specific_yield": null,
+     "ph": null,
+     "conductivity": null,
+     "latitude": -18.95,
+     "longitude": -44.133333
+    },
+    {
+     "id": 3100002100,
+     "distance_km": 8.38,
+     "municipality": "Cordisburgo",
+     "uf": "MG",
+     "local": "PIAO                          ",
+     "name": null,
+     "nature": "Poço de monitoramento",
+     "situation": "Equipado",
+     "water_use": null,
+     "aquifer": "Paraopeba",
+     "well_depth_m": 25.0,
+     "static_level_m": null,
+     "dynamic_level_m": null,
+     "specific_yield": null,
+     "ph": null,
+     "conductivity": null,
+     "latitude": -18.966666,
+     "longitude": -44.183333
+    },
+    {
+     "id": 3100027275,
+     "distance_km": 9.48,
+     "municipality": "Curvelo",
+     "uf": "MG",
+     "local": null,
+     "name": "579184/CNARH",
+     "nature": null,
+     "situation": "Bombeando",
+     "water_use": "Pecuária",
+     "aquifer": null,
+     "well_depth_m": null,
+     "static_level_m": null,
+     "dynamic_level_m": null,
+     "specific_yield": null,
+     "ph": null,
+     "conductivity": null,
+     "latitude": -18.838056,
+     "longitude": -44.111667
+    },
+    {
+     "id": 3100005147,
+     "distance_km": 9.54,
+     "municipality": "Curvelo",
+     "uf": "MG",
+     "local": "SACO NOVO",
+     "name": null,
+     "nature": "Poço tubular",
+     "situation": null,
+     "water_use": null,
+     "aquifer": "Santa helena",
+     "well_depth_m": 70.0,
+     "static_level_m": 35.64,
+     "dynamic_level_m": 36.0,
+     "specific_yield": 36.278,
+     "ph": 7.94999981,
+     "conductivity": 418.0,
+     "latitude": -18.883333,
+     "longitude": -44.272222
+    },
+    {
+     "id": 3100030436,
+     "distance_km": 10.31,
+     "municipality": "Presidente Juscelino",
+     "uf": "MG",
+     "local": null,
+     "name": "1194844/CNARH",
+     "nature": "Poço tubular",
+     "situation": null,
+     "water_use": "Pecuária",
+     "aquifer": null,
+     "well_depth_m": null,
+     "static_level_m": null,
+     "dynamic_level_m": null,
+     "specific_yield": null,
+     "ph": null,
+     "conductivity": null,
+     "latitude": -18.804167,
+     "longitude": -44.148608
+    },
+    {
+     "id": 3100029899,
+     "distance_km": 10.45,
+     "municipality": "Curvelo",
+     "uf": "MG",
+     "local": null,
+     "name": "1259381/CNARH",
+     "nature": "Poço tubular",
+     "situation": null,
+     "water_use": "Pecuária",
+     "aquifer": null,
+     "well_depth_m": 81.0,
+     "static_level_m": 19.5,
+     "dynamic_level_m": 58.0,
+     "specific_yield": 0.052,
+     "ph": null,
+     "conductivity": null,
+     "latitude": -18.858331,
+     "longitude": -44.275
+    },
+    {
+     "id": 3100030022,
+     "distance_km": 10.68,
+     "municipality": "Curvelo",
+     "uf": "MG",
+     "local": null,
+     "name": "1196004/CNARH",
+     "nature": "Poço tubular",
+     "situation": null,
+     "water_use": "Pecuária",
+     "aquifer": null,
+     "well_depth_m": null,
+     "static_level_m": null,
+     "dynamic_level_m": null,
+     "specific_yield": null,
+     "ph": null,
+     "conductivity": null,
+     "latitude": -18.966978,
+     "longitude": -44.244439
+    },
+    {
+     "id": 3100027949,
+     "distance_km": 11.19,
+     "municipality": "Curvelo",
+     "uf": "MG",
+     "local": null,
+     "name": "1200688/CNARH",
+     "nature": null,
+     "situation": "Bombeando",
+     "water_use": "Pecuária",
+     "aquifer": null,
+     "well_depth_m": 100.0,
+     "static_level_m": null,
+     "dynamic_level_m": null,
+     "specific_yield": null,
+     "ph": null,
+     "conductivity": null,
+     "latitude": -18.791667,
+     "longitude": -44.196944
+    },
+    {
+     "id": 3100002093,
+     "distance_km": 12.55,
+     "municipality": "Cordisburgo",
+     "uf": "MG",
+     "local": "BARRA DAS CANOAS              ",
+     "name": null,
+     "nature": "Poço de monitoramento",
+     "situation": "Equipado",
+     "water_use": null,
+     "aquifer": "Paraopeba",
+     "well_depth_m": 35.0,
+     "static_level_m": null,
+     "dynamic_level_m": null,
+     "specific_yield": null,
+     "ph": null,
+     "conductivity": null,
+     "latitude": -19.0,
+     "longitude": -44.15
+    },
+    {
+     "id": 3100027502,
+     "distance_km": 12.92,
+     "municipality": "Inimutaba",
+     "uf": "MG",
+     "local": null,
+     "name": "1256639/CNARH",
+     "nature": null,
+     "situation": "Bombeando",
+     "water_use": "Irrigação",
+     "aquifer": null,
+     "well_depth_m": 152.0,
+     "static_level_m": 15.0,
+     "dynamic_level_m": 90.0,
+     "specific_yield": 0.267,
+     "ph": null,
+     "conductivity": null,
+     "latitude": -18.844167,
+     "longitude": -44.294167
+    },
+    {
+     "id": 3100029427,
+     "distance_km": 15.85,
+     "municipality": "Cordisburgo",
+     "uf": "MG",
+     "local": null,
+     "name": "1205902/CNARH",
+     "nature": "Poço tubular",
+     "situation": null,
+     "water_use": "Pecuária",
+     "aquifer": null,
+     "well_depth_m": null,
+     "static_level_m": null,
+     "dynamic_level_m": null,
+     "specific_yield": null,
+     "ph": null,
+     "conductivity": null,
+     "latitude": -19.007219,
+     "longitude": -44.269719
+    },
+    {
+     "id": 3100029565,
+     "distance_km": 15.85,
+     "municipality": "Santana de Pirapama",
+     "uf": "MG",
+     "local": null,
+     "name": "1229299/CNARH",
+     "nature": "Poço tubular",
+     "situation": null,
+     "water_use": "Abastecimento doméstico",
+     "aquifer": null,
+     "well_depth_m": 100.0,
+     "static_level_m": 14.0,
+     "dynamic_level_m": 52.5,
+     "specific_yield": null,
+     "ph": null,
+     "conductivity": null,
+     "latitude": -18.936108,
+     "longitude": -44.038889
+    },
+    {
+     "id": 3100028925,
+     "distance_km": 15.9,
+     "municipality": "Inimutaba",
+     "uf": "MG",
+     "local": null,
+     "name": "745128/CNARH",
+     "nature": "Poço tubular",
+     "situation": "Bombeando",
+     "water_use": "Abastecimento urbano",
+     "aquifer": null,
+     "well_depth_m": 60.0,
+     "static_level_m": 25.01,
+     "dynamic_level_m": 33.85,
+     "specific_yield": 1.472,
+     "ph": null,
+     "conductivity": null,
+     "latitude": -18.748331,
+     "longitude": -44.183056
+    },
+    {
+     "id": 3100002279,
+     "distance_km": 17.49,
+     "municipality": "Inimutaba",
+     "uf": "MG",
+     "local": "FAZENDA SAO GERALDO           ",
+     "name": null,
+     "nature": "Poço tubular",
+     "situation": "Não instalado",
+     "water_use": null,
+     "aquifer": "Paraopeba",
+     "well_depth_m": 40.0,
+     "static_level_m": 7.0,
+     "dynamic_level_m": 8.0,
+     "specific_yield": 14.0,
+     "ph": null,
+     "conductivity": null,
+     "latitude": -18.766666,
+     "longitude": -44.283333
+    },
+    {
+     "id": 3100002278,
+     "distance_km": 18.06,
+     "municipality": "Inimutaba",
+     "uf": "MG",
+     "local": "FAZENDA SANTO ANTONIO         ",
+     "name": null,
+     "nature": "Poço tubular",
+     "situation": "Equipado",
+     "water_use": null,
+     "aquifer": "Paraopeba",
+     "well_depth_m": 102.0,
+     "static_level_m": 13.0,
+     "dynamic_level_m": 25.0,
+     "specific_yield": 0.67,
+     "ph": 7.9000001,
+     "conductivity": 200.0,
+     "latitude": -18.75,
+     "longitude": -44.266666
+    },
+    {
+     "id": 3100002170,
+     "distance_km": 18.27,
+     "municipality": "Inimutaba",
+     "uf": "MG",
+     "local": "FAZENDA CARAIBAS              ",
+     "name": null,
+     "nature": "Poço tubular",
+     "situation": "Não instalado",
+     "water_use": null,
+     "aquifer": "Paraopeba",
+     "well_depth_m": 42.0,
+     "static_level_m": 11.0,
+     "dynamic_level_m": 18.0,
+     "specific_yield": 2.43,
+     "ph": null,
+     "conductivity": null,
+     "latitude": -18.85,
+     "longitude": -44.35
+    },
+    {
+     "id": 3100027385,
+     "distance_km": 18.43,
+     "municipality": "Santana de Pirapama",
+     "uf": "MG",
+     "local": null,
+     "name": "747521/CNARH",
+     "nature": "Poço tubular",
+     "situation": "Bombeando",
+     "water_use": "Abastecimento doméstico",
+     "aquifer": null,
+     "well_depth_m": 60.0,
+     "static_level_m": 13.0,
+     "dynamic_level_m": 44.0,
+     "specific_yield": 0.161,
+     "ph": null,
+     "conductivity": null,
+     "latitude": -18.996667,
+     "longitude": -44.046667
+    }
+   ],
+   "hydrogeology_map_url": "https://geoportal.sgb.gov.br/server/rest/services/hidrologia/Mapa_Hidrogeologico_Atlas_Brasil/MapServer",
+   "interpretation": "Evidência hidrogeológica regional baseada em poços cadastrados no SIAGAS e no mapa hidrogeológico do SGB. Profundidade e nível d’água dos poços vizinhos não garantem água na mesma profundidade dentro do imóvel.",
+   "drilling_note": "Para definir ponto de perfuração e profundidade provável com segurança são recomendados estudo hidrogeológico local e, quando cabível, métodos geofísicos. A autorização para uso/perfuração de água subterrânea é de competência estadual."
+  },
+  "drought_screening": {
+   "ok": true,
+   "source": "NASA POWER - triagem derivada",
+   "state": "atenção",
+   "rain_sum_mm": 31.46,
+   "dry_day_share_pct": 76.7,
+   "period_start": "20260813",
+   "period_end": "20260911",
+   "note": "Triagem operacional baseada em chuva recente e dias secos. Não é SPI/SPEI nem classificação oficial de seca; climatologia é exibida separadamente para contexto."
+  },
+  "grants_v51": {
+   "estado": "encontrado",
+   "valor": [
+    {
+     "posicao": "dentro",
+     "tipo": "Poço tubular",
+     "orgao": "IGAM",
+     "portaria": "1309443/2020",
+     "situacao": "Deferido",
+     "vazao": {
+      "min": 10,
+      "max": 10,
+      "unidade": "m³/h"
+     },
+     "horas_por_dia": "08:22",
+     "meses_por_ano": 12,
+     "finalidades": [
+      "Irrigação",
+      "Consumo humano",
+      "Dessedentação de animais"
+     ],
+     "area_irrigada_ha": 2.5,
+     "validade": "2030-12-15"
+    }
+   ],
+   "unidade": "outorgas",
+   "fonte": {
+    "id": "igam_ide_sisema",
+    "nome_publico": "IGAM — outorgas (IDE-Sisema)",
+    "licenca": "CC BY 4.0",
+    "citacao": "IGAM, IDE-Sisema, camada IDE:ide_2103_mg_outorgas_uso_recursos_hidricos_pto (base GEIRH de 17/10/2025)."
+   },
+   "data_base": "2025-10-17",
+   "consultado_em": "2026-09-13T23:03:59Z",
+   "limites": [
+    "captações com outorga cuja coordenada cai no limite declarado no CAR"
+   ],
+   "motivo": null,
+   "texto_base": "Há 1 poço tubular com outorga do IGAM registrado dentro do imóvel: 10 m³ por hora, 8 h 22 min por dia, o ano todo, para irrigação, consumo humano e dessedentação de animais. Portaria 1309443/2020, situação no cadastro: Deferido, válida até 15/12/2030. Outras 6 captações com outorga a até 5 km; a mais próxima a 1,3 km.",
+   "vizinhas_5km": {
+    "quantidade": 6,
+    "mais_proxima_km": 1.3
+   }
+  },
+  "wells_v51": {
+   "estado": "encontrado",
+   "valor": {
+    "raio_busca_km": 20.0,
+    "pocos": 27,
+    "profundidade_mediana_m": {
+     "valor": 60.0,
+     "n": 23
+    },
+    "nivel_estatico_mediano_m": {
+     "valor": 14.0,
+     "n": 12
+    },
+    "nivel_dinamico_mediano_m": {
+     "valor": 33.85,
+     "n": 13
+    },
+    "aquiferos": [
+     {
+      "nome": "Paraopeba",
+      "pocos": 13
+     },
+     {
+      "nome": "Santa helena",
+      "pocos": 1
+     }
+    ],
+    "usos": [
+     {
+      "uso": "Abastecimento urbano",
+      "pocos": 6
+     },
+     {
+      "uso": "Pecuária",
+      "pocos": 6
+     },
+     {
+      "uso": "Abastecimento doméstico",
+      "pocos": 2
+     },
+     {
+      "uso": "Irrigação",
+      "pocos": 1
+     }
+    ]
+   },
+   "unidade": "m",
+   "fonte": {
+    "id": "sgb_siagas",
+    "nome_publico": "SGB — SIAGAS (poços)",
+    "licenca": null,
+    "citacao": "Serviço Geológico do Brasil, SIAGAS, poços cadastrados."
+   },
+   "data_base": null,
+   "consultado_em": "2026-09-13T21:52:01Z",
+   "limites": [
+    "poços cadastrados da região, não do imóvel"
+   ],
+   "motivo": null,
+   "texto_base": "Nos poços cadastrados da região, a água costuma estar a uns 14 m de profundidade (mediana de 12 poços com essa medida)."
+  },
+  "pivots_v51": {
+   "estado": "nao_encontrado",
+   "valor": {
+    "quantidade": 0,
+    "ano_referencia": 2022
+   },
+   "unidade": "pivôs",
+   "fonte": {
+    "id": "ana_pivos_2022",
+    "nome_publico": "ANA — pivôs centrais (2022)",
+    "licenca": null,
+    "citacao": "Agência Nacional de Águas, SNIRH, mapeamento de pivôs centrais, ano de referência 2022."
+   },
+   "data_base": null,
+   "consultado_em": "2026-09-13T21:52:01Z",
+   "limites": [
+    "mapa de pivôs de 2022"
+   ],
+   "motivo": null,
+   "texto_base": "Nenhum pivô central sobre o imóvel no mapa da ANA de 2022."
+  },
+  "climatology_v51": {
+   "estado": "encontrado",
+   "valor": {
+    "periodo": "2001–2020",
+    "meses": [
+     {
+      "mes": 1,
+      "chuva_mm_dia": 6.08,
+      "chuva_mm_mes": 188.5,
+      "temp_media_c": 23.97
+     },
+     {
+      "mes": 2,
+      "chuva_mm_dia": 4.65,
+      "chuva_mm_mes": 130.2,
+      "temp_media_c": 23.88
+     },
+     {
+      "mes": 3,
+      "chuva_mm_dia": 4.89,
+      "chuva_mm_mes": 151.6,
+      "temp_media_c": 23.5
+     },
+     {
+      "mes": 4,
+      "chuva_mm_dia": 1.78,
+      "chuva_mm_mes": 53.4,
+      "temp_media_c": 22.83
+     },
+     {
+      "mes": 5,
+      "chuva_mm_dia": 0.77,
+      "chuva_mm_mes": 23.9,
+      "temp_media_c": 21.13
+     },
+     {
+      "mes": 6,
+      "chuva_mm_dia": 0.22,
+      "chuva_mm_mes": 6.6,
+      "temp_media_c": 20.62
+     },
+     {
+      "mes": 7,
+      "chuva_mm_dia": 0.18,
+      "chuva_mm_mes": 5.6,
+      "temp_media_c": 20.86
+     },
+     {
+      "mes": 8,
+      "chuva_mm_dia": 0.25,
+      "chuva_mm_mes": 7.8,
+      "temp_media_c": 22.56
+     },
+     {
+      "mes": 9,
+      "chuva_mm_dia": 1.07,
+      "chuva_mm_mes": 32.1,
+      "temp_media_c": 24.86
+     },
+     {
+      "mes": 10,
+      "chuva_mm_dia": 2.72,
+      "chuva_mm_mes": 84.3,
+      "temp_media_c": 25.85
+     },
+     {
+      "mes": 11,
+      "chuva_mm_dia": 5.78,
+      "chuva_mm_mes": 173.4,
+      "temp_media_c": 24.44
+     },
+     {
+      "mes": 12,
+      "chuva_mm_dia": 8.05,
+      "chuva_mm_mes": 249.6,
+      "temp_media_c": 23.96
+     }
+    ],
+    "chuva_anual_mm": 1107.0,
+    "meses_chuvosos": [
+     1,
+     2,
+     3,
+     11,
+     12
+    ],
+    "meses_secos": [
+     5,
+     6,
+     7,
+     8
+    ]
+   },
+   "unidade": "mm",
+   "fonte": {
+    "id": "nasa_power",
+    "nome_publico": "NASA POWER — agroclimatologia",
+    "licenca": null,
+    "citacao": "NASA Langley Research Center, POWER Project, climatologia mensal 2001–2020 no centro do imóvel."
+   },
+   "data_base": null,
+   "consultado_em": "2026-09-13T21:52:01Z",
+   "limites": [
+    "grade de cerca de 50 km; não é medição na fazenda"
+   ],
+   "motivo": null,
+   "texto_base": "Chove de novembro a março; quase nada de maio a agosto (média de 2001 a 2020)."
+  },
+  "drought_screening_v51": {
+   "estado": "encontrado",
+   "valor": {
+    "janela": [
+     "2026-08-13",
+     "2026-09-11"
+    ],
+    "dias_validos": 30,
+    "observado_mm": 31.46,
+    "esperado_mm": 16.52,
+    "metodo": "razao_climatologia_2001_2020",
+    "razao": 1.9,
+    "leitura": "acima_do_normal",
+    "alerta_seca": false,
+    "esperado_abaixo_30mm": true,
+    "serie_1991_2025": {
+     "anos": 35,
+     "anos_com_menos_chuva_na_janela": 31,
+     "media_mm": 12.09
+    }
+   },
+   "unidade": "mm",
+   "fonte": {
+    "id": "nasa_power",
+    "nome_publico": "NASA POWER — agroclimatologia",
+    "licenca": null,
+    "citacao": "NASA Langley Research Center, POWER Project, chuva diária (PRECTOTCORR) no centro do imóvel."
+   },
+   "data_base": "2026-09-11",
+   "consultado_em": "2026-09-13T21:52:01Z",
+   "limites": [
+    "grade de cerca de 50 km; não é medição na fazenda"
+   ],
+   "motivo": null,
+   "texto_base": "De 13/08 a 11/09/2026 choveu 31,46 mm no ponto do imóvel; o normal desses dias é de cerca de 16,5 mm. Choveu acima do normal da época, e não há sinal de seca."
+  }
+ },
+ "infrastructure": {
+  "airports": [],
+  "warehouses": [],
+  "iphan": [],
+  "sif_v51": {
+   "estado": "encontrado",
+   "valor": {
+    "municipio": "Curvelo",
+    "uf": "MG",
+    "categorias": [
+     {
+      "categoria": "laticínios",
+      "quantidade": 1
+     }
+    ]
+   },
+   "unidade": "estabelecimentos",
+   "fonte": {
+    "id": "mapa_sigsif",
+    "nome_publico": "MAPA — estabelecimentos registrados no SIF",
+    "licenca": null,
+    "citacao": "Ministério da Agricultura e Pecuária, PGA/SIGSIF."
+   },
+   "data_base": null,
+   "consultado_em": "2026-09-13T21:52:01Z",
+   "limites": [
+    "busca pelo município; sem a distância até o imóvel"
+   ],
+   "motivo": null,
+   "texto_base": "No município de Curvelo há 1 estabelecimento com inspeção federal (SIF): um laticínio."
+  },
+  "warehouses_v51": {
+   "estado": "encontrado",
+   "valor": [
+    {
+     "cda": "54.7645.0001-4",
+     "tipo": "Convencional",
+     "especie": "Convencional",
+     "entidade": "Privada",
+     "municipio_uf": "Curvelo/MG",
+     "capacidade_t": 2875,
+     "distancia_divisa_km": 31.1
+    },
+    {
+     "cda": "54.0472.0006-4",
+     "tipo": "Silo",
+     "especie": "Granel sólido",
+     "entidade": "Cooperativa",
+     "municipio_uf": "Curvelo/MG",
+     "capacidade_t": 15930,
+     "distancia_divisa_km": 47.1
+    }
+   ],
+   "unidade": "armazéns",
+   "fonte": {
+    "id": "conab_sicarm",
+    "nome_publico": "CONAB — Cadastro Nacional de Unidades Armazenadoras",
+    "licenca": null,
+    "citacao": "CONAB, Portal de Informações, arquivo ArmazensCadastrados.txt (SICARM), gerado em 11/09/2026."
+   },
+   "data_base": "2026-09-11",
+   "consultado_em": "2026-09-13T23:03:00Z",
+   "limites": [
+    "raio de 50 km, medido da divisa",
+    "só pontos dentro do município declarado"
+   ],
+   "motivo": null,
+   "texto_base": "2 armazéns cadastrados na CONAB até 50 km da divisa: um armazém convencional privado com 2.875 t, a 31,1 km, e um silo de cooperativa com 15.930 t, a 47,1 km."
+  },
+  "iphan_v51": {
+   "estado": "encontrado",
+   "valor": {
+    "dentro": [],
+    "junto_divisa": [],
+    "vizinhanca_10km": [
+     {
+      "nome": "Sítio Barra do Luis 01",
+      "natureza": "Bem arqueológico",
+      "classificacao": null,
+      "codigo": "MG3120904BAST00003",
+      "distancia_divisa_km": 6.7
+     },
+     {
+      "nome": "Sítio Rio das Velhas 03",
+      "natureza": "Bem arqueológico",
+      "classificacao": "Pré-colonial",
+      "codigo": "MG3120904BAST00004",
+      "distancia_divisa_km": 8.6
+     }
+    ]
+   },
+   "unidade": "sítios",
+   "fonte": {
+    "id": "iphan_sicg",
+    "nome_publico": "IPHAN — Cadastro Nacional de Sítios Arqueológicos",
+    "licenca": null,
+    "citacao": "IPHAN, SICG, GeoServer oficial (SICG:sitios e SICG:sitios_pol)."
+   },
+   "data_base": "2026-09-13",
+   "consultado_em": "2026-09-13T23:03:59Z",
+   "limites": [
+    "pontos e polígonos do IPHAN; distância medida da divisa do imóvel"
+   ],
+   "motivo": null,
+   "texto_base": "Nenhum sítio arqueológico cadastrado no IPHAN dentro do imóvel. Há 2 sítios cadastrados na vizinhança, a 6,7 km e a 8,6 km da divisa. Sítio na vizinhança não é restrição dentro do imóvel."
+  }
+ },
+ "monitoring": {
+  "alerts": [
+   [
+    "Foco de calor",
+    "detecção dentro/próximo do imóvel",
+    "Push / WhatsApp / SMS crítico"
+   ],
+   [
+    "Embargo",
+    "nova interseção ou alteração",
+    "Push / WhatsApp"
+   ],
+   [
+    "PRODES",
+    "nova ocorrência cartográfica",
+    "Push / WhatsApp"
+   ],
+   [
+    "ANM",
+    "novo processo ou mudança",
+    "Push / WhatsApp"
+   ]
+  ],
+  "cadences": [
+   [
+    "Semanal",
+    "7 dias"
+   ],
+   [
+    "Quinzenal",
+    "15 dias"
+   ],
+   [
+    "Mensal",
+    "1 mês"
+   ],
+   [
+    "Trimestral",
+    "3 meses"
+   ],
+   [
+    "Semestral",
+    "6 meses"
+   ],
+   [
+    "Anual",
+    "12 meses"
+   ]
+  ],
+  "ndvi": "média 0.339 • mediana 0.327",
+  "ndvi_date_source": "Sentinel-2 L2A 2026-08-28 • 10 m",
+  "fire_inside_365d": 0,
+  "fire_5km_365d": 0,
+  "last_fire": "nenhum foco retornado no recorte consultado",
+  "fire_inside_label": "Focos dentro - feed recente",
+  "fire_inside": 0,
+  "fire_inside_note": "Últimos 6 arquivos de 10 minutos disponíveis no diretório oficial do INPE.",
+  "fire_near_label": "Focos até 5.0 km - feed recente",
+  "fire_near": 0,
+  "fire_near_note": "arquivo: focos_10min_20260913_1820.csv"
+ },
+ "quick_read": "O imóvel de 14.795 ha em Curvelo/MG tem 4 ocorrência(s) PRODES no histórico e 1 ocorrência(s) no recorte pós-31/07/2019 usado na triagem de crédito; isso exige diligência, mas não prova irregularidade por si só.",
+ "attention_points": [
+  "PRODES: 4 ocorrência(s) históricas, totalizando 14.496704 ha de interseção única; isso não equivale automaticamente a infração.",
+  "Matrícula, titularidade registral e SNCI ainda não foram consultados neste ciclo.",
+  "Outorgas: 1 ponto(s) de direito de uso de recursos hídricos estadual/federal intersectam o imóvel."
+ ],
+ "executive_summary_rows": [
+  [
+   "CAR",
+   "14.795 ha • Aguardando análise",
+   "AT",
+   "ok"
+  ],
+  [
+   "Fundiário",
+   "SIGEF: 0 parcela(s); matrícula não consultada",
+   "ATENÇÃO",
+   "attention"
+  ],
+  [
+   "Ambiental / PRODES",
+   "4 ocorrência(s) • 14.496704 ha",
+   "ATENÇÃO",
+   "attention"
+  ],
+  [
+   "Embargos IBAMA",
+   "Nenhum embargo IBAMA intersectante foi localizado na consulta atual.",
+   "BAIXO",
+   "ok"
+  ],
+  [
+   "Mineração ANM",
+   "Nenhum processo ANM intersectante foi localizado na consulta atual.",
+   "BAIXO",
+   "ok"
+  ]
+ ],
+ "priorities": [
+  "Obter matrícula atualizada, ônus e titularidade por fonte registral habilitada antes de decisão patrimonial relevante.",
+  "Conferir cronologia, autorização e enquadramento das ocorrências PRODES; detecção cartográfica não prova infração isoladamente."
+ ],
+ "compliance": [
+  {
+   "label": "CAR",
+   "text": "Cadastro localizado • 14.795 ha",
+   "badge": "CONSULTADO",
+   "level": "ok"
+  },
+  {
+   "label": "SIGEF",
+   "text": "0 parcela(s) candidata(s) no envelope do imóvel",
+   "badge": "CONSULTADO",
+   "level": "ok"
+  },
+  {
+   "label": "PRODES",
+   "text": "4 ocorrência(s) exatas • 14.496704 ha",
+   "badge": "ATENÇÃO",
+   "level": "attention"
+  },
+  {
+   "label": "Embargos IBAMA",
+   "text": "Nenhum embargo IBAMA intersectante foi localizado na consulta atual.",
+   "badge": "BAIXO",
+   "level": "ok"
+  },
+  {
+   "label": "ANM",
+   "text": "Nenhum processo ANM intersectante foi localizado na consulta atual.",
+   "badge": "BAIXO",
+   "level": "ok"
+  },
+  {
+   "label": "Matrícula",
+   "text": "Integração registral preparada; ativação depende de fonte/provedor legalmente habilitado.",
+   "badge": "INTEGRAÇÃO RESTRITA — OFF",
+   "level": "neutral"
+  },
+  {
+   "label": "Outorgas",
+   "text": "1 dentro do imóvel; 7 no raio consultado.",
+   "badge": "CONSULTADO",
+   "level": "ok"
+  },
+  {
+   "label": "Solo / aptidão",
+   "text": "Solo: CONSULTADA • Aptidão: CONSULTADA • Declividade: INDISPONÍVEL",
+   "badge": "CONSULTADO",
+   "level": "ok"
+  },
+  {
+   "label": "Autos / multas IBAMA",
+   "text": "Nenhum auto de infração ambiental intersectante foi localizado na consulta atual.",
+   "badge": "BAIXO",
+   "level": "ok"
+  },
+  {
+   "label": "Focos de calor - janela recente",
+   "text": "0 dentro do imóvel e 0 até 5.0 km no conjunto recente processado.",
+   "badge": "SEM FOCO RECENTE",
+   "level": "ok"
+  },
+  {
+   "label": "Terra Indígena",
+   "text": "0 interseção(ões) exata(s), área única 0.0 ha.",
+   "badge": "SEM SOBREPOSIÇÃO",
+   "level": "ok"
+  },
+  {
+   "label": "Unidade de Conservação",
+   "text": "0 interseção(ões) exata(s), área única 0.0 ha.",
+   "badge": "SEM SOBREPOSIÇÃO",
+   "level": "ok"
+  },
+  {
+   "label": "Território Quilombola",
+   "text": "0 interseção(ões) exata(s), área única 0.0 ha.",
+   "badge": "SEM SOBREPOSIÇÃO",
+   "level": "ok"
+  },
+  {
+   "label": "Assentamento",
+   "text": "0 interseção(ões) exata(s), área única 0.0 ha.",
+   "badge": "SEM SOBREPOSIÇÃO",
+   "level": "ok"
+  },
+  {
+   "label": "Embargos ICMBio",
+   "text": "0 interseção(ões) • 0.0 ha",
+   "badge": "SEM EMBARGO",
+   "level": "ok"
+  },
+  {
+   "label": "Floresta Pública — SFB",
+   "text": "0 interseção(ões) exata(s) • 0.0 ha",
+   "badge": "SEM SOBREPOSIÇÃO",
+   "level": "ok"
+  },
+  {
+   "label": "Sítio Arqueológico — IPHAN",
+   "text": "0 interseção(ões) exata(s) • 0.0 ha",
+   "badge": "SEM SOBREPOSIÇÃO",
+   "level": "ok"
+  },
+  {
+   "label": "Outorgas de uso de água",
+   "text": "1 dentro do imóvel; 7 em até 5.0 km.",
+   "badge": "ATENÇÃO",
+   "level": "attention"
+  },
+  {
+   "label": "Pivôs centrais de irrigação",
+   "text": "0 pivô(s) intersectante(s), 0.0 ha de interseção única; 0 no raio de 5.0 km.",
+   "badge": "SEM INTERSEÇÃO",
+   "level": "ok"
+  }
+ ],
+ "conclusion": {
+  "overall_risk": "MODERADO",
+  "overall_reason": "Classificação provisória baseada apenas nas fontes efetivamente consultadas. A presença de PRODES exige análise temporal, mas não é tratada como prova automática de irregularidade.",
+  "categories": [
+   {
+    "label": "Fundiário",
+    "text": "CAR e SIGEF consultados; matrícula e titularidade registral pendentes.",
+    "risk": "ATENÇÃO",
+    "level": "attention"
+   },
+   {
+    "label": "Ambiental",
+    "text": "4 ocorrências PRODES intersectam o imóvel; a legalidade depende de data, autorização e enquadramento aplicável.",
+    "risk": "ATENÇÃO",
+    "level": "attention"
+   },
+   {
+    "label": "Fiscalização",
+    "text": "Embargos IBAMA: 0. Autos de infração ambientais: 0. Valor nominal somado dos autos localizados: R$ 0,00.",
+    "risk": "BAIXO",
+    "level": "ok"
+   },
+   {
+    "label": "Mineral",
+    "text": "Nenhum processo ANM intersectante foi localizado na consulta atual.",
+    "risk": "BAIXO",
+    "level": "ok"
+   },
+   {
+    "label": "Hídrico",
+    "text": "Outorgas consultadas: 1 dentro do imóvel e 7 no raio; Pivôs: 0 intersectante(s); clima: 31.46 mm no período recente.",
+    "risk": "ATENÇÃO",
+    "level": "attention"
+   },
+   {
+    "label": "Produtivo",
+    "text": "Solo consultada, aptidão consultada, erosão consultada e declividade indisponível.",
+    "risk": "TRIAGEM DISPONÍVEL",
+    "level": "info"
+   }
+  ],
+  "main_attention": "O maior ponto de atenção desta emissão é a necessidade de interpretar corretamente as ocorrências PRODES e completar a diligência registral; nenhum desses pontos deve ser inferido além do que as fontes consultadas suportam.",
+  "verdict": "Raio-X público ampliado executado: 14/15 núcleos técnicos responderam nesta emissão. As integrações registrais/restritas permanecem claramente separadas e não são substituídas por inferência.",
+  "positives": [
+   "CAR localizado com geometria real.",
+   "Nenhum embargo IBAMA intersectante localizado.",
+   "Nenhum processo ANM intersectante localizado."
+  ],
+  "risks": [
+   "4 ocorrência(s) PRODES exigem análise temporal e documental.",
+   "Matrícula e titularidade registral ainda não confirmadas.",
+   "Há outorga(s) de uso de recursos hídricos vinculada(s) espacialmente ao imóvel; verificar autoridade emissora, vigência e obrigações associadas."
+  ],
+  "opportunities": [
+   "Ativar monitoramento contínuo para mudanças futuras.",
+   "Completar due diligence com fontes hídricas, produtivas e registrais."
+  ],
+  "diligence": [
+   "Obter matrícula atualizada e verificar titularidade/ônus.",
+   "Conferir cada ocorrência PRODES por data, autorização e enquadramento aplicável.",
+   "Repetir consultas críticas na data da negociação.",
+   "Conferir processo, portaria, vigência, finalidade, autoridade emissora e condições das outorgas que intersectam o imóvel."
+  ],
+  "limit": "O Raio-X Territorial consolida fontes públicas e cálculos geoespaciais. Não substitui certidão registral, vistoria, laudo técnico, autorização ambiental ou parecer jurídico quando necessários.",
+  "coverage": {
+   "consulted_core_count": 14,
+   "core_count": 15,
+   "consulted_core": [
+    "CAR/SICAR",
+    "SIGEF",
+    "IBAMA embargos",
+    "IBAMA autos",
+    "PRODES",
+    "ANM",
+    "restrições territoriais",
+    "outorgas",
+    "pivôs",
+    "clima",
+    "solo",
+    "aptidão",
+    "imagem Sentinel-2",
+    "MapBiomas cobertura"
+   ],
+   "unavailable_core": [
+    "declividade"
+   ]
+  }
+ },
+ "sources": [
+  {
+   "name": "SICAR",
+   "description": "Cadastro Ambiental Rural consultado via WFS público.",
+   "status": "CONSULTADA",
+   "level": "ok"
+  },
+  {
+   "name": "SIGEF / INCRA (espelho PAMGIA)",
+   "description": "Consulta pública de parcelas SIGEF disponibilizada em serviço do IBAMA/PAMGIA.",
+   "status": "CONSULTADA",
+   "level": "ok"
+  },
+  {
+   "name": "IBAMA / PAMGIA",
+   "description": "Embargos SISCOM com cruzamento espacial exato.",
+   "status": "CONSULTADA",
+   "level": "ok"
+  },
+  {
+   "name": "INPE / TerraBrasilis / PRODES",
+   "description": "Camadas PRODES consultadas por WFS e intersectadas geometricamente com o CAR.",
+   "status": "CONSULTADA",
+   "level": "ok"
+  },
+  {
+   "name": "ANM / SIGMINE",
+   "description": "Processos minerários consultados e intersectados geometricamente.",
+   "status": "CONSULTADA",
+   "level": "ok"
+  },
+  {
+   "name": "SNCI",
+   "description": "Conector ainda não ativado nesta emissão.",
+   "status": "NÃO CONSULTADA",
+   "level": "neutral"
+  },
+  {
+   "name": "Registro de imóveis",
+   "description": "Matrícula e titularidade não consultadas nesta emissão.",
+   "status": "NÃO CONSULTADA",
+   "level": "neutral"
+  },
+  {
+   "name": "Identidade/denominação do imóvel",
+   "description": "O SICAR não publica denominação para este imóvel; ele é identificado pelo código do CAR.",
+   "status": "CONSULTADA",
+   "level": "ok"
+  },
+  {
+   "name": "Esri World Imagery — referência visual de alta resolução",
+   "description": "Não respondeu nesta emissão: HTTPStatusError:Server error '500 Internal Server Error' for url 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/export?bbox=-44.1858196278%2C-18.8949957878%2C-44.1779066322%2C-18.887521122200003&bboxSR=4326&imageSR=4326&size=1800%2C1500&format=j.",
+   "status": "INDISPONÍVEL",
+   "level": "attention"
+  },
+  {
+   "name": "Copernicus Sentinel-2 — cena técnica datada / NDVI",
+   "description": "Cena S2B_23KNV_20260828_0_L2A de 2026-08-28, resolução 10 m, nuvens 0.000727%. RGB/NIR usados para o NDVI dentro do CAR.",
+   "status": "CONSULTADA",
+   "level": "ok"
+  },
+  {
+   "name": "IBAMA / PAMGIA - autos de infração",
+   "description": "Autos ambientais por coordenada, com deduplicação para reduzir contagem superestimada. Dados pessoais não são exibidos no relatório.",
+   "status": "CONSULTADA",
+   "level": "ok"
+  },
+  {
+   "name": "INPE / Programa Queimadas",
+   "description": "Focos de calor em tempo quase real; Últimos 6 arquivos de 10 minutos disponíveis no diretório oficial do INPE. Último arquivo processado: focos_10min_20260913_1820.csv.",
+   "status": "CONSULTADA",
+   "level": "ok"
+  },
+  {
+   "name": "SICAR - composição ambiental interna",
+   "description": "O WFS público consultado expõe o limite e atributos gerais do imóvel, mas não disponibilizou camadas separadas de APP, Reserva Legal, vegetação e área consolidada. Esses itens permanecem NÃO CONSULTADOS nesta emissão.",
+   "status": "NÃO CONSULTADA",
+   "level": "neutral"
+  },
+  {
+   "name": "Terra Indígena",
+   "description": "Consulta territorial por polígono e interseção exata. Fonte: FUNAI / IBAMA-PAMGIA.",
+   "status": "CONSULTADA",
+   "level": "ok"
+  },
+  {
+   "name": "Unidade de Conservação",
+   "description": "Consulta territorial por polígono e interseção exata. Fonte: CNUC/MMA / IBAMA-PAMGIA.",
+   "status": "CONSULTADA",
+   "level": "ok"
+  },
+  {
+   "name": "Território Quilombola",
+   "description": "Consulta territorial por polígono e interseção exata. Fonte: INCRA / IBAMA-PAMGIA.",
+   "status": "CONSULTADA",
+   "level": "ok"
+  },
+  {
+   "name": "Assentamento",
+   "description": "Consulta territorial por polígono e interseção exata. Fonte: INCRA / IBAMA-PAMGIA.",
+   "status": "CONSULTADA",
+   "level": "ok"
+  },
+  {
+   "name": "ICMBio - embargos",
+   "description": "Embargos ICMBio consultados por interseção espacial exata.",
+   "status": "CONSULTADA",
+   "level": "ok"
+  },
+  {
+   "name": "Floresta Pública — SFB",
+   "description": "Consulta pública com interseção geométrica exata ao CAR. 0 ocorrência(s); área única 0.0 ha.",
+   "status": "CONSULTADA",
+   "level": "ok"
+  },
+  {
+   "name": "Sítio Arqueológico — IPHAN",
+   "description": "Consulta pública com interseção geométrica exata ao CAR. 0 ocorrência(s); área única 0.0 ha.",
+   "status": "CONSULTADA",
+   "level": "ok"
+  },
+  {
+   "name": "IGAM + ANA / IDE-Sisema - Outorgas",
+   "description": "Consulta WFS oficial por polígono e proximidade. Camadas: IDE:ide_2103_mg_outorgas_uso_recursos_hidricos_pto; IDE:ide_2103_mg_federais_ana_outorgas_pto.",
+   "status": "CONSULTADA",
+   "level": "ok"
+  },
+  {
+   "name": "SGB / SIAGAS — Água subterrânea",
+   "description": "27 poço(s) cadastrados na vizinhança; profundidade mediana 60.0 m e nível estático mediano 14.0 m.",
+   "status": "CONSULTADA",
+   "level": "ok"
+  },
+  {
+   "name": "ANA / SNIRH - Pivôs Centrais 2022",
+   "description": "Mapeamento nacional de pivôs centrais, ano de referência 2022, com interseção geométrica exata ao CAR.",
+   "status": "CONSULTADA",
+   "level": "ok"
+  },
+  {
+   "name": "NASA POWER - Agroclimatologia",
+   "description": "Dados diários no centróide do imóvel; janela 20260813 a 20260911. Produto em grade, próximo de tempo real.",
+   "status": "CONSULTADA",
+   "level": "ok"
+  },
+  {
+   "name": "ANM/SIGMINE + SGB/GeoSGB - Minerais críticos e terras raras",
+   "description": "Triagem de processos minerários e camadas públicas de interesse geológico/mineral. Não equivale a pesquisa mineral de campo, recurso ou reserva.",
+   "status": "CONSULTADA",
+   "level": "ok"
+  },
+  {
+   "name": "IDE-Sisema / Mapa de Solos",
+   "description": "Camada IDE:ide_1502_mg_mapa_solos_pol; 1 interseção(ões) exata(s).",
+   "status": "CONSULTADA",
+   "level": "ok"
+  },
+  {
+   "name": "IDE-Sisema / Aptidão Agrícola",
+   "description": "Camada IDE:ide_1504_mg_solos_aptidao_agricola_pol; 2 interseção(ões) exata(s), com área e percentual calculados localmente.",
+   "status": "CONSULTADA",
+   "level": "ok"
+  },
+  {
+   "name": "IDE-Sisema / Risco Potencial de Erosão",
+   "description": "Camada IDE:ide_2401_mg_risco_potencial_erosao_pol; classes: Muito baixo.",
+   "status": "CONSULTADA",
+   "level": "ok"
+  },
+  {
+   "name": "IDE-Sisema / Uso e Cobertura",
+   "description": "Camada IDE:ide_210603_mg_uso_cobertura_mapcar_area7_pol; 0 interseção(ões) exata(s).",
+   "status": "INDISPONÍVEL",
+   "level": "attention"
+  },
+  {
+   "name": "IDE-Sisema / Recomposição de Reserva Legal declarada",
+   "description": "Camada IDE:ide_210602_mg_imoveis_recomp_res_legal_declarado_car_pol; 0 interseção(ões) exata(s). Confirmar o código CAR de cada feição antes de atribuir ao imóvel selecionado.",
+   "status": "CONSULTADA",
+   "level": "ok"
+  },
+  {
+   "name": "SNCR / CCIR",
+   "description": "CCIR e dados cadastrais do imóvel rural mediante habilitação oficial. Integração já preparada na arquitetura; ativação pendente de credencial/habilitação.",
+   "status": "INTEGRAÇÃO PREPARADA — OFF",
+   "level": "neutral"
+  },
+  {
+   "name": "ONR / RI Digital — Matrícula",
+   "description": "Matrícula atualizada e serviços registrais. Integração já preparada na arquitetura; ativação pendente de credencial/habilitação.",
+   "status": "INTEGRAÇÃO PREPARADA — OFF",
+   "level": "neutral"
+  },
+  {
+   "name": "ONR / RI Digital — Ônus",
+   "description": "Certidão de ônus e atos registrais. Integração já preparada na arquitetura; ativação pendente de credencial/habilitação.",
+   "status": "INTEGRAÇÃO PREPARADA — OFF",
+   "level": "neutral"
+  },
+  {
+   "name": "ONR — Pesquisa Nacional de Bens",
+   "description": "Pesquisa patrimonial autorizada conforme regras do serviço. Integração já preparada na arquitetura; ativação pendente de credencial/habilitação.",
+   "status": "INTEGRAÇÃO PREPARADA — OFF",
+   "level": "neutral"
+  },
+  {
+   "name": "Busca por titular / CPF / CNPJ",
+   "description": "Consulta por titular em provedor/base legalmente habilitada. Integração já preparada na arquitetura; ativação pendente de credencial/habilitação.",
+   "status": "INTEGRAÇÃO PREPARADA — OFF",
+   "level": "neutral"
+  },
+  {
+   "name": "IBGE / PPM — Pecuária Municipal",
+   "description": "Dados municipais/regionais; não representam o rebanho existente dentro do imóvel.",
+   "status": "CONSULTADA",
+   "level": "ok"
+  },
+  {
+   "name": "Copernicus Sentinel-2 — NDVI real dentro do CAR",
+   "description": "NDVI calculado diretamente das bandas NIR e vermelho da cena S2B_23KNV_20260828_0_L2A (2026-08-28), resolução 10 m. Média 0.339; mediana 0.327.",
+   "status": "CONSULTADA",
+   "level": "ok"
+  },
+  {
+   "name": "MapBiomas Brasil — Cobertura/Pastagem Coleção 11",
+   "description": "GeoTIFF público 2025 recortado ao CAR: pastagem 12.6398 ha (85.38%); vegetação nativa 0.0%; agropecuária 96.49%.",
+   "status": "CONSULTADA",
+   "level": "ok"
+  },
+  {
+   "name": "MapBiomas — Condição de Vigor da Pastagem",
+   "description": "O produto oficial histórico (baixo/médio/alto, 2000–2025) é público, mas o acesso automatizado oficial exposto pelo MapBiomas é via asset Google Earth Engine. O Raio-X já calcula NDVI Sentinel-2 real para vigor atual; o conector GEE será ativado quando houver credencial de serviço autorizada.",
+   "status": "INTEGRAÇÃO PREPARADA — CREDENCIAL GEE",
+   "level": "neutral"
+  },
+  {
+   "name": "SRTM 1 arc-second — altitude e declividade",
+   "description": "DEM público ~30 m recortado ao CAR: altitude mediana 657.0 m; declividade mediana 4.04°, P90 9.43°. Não substitui levantamento topográfico de campo.",
+   "status": "CONSULTADA",
+   "level": "ok"
+  },
+  {
+   "name": "Base dos Dados / SICAR — composição e consistência geométrica do CAR",
+   "description": "Consulta indisponível nesta emissão: sem detalhe. Nenhum zero foi inferido.",
+   "status": "INDISPONÍVEL",
+   "level": "attention"
+  },
+  {
+   "name": "ISRIC SoilGrids — composição físico-química",
+   "description": "7/7 propriedades responderam: argila, areia, silte, pH, carbono orgânico, CTC e nitrogênio no horizonte 0–5 cm. Produto em grade 250 m; não é análise laboratorial.",
+   "status": "CONSULTADA",
+   "level": "ok"
+  },
+  {
+   "name": "IBGE/SIDRA — Produção Agrícola Municipal (PAM)",
+   "description": "Dados municipais de área, produção e rendimento. Servem para contexto produtivo regional e não comprovam qual cultura existe no imóvel.",
+   "status": "CONSULTADA",
+   "level": "ok"
+  },
+  {
+   "name": "ANAC / SIROS — Aeródromos",
+   "description": "1 aeródromo(s) em até 50.0 km do centróide do imóvel.",
+   "status": "CONSULTADA",
+   "level": "ok"
+  },
+  {
+   "name": "MAPA / SIGSIF — Estabelecimentos registrados no SIF",
+   "description": "1 estabelecimento(s) retornado(s) para o município/UF. O filtro é logístico/regional e não comprova vínculo com a fazenda.",
+   "status": "CONSULTADA",
+   "level": "ok"
+  },
+  {
+   "name": "NASA POWER — climatologia mensal",
+   "description": "Climatologia da grade NASA POWER no centróide; é referência regional, não medição da fazenda.",
+   "status": "CONSULTADA",
+   "level": "ok"
+  },
+  {
+   "name": "KartaView — imagem georreferenciada de via pública",
+   "description": "Sem imagem aberta utilizável nesta emissão: no_public_street_imagery_near_property. Link de Street View ao vivo é mantido quando disponível.",
+   "status": "INDISPONÍVEL",
+   "level": "attention"
+  }
+ ],
+ "interpretation_rules": [
+  "NÃO CONSULTADO nunca é tratado como ausência de ocorrência.",
+  "PRODES indica desmatamento mapeado e não prova, isoladamente, infração ambiental.",
+  "CAR não comprova titularidade registral do imóvel.",
+  "Processo ANM não comprova jazida, reserva ou viabilidade econômica mineral.",
+  "Interseções espaciais exatas são recalculadas localmente sobre a geometria do CAR.",
+  "Foco de calor por satélite é um alerta operacional e não prova sozinho a existência, extensão ou causa de um incêndio em solo.",
+  "Profundidade e nível d’água de poços vizinhos são evidência hidrogeológica regional e não garantem água na mesma profundidade dentro do imóvel; ponto de perfuração exige avaliação local.",
+  "Dados NASA POWER representam estimativas em grade no centróide do imóvel; não equivalem a medição de pluviômetro ou estação meteorológica instalada na propriedade.",
+  "Sinal de terras raras ou favorabilidade geológica é somente triagem de interesse mineral; não comprova ocorrência economicamente explotável, teor, recurso, reserva ou titularidade de direito minerário.",
+  "PRODES é apresentado em duas lentes separadas: histórico completo e recorte posterior a 31/07/2019. Ambas usam área única da união das interseções exatas com o CAR.",
+  "O status de cada fonte corresponde a esta emissão: CONSULTADA, PARCIAL, INDISPONÍVEL, RESTRITA ou NÃO EXECUTADA. Nenhum desses estados é convertido automaticamente em ausência de ocorrência.",
+  "A reconciliação final remove placeholders antigos quando o conector efetivamente respondeu; um dado só permanece indisponível/restrito quando essa é a situação real desta emissão."
+ ],
+ "technical_map_image_path": "\\tmp\\raiox_reports\\RX-20260913T215201Z-A14D011F\\map_environment.png",
+ "satellite_imagery": {
+  "ok": true,
+  "path": "\\tmp\\raiox_reports\\RX-20260913T215201Z-A14D011F\\property_visual_plate_v28.jpg",
+  "visual_plate": {
+   "ok": true,
+   "path": "\\tmp\\raiox_reports\\RX-20260913T215201Z-A14D011F\\property_visual_plate_v28.jpg",
+   "width": 1900,
+   "height": 1240,
+   "source": "Esri World Imagery + Copernicus Sentinel-2 + NDVI",
+   "property_name": "",
+   "car_code": "MG-3120904-DFB380BECD7A4323AD8AA68FA14D011F",
+   "area_ha": 14.795,
+   "note": "Prancha comparativa do mesmo CAR, composta apenas quando ao menos uma fonte visual real respondeu."
+  },
+  "visual_plate_path": "\\tmp\\raiox_reports\\RX-20260913T215201Z-A14D011F\\property_visual_plate_v28.jpg",
+  "visual_reference": {
+   "ok": false,
+   "source": "Esri World Imagery",
+   "detail": "HTTPStatusError:Server error '500 Internal Server Error' for url 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/export?bbox=-44.1858196278%2C-18.8949957878%2C-44.1779066322%2C-18.887521122200003&bboxSR=4326&imageSR=4326&size=1800%2C1500&format=j"
+  },
+  "sentinel": {
+   "ok": true,
+   "path": "\\tmp\\raiox_reports\\RX-20260913T215201Z-A14D011F\\property_sentinel2_10m.jpg",
+   "ndvi_image_path": "\\tmp\\raiox_reports\\RX-20260913T215201Z-A14D011F\\ndvi_property.png",
+   "scene_id": "S2B_23KNV_20260828_0_L2A",
+   "date": "2026-08-28",
+   "cloud_cover_pct": 0.000727,
+   "source": "Copernicus Sentinel-2 L2A COG via Element 84 Earth Search / AWS Open Data",
+   "resolution_m": 10,
+   "note": "RGB e NDVI calculados diretamente das bandas Sentinel-2 COG no recorte da propriedade; não é thumbnail genérico.",
+   "ndvi_mean": 0.339,
+   "ndvi_median": 0.327,
+   "ndvi_p10": 0.244,
+   "ndvi_p90": 0.502,
+   "ndvi_low_share_pct": 40.5,
+   "ndvi_medium_share_pct": 53.5,
+   "ndvi_high_share_pct": 6.0,
+   "ndvi_pixel_count": 178679
+  },
+  "visual_reference_path": null,
+  "sentinel_image_path": "\\tmp\\raiox_reports\\RX-20260913T215201Z-A14D011F\\property_sentinel2_10m.jpg",
+  "ndvi_image_path": "\\tmp\\raiox_reports\\RX-20260913T215201Z-A14D011F\\ndvi_property.png",
+  "source": "Prancha V28: Esri World Imagery + Copernicus Sentinel-2 + NDVI",
+  "note": "A capa identifica a fazenda e compara o mesmo CAR em alta resolução, Sentinel-2 datado e NDVI. Cada lente tem função própria e origem explicitada.",
+  "scene_id": "S2B_23KNV_20260828_0_L2A",
+  "date": "2026-08-28",
+  "cloud_cover_pct": 0.000727,
+  "resolution_m": 10,
+  "ndvi_mean": 0.339,
+  "ndvi_median": 0.327,
+  "ndvi_p10": 0.244,
+  "ndvi_p90": 0.502,
+  "ndvi_low_share_pct": 40.5,
+  "ndvi_medium_share_pct": 53.5,
+  "ndvi_high_share_pct": 6.0,
+  "ndvi_pixel_count": 178679,
+  "cover_v51": {
+   "estado": "encontrado",
+   "valor": {
+    "produto": "Sentinel-2 L2A",
+    "cena": "S2B_23KNV_20260828_0_L2A",
+    "resolucao_m": 10,
+    "data": "2026-08-28",
+    "nuvens_pct": 0.000727,
+    "verdor": {
+     "pouco_verde_pct": 40.5,
+     "verde_medio_pct": 53.5,
+     "bem_verde_pct": 6.0,
+     "cortes_ndvi": [
+      0.3,
+      0.55
+     ],
+     "media": 0.339,
+     "mediana": 0.327
+    }
+   },
+   "unidade": "%",
+   "fonte": {
+    "id": "copernicus_sentinel2",
+    "nome_publico": "Copernicus Sentinel-2 (ESA), via Earth Search / AWS Open Data",
+    "licenca": "uso livre com atribuição",
+    "citacao": "Contém dados modificados do Copernicus Sentinel-2 (2026), cena S2B_23KNV_20260828_0_L2A."
+   },
+   "data_base": "2026-08-28",
+   "consultado_em": "2026-09-13T21:52:01Z",
+   "limites": [
+    "cada ponto da imagem cobre 10 × 10 m"
+   ],
+   "motivo": null,
+   "texto_base": "Imagem Sentinel-2 de 28/08/2026, sem nuvens. Nessa data, pouco verde em 40% da área, verde médio em 54% e bem verde em 6%."
+  }
+ },
+ "satellite_image_path": "\\tmp\\raiox_reports\\RX-20260913T215201Z-A14D011F\\property_visual_plate_v28.jpg",
+ "visual_reference_image_path": null,
+ "sentinel_image_path": "\\tmp\\raiox_reports\\RX-20260913T215201Z-A14D011F\\property_sentinel2_10m.jpg",
+ "ndvi_image_path": "\\tmp\\raiox_reports\\RX-20260913T215201Z-A14D011F\\ndvi_property.png",
+ "credit_screening": {
+  "mcr_check_required": true,
+  "fiscal_modules": 0.3699,
+  "reading": "Há detecção PRODES posterior a 31/07/2019. Para crédito rural, a ocorrência deve ser conferida conforme o MCR vigente e a documentação ambiental aplicável; isso não equivale automaticamente a impedimento definitivo.",
+  "regulatory_basis": "MCR 2-9: verificação de supressão de vegetação nativa após 31/07/2019."
+ },
+ "agropecuaria": {
+  "ok": true,
+  "source": "IBGE/PPM + MAPA/SIGSIF + fontes territoriais já consultadas pelo Raio-X",
+  "municipality": "Curvelo",
+  "uf": "MG",
+  "livestock_municipal": {
+   "ok": true,
+   "source": "IBGE / SIDRA — Pesquisa da Pecuária Municipal (Tabela 3939)",
+   "municipality_code": "3120904",
+   "series": [
+    {
+     "herd": "Bovino",
+     "period": "2024",
+     "value": 94375.0,
+     "previous_period": "2023",
+     "previous_value": 95412.0,
+     "delta_pct": -1.09
+    },
+    {
+     "herd": "Bubalino",
+     "period": "2024",
+     "value": 203.0,
+     "previous_period": "2023",
+     "previous_value": 181.0,
+     "delta_pct": 12.15
+    },
+    {
+     "herd": "Equino",
+     "period": "2024",
+     "value": 2995.0,
+     "previous_period": "2023",
+     "previous_value": 3100.0,
+     "delta_pct": -3.39
+    },
+    {
+     "herd": "Suíno - total",
+     "period": "2024",
+     "value": 32706.0,
+     "previous_period": "2023",
+     "previous_value": 31647.0,
+     "delta_pct": 3.35
+    },
+    {
+     "herd": "Suíno - matrizes de suínos",
+     "period": "2024",
+     "value": 2077.0,
+     "previous_period": "2023",
+     "previous_value": 2010.0,
+     "delta_pct": 3.33
+    },
+    {
+     "herd": "Caprino",
+     "period": "2024",
+     "value": 69.0,
+     "previous_period": "2023",
+     "previous_value": 75.0,
+     "delta_pct": -8.0
+    },
+    {
+     "herd": "Ovino",
+     "period": "2024",
+     "value": 250.0,
+     "previous_period": "2023",
+     "previous_value": 502.0,
+     "delta_pct": -50.2
+    },
+    {
+     "herd": "Galináceos - total",
+     "period": "2024",
+     "value": 147200.0,
+     "previous_period": "2023",
+     "previous_value": 130400.0,
+     "delta_pct": 12.88
+    },
+    {
+     "herd": "Galináceos - galinhas",
+     "period": "2024",
+     "value": 14000.0,
+     "previous_period": "2023",
+     "previous_value": 12230.0,
+     "delta_pct": 14.47
+    }
+   ],
+   "note": "Dados municipais/regionais; não representam o rebanho existente dentro do imóvel."
+  },
+  "dairy_cows_municipal": {
+   "ok": true,
+   "source": "IBGE / SIDRA — PPM Tabela 94 — Vacas ordenhadas",
+   "municipality_code": "3120904",
+   "period": "2024",
+   "value": 9902.0,
+   "previous_period": "2023",
+   "previous_value": 10087.0,
+   "delta_pct": -1.83,
+   "unit": "cabeças",
+   "note": "Indicador municipal; não informa quantas vacas existem no imóvel analisado."
+  },
+  "animal_products_municipal": {
+   "ok": true,
+   "source": "IBGE / SIDRA — PPM Tabela 74 — Produção de origem animal",
+   "municipality_code": "3120904",
+   "products": [
+    {
+     "product": "Leite",
+     "period": "2024",
+     "value": 22137.0,
+     "unit": "Mil litros",
+     "variable": "Produção de origem animal"
+    },
+    {
+     "product": "Ovos de galinha",
+     "period": "2024",
+     "value": 156.0,
+     "unit": "Mil dúzias",
+     "variable": "Produção de origem animal"
+    },
+    {
+     "product": "Leite",
+     "period": "2024",
+     "value": 49809.0,
+     "unit": "Mil Reais",
+     "variable": "Valor da produção"
+    },
+    {
+     "product": "Ovos de galinha",
+     "period": "2024",
+     "value": 1326.0,
+     "unit": "Mil Reais",
+     "variable": "Valor da produção"
+    }
+   ],
+   "note": "Produção municipal/regional; não é produção atribuída ao imóvel."
+  },
+  "sif_chain": {
+   "ok": true,
+   "source": "MAPA — PGA/SIGSIF — Estabelecimentos Registrados no SIF",
+   "municipality": "Curvelo",
+   "uf": "MG",
+   "count": 1,
+   "establishments": [
+    {
+     "categories": [
+      "laticínios"
+     ]
+    }
+   ],
+   "note": "Filtro municipal/UF. Distância exata só é exibida quando a fonte fornece coordenadas verificáveis."
+  },
+  "property_screening": {
+   "checks": [
+    {
+     "factor": "Água outorgada/próxima",
+     "scope": "imóvel/vizinhança",
+     "status": "consultada",
+     "value": {
+      "inside": 1,
+      "near": 7
+     }
+    },
+    {
+     "factor": "Clima recente",
+     "scope": "centroide do imóvel",
+     "status": "consultada",
+     "value": {
+      "rain_30d_mm": 31.46,
+      "temp_avg_c": 25.638
+     }
+    },
+    {
+     "factor": "Pivôs",
+     "scope": "imóvel/vizinhança",
+     "status": "consultada",
+     "value": {
+      "inside": 0,
+      "near": 0
+     }
+    },
+    {
+     "factor": "Solo",
+     "scope": "interseção cartográfica",
+     "status": "consultada",
+     "value": {
+      "interseções": 1,
+      "área_somada_ha": 14.804099,
+      "camada": "IDE:ide_1502_mg_mapa_solos_pol"
+     }
+    },
+    {
+     "factor": "Aptidão agrícola",
+     "scope": "interseção cartográfica",
+     "status": "consultada",
+     "value": {
+      "interseções": 2,
+      "área_somada_ha": 14.804091,
+      "camada": "IDE:ide_1504_mg_solos_aptidao_agricola_pol"
+     }
+    },
+    {
+     "factor": "Vigor espectral atual — NDVI Sentinel-2",
+     "scope": "pixels dentro do CAR",
+     "status": "consultada",
+     "value": {
+      "data": "2026-08-28",
+      "resolução_m": 10,
+      "média": 0.339,
+      "mediana": 0.327,
+      "baixo_pct": 40.5,
+      "médio_pct": 53.5,
+      "alto_pct": 6.0
+     }
+    },
+    {
+     "factor": "Pastagem MapBiomas",
+     "scope": "pixels MapBiomas dentro do CAR",
+     "status": "consultada",
+     "value": {
+      "ano": 2025,
+      "área_ha": 12.6398,
+      "percentual": 85.38
+     }
+    },
+    {
+     "factor": "Declividade SRTM",
+     "scope": "raster ~30 m dentro do CAR",
+     "status": "consultada",
+     "value": {
+      "mediana_graus": 4.04,
+      "p90_graus": 9.43,
+      "declive_ate_8_pct": 81.0
+     }
+    },
+    {
+     "factor": "Safras e culturas do município",
+     "scope": "município — contexto regional",
+     "status": "consultada",
+     "value": [
+      "Cana-de-açúcar (Área plantada: 480.0 Hectares; Área colhida: 480.0 Hectares; Quantidade produzida: 19200.0 Toneladas)",
+      "Feijão (em grão) (Área plantada: 250.0 Hectares; Área colhida: 250.0 Hectares; Quantidade produzida: 120.0 Toneladas)",
+      "Mandioca (Área plantada: 142.0 Hectares; Área colhida: 142.0 Hectares; Quantidade produzida: 1579.0 Toneladas)",
+      "Milho (em grão) (Área plantada: 650.0 Hectares; Área colhida: 650.0 Hectares; Quantidade produzida: 2002.0 Toneladas)",
+      "Soja (em grão) (Área plantada: 1500.0 Hectares; Área colhida: 1500.0 Hectares; Quantidade produzida: 2640.0 Toneladas)",
+      "Tomate (Área plantada: 3.0 Hectares; Área colhida: 3.0 Hectares; Quantidade produzida: 180.0 Toneladas)"
+     ]
+    },
+    {
+     "factor": "Aeródromos e logística aérea",
+     "scope": "raio 50.0 km",
+     "status": "consultada",
+     "value": [
+      "CURVELO • 33.1 km • CURVELO/MG"
+     ]
+    },
+    {
+     "factor": "Cadeia agroindustrial SIF",
+     "scope": "município/UF",
+     "status": "consultada",
+     "value": "1 estabelecimento(s) SIF localizado(s) pelo filtro municipal/UF"
+    }
+   ],
+   "carrying_capacity": null,
+   "carrying_capacity_note": "Lotação animal (UA/ha) não é estimada sem dados de forragem, manejo, estação, suplementação e validação agronômica. O Raio-X não inventa capacidade de suporte."
+  },
+  "pasture": {
+   "source": "MapBiomas Brasil — Cobertura 30 m — Coleção 11",
+   "state": "ready",
+   "year": 2025,
+   "pasture_area_ha": 12.6398,
+   "pasture_share_pct": 85.38,
+   "native_vegetation_share_pct": 0.0,
+   "agriculture_and_pasture_share_pct": 96.49,
+   "water_share_pct": 3.51,
+   "ndvi_current": {
+    "date": "2026-08-28",
+    "resolution_m": 10,
+    "ndvi_mean": 0.339,
+    "ndvi_median": 0.327,
+    "ndvi_p10": 0.244,
+    "ndvi_p90": 0.502,
+    "ndvi_low_share_pct": 40.5,
+    "ndvi_medium_share_pct": 53.5,
+    "ndvi_high_share_pct": 6.0,
+    "ndvi_pixel_count": 178679,
+    "ndvi_image_path": "\\tmp\\raiox_reports\\RX-20260913T215201Z-A14D011F\\ndvi_property.png"
+   },
+   "note": "Área de pastagem vem do MapBiomas Coleção 11 recortado ao CAR. O vigor espectral atual vem do NDVI Sentinel-2. A classificação histórica oficial de Condição de Vigor MapBiomas é mantida como integração GEE separada."
+  },
+  "interpretation": "Triagem agropecuária. Dados municipais não são atribuídos automaticamente ao imóvel e não substituem vistoria, análise de pastagem, zootecnia ou projeto produtivo.",
+  "satellite_ndvi": {
+   "date": "2026-08-28",
+   "resolution_m": 10,
+   "ndvi_mean": 0.339,
+   "ndvi_median": 0.327,
+   "ndvi_p10": 0.244,
+   "ndvi_p90": 0.502,
+   "ndvi_low_share_pct": 40.5,
+   "ndvi_medium_share_pct": 53.5,
+   "ndvi_high_share_pct": 6.0,
+   "ndvi_pixel_count": 178679,
+   "ndvi_image_path": "\\tmp\\raiox_reports\\RX-20260913T215201Z-A14D011F\\ndvi_property.png"
+  },
+  "landcover_v51": {
+   "estado": "encontrado",
+   "valor": {
+    "colecao": 11,
+    "ano": 2025,
+    "resolucao_m": 30,
+    "classes": [
+     {
+      "classe": "Pastagem",
+      "ha": 12.6398,
+      "pct": 85.38
+     },
+     {
+      "classe": "Outras lavouras temporárias",
+      "ha": 1.6449,
+      "pct": 11.11
+     },
+     {
+      "classe": "Rio/lago/oceano",
+      "ha": 0.5194,
+      "pct": 3.51
+     }
+    ],
+    "vegetacao_nativa_pct": 0.0,
+    "serie_vegetacao_nativa_pct": [
+     {
+      "ano": 1985,
+      "pct": 65
+     },
+     {
+      "ano": 1986,
+      "pct": 65
+     },
+     {
+      "ano": 1987,
+      "pct": 58
+     },
+     {
+      "ano": 1988,
+      "pct": 36
+     },
+     {
+      "ano": 1989,
+      "pct": 33
+     },
+     {
+      "ano": 1990,
+      "pct": 33
+     },
+     {
+      "ano": 1991,
+      "pct": 33
+     },
+     {
+      "ano": 1992,
+      "pct": 30
+     },
+     {
+      "ano": 1993,
+      "pct": 29
+     },
+     {
+      "ano": 1994,
+      "pct": 32
+     },
+     {
+      "ano": 1995,
+      "pct": 35
+     },
+     {
+      "ano": 1996,
+      "pct": 35
+     },
+     {
+      "ano": 1997,
+      "pct": 39
+     },
+     {
+      "ano": 1998,
+      "pct": 39
+     },
+     {
+      "ano": 1999,
+      "pct": 52
+     },
+     {
+      "ano": 2000,
+      "pct": 60
+     },
+     {
+      "ano": 2001,
+      "pct": 60
+     },
+     {
+      "ano": 2002,
+      "pct": 60
+     },
+     {
+      "ano": 2003,
+      "pct": 60
+     },
+     {
+      "ano": 2004,
+      "pct": 60
+     },
+     {
+      "ano": 2005,
+      "pct": 60
+     },
+     {
+      "ano": 2006,
+      "pct": 17
+     },
+     {
+      "ano": 2007,
+      "pct": 0
+     },
+     {
+      "ano": 2008,
+      "pct": 0
+     },
+     {
+      "ano": 2009,
+      "pct": 0
+     },
+     {
+      "ano": 2010,
+      "pct": 0
+     },
+     {
+      "ano": 2011,
+      "pct": 0
+     },
+     {
+      "ano": 2012,
+      "pct": 0
+     },
+     {
+      "ano": 2013,
+      "pct": 0
+     },
+     {
+      "ano": 2014,
+      "pct": 0
+     },
+     {
+      "ano": 2015,
+      "pct": 0
+     },
+     {
+      "ano": 2016,
+      "pct": 0
+     },
+     {
+      "ano": 2017,
+      "pct": 0
+     },
+     {
+      "ano": 2018,
+      "pct": 0
+     },
+     {
+      "ano": 2019,
+      "pct": 0
+     },
+     {
+      "ano": 2020,
+      "pct": 0
+     },
+     {
+      "ano": 2021,
+      "pct": 0
+     },
+     {
+      "ano": 2022,
+      "pct": 0
+     },
+     {
+      "ano": 2023,
+      "pct": 0
+     },
+     {
+      "ano": 2024,
+      "pct": 0
+     },
+     {
+      "ano": 2025,
+      "pct": 0
+     }
+    ],
+    "irrigacao_2023_pct": 0.0
+   },
+   "unidade": "%",
+   "fonte": {
+    "id": "mapbiomas_cobertura",
+    "nome_publico": "MapBiomas — cobertura e uso da terra (Coleção 11)",
+    "licenca": "CC BY 4.0",
+    "citacao": "Projeto MapBiomas, Coleção 11 da série anual de mapas de cobertura e uso da terra do Brasil."
+   },
+   "data_base": null,
+   "consultado_em": "2026-09-14T00:20:51Z",
+   "limites": [
+    "manchas menores que um ponto de 30 m podem não aparecer"
+   ],
+   "motivo": null,
+   "texto_base": "No mapa de uso da terra de 2025, o imóvel é quase todo pasto (85%), com lavoura de ciclo curto (11%) e água (4%). Vegetação nativa: nenhuma mapeada desde 2007; em 1985 eram cerca de dois terços."
+  },
+  "livestock_v51": {
+   "estado": "encontrado",
+   "valor": {
+    "municipio": "Curvelo",
+    "uf": "MG",
+    "ano": 2024,
+    "rebanhos": [
+     {
+      "rebanho": "Bovino",
+      "cabecas": 94375,
+      "ano_anterior": 95412
+     },
+     {
+      "rebanho": "Bubalino",
+      "cabecas": 203,
+      "ano_anterior": 181
+     },
+     {
+      "rebanho": "Equino",
+      "cabecas": 2995,
+      "ano_anterior": 3100
+     },
+     {
+      "rebanho": "Suíno - total",
+      "cabecas": 32706,
+      "ano_anterior": 31647
+     },
+     {
+      "rebanho": "Suíno - matrizes de suínos",
+      "cabecas": 2077,
+      "ano_anterior": 2010
+     },
+     {
+      "rebanho": "Caprino",
+      "cabecas": 69,
+      "ano_anterior": 75
+     },
+     {
+      "rebanho": "Ovino",
+      "cabecas": 250,
+      "ano_anterior": 502
+     },
+     {
+      "rebanho": "Galináceos - total",
+      "cabecas": 147200,
+      "ano_anterior": 130400
+     },
+     {
+      "rebanho": "Galináceos - galinhas",
+      "cabecas": 14000,
+      "ano_anterior": 12230
+     }
+    ],
+    "vacas_ordenhadas": 9902,
+    "leite_mil_litros": 22137
+   },
+   "unidade": "cabeças",
+   "fonte": {
+    "id": "ibge_ppm",
+    "nome_publico": "IBGE — Pesquisa da Pecuária Municipal",
+    "licenca": null,
+    "citacao": "IBGE, SIDRA, PPM, tabelas 3939, 94 e 74."
+   },
+   "data_base": null,
+   "consultado_em": "2026-09-13T21:52:01Z",
+   "limites": [
+    "dado do município, não do imóvel"
+   ],
+   "motivo": null,
+   "texto_base": "No município de Curvelo, em 2024, o rebanho bovino era de 94.375 cabeças, com 9.902 vacas ordenhadas e 22.137 mil litros de leite."
+  },
+  "safras_v51": {
+   "estado": "encontrado",
+   "valor": {
+    "municipio": "Curvelo",
+    "uf": "MG",
+    "year": 2024,
+    "culturas": [
+     {
+      "cultura": "Soja (em grão)",
+      "area_plantada_ha": 1500,
+      "area_colhida_ha": 1500,
+      "producao_t": 2640
+     },
+     {
+      "cultura": "Milho (em grão)",
+      "area_plantada_ha": 650,
+      "area_colhida_ha": 650,
+      "producao_t": 2002
+     },
+     {
+      "cultura": "Cana-de-açúcar",
+      "area_plantada_ha": 480,
+      "area_colhida_ha": 480,
+      "producao_t": 19200
+     },
+     {
+      "cultura": "Feijão (em grão)",
+      "area_plantada_ha": 250,
+      "area_colhida_ha": 250,
+      "producao_t": 120
+     },
+     {
+      "cultura": "Mandioca",
+      "area_plantada_ha": 142,
+      "area_colhida_ha": 142,
+      "producao_t": 1579
+     },
+     {
+      "cultura": "Tomate",
+      "area_plantada_ha": 3,
+      "area_colhida_ha": 3,
+      "producao_t": 180
+     }
+    ]
+   },
+   "unidade": "ha",
+   "fonte": {
+    "id": "ibge_pam",
+    "nome_publico": "IBGE — Produção Agrícola Municipal",
+    "licenca": null,
+    "citacao": "IBGE, SIDRA, PAM, tabela 5457."
+   },
+   "data_base": null,
+   "consultado_em": "2026-09-13T21:52:01Z",
+   "limites": [
+    "dado do município, não do imóvel"
+   ],
+   "motivo": null,
+   "texto_base": "No município de Curvelo, em 2024, as maiores lavouras foram soja (1.500 ha), milho (650 ha) e cana-de-açúcar (480 ha)."
+  }
+ },
+ "car_integrity_v47": {
+  "ok": false,
+  "partial": true,
+  "source": "SICAR WFS — camadas validadas explícitas",
+  "endpoint": "https://geoserver.car.gov.br/geoserver/ows",
+  "car_code_filter": "MG-3120904-DFB380BECD7A4323AD8AA68FA14D011F",
+  "car_area_ha": 14.804099,
+  "capabilities_ok": true,
+  "feature_type_count": 0,
+  "selected_layers": [
+   "sicar:CAR_VALIDADO_APP",
+   "sicar:CAR_VALIDADO_RESERVA_LEGAL",
+   "sicar:CAR_VALIDADO_USO_RESTRITO",
+   "sicar:CAR_VALIDADO_VEG_NATIVA"
+  ],
+  "successful_layers": 0,
+  "requested_layers": 4,
+  "layers": [
+   {
+    "name": "sicar:CAR_VALIDADO_APP",
+    "category": "APP",
+    "ok": false,
+    "endpoint": "https://geoserver.car.gov.br/geoserver/ows",
+    "detail": "JSONDecodeError:Expecting value: line 1 column 1 (char 0)"
+   },
+   {
+    "name": "sicar:CAR_VALIDADO_RESERVA_LEGAL",
+    "category": "Reserva Legal",
+    "ok": false,
+    "endpoint": "https://geoserver.car.gov.br/geoserver/ows",
+    "detail": "JSONDecodeError:Expecting value: line 1 column 1 (char 0)"
+   },
+   {
+    "name": "sicar:CAR_VALIDADO_USO_RESTRITO",
+    "category": "Uso restrito",
+    "ok": false,
+    "endpoint": "https://geoserver.car.gov.br/geoserver/ows",
+    "detail": "JSONDecodeError:Expecting value: line 1 column 1 (char 0)"
+   },
+   {
+    "name": "sicar:CAR_VALIDADO_VEG_NATIVA",
+    "category": "Vegetação nativa/remanescente",
+    "ok": false,
+    "endpoint": "https://geoserver.car.gov.br/geoserver/ows",
+    "detail": "JSONDecodeError:Expecting value: line 1 column 1 (char 0)"
+   }
+  ],
+  "summary": {
+   "APP": {
+    "consulted": false,
+    "occurrence_count": 0,
+    "area_unique_ha": 0.0,
+    "share_pct": 0.0,
+    "layer_count": 0,
+    "layers": []
+   },
+   "Reserva Legal": {
+    "consulted": false,
+    "occurrence_count": 0,
+    "area_unique_ha": 0.0,
+    "share_pct": 0.0,
+    "layer_count": 0,
+    "layers": []
+   },
+   "Uso restrito": {
+    "consulted": false,
+    "occurrence_count": 0,
+    "area_unique_ha": 0.0,
+    "share_pct": 0.0,
+    "layer_count": 0,
+    "layers": []
+   },
+   "Vegetação nativa/remanescente": {
+    "consulted": false,
+    "occurrence_count": 0,
+    "area_unique_ha": 0.0,
+    "share_pct": 0.0,
+    "layer_count": 0,
+    "layers": []
+   }
+  },
+  "note": "APP, Reserva Legal, Uso Restrito e Vegetação Nativa são consultados em paralelo em camadas SICAR validadas. Área consolidada entra apenas se o GetCapabilities expuser camada identificável. Percentuais são geométricos sobre o CAR e não substituem análise legal de passivo/excedente."
+ },
+ "narrative": {
+  "one_sentence": "O imóvel de 14.795 ha em Curvelo/MG tem 4 ocorrência(s) PRODES no histórico e 1 ocorrência(s) no recorte pós-31/07/2019 usado na triagem de crédito; isso exige diligência, mas não prova irregularidade por si só.",
+  "what_we_found": [
+   "CAR localizado e geometria real usada como base para os cruzamentos.",
+   "PRODES histórico: 4 ocorrência(s), 14.496704 ha de interseção única (97.98% do CAR); anos identificados: 2004, 2006, 2014, 2021.",
+   "Recorte pós-31/07/2019: 1 ocorrência(s), 0.027909 ha de interseção única (0.19% do CAR), calculada pela união das interseções exatas com o CAR.",
+   "Fiscalização ambiental: nenhum embargo intersectante apareceu nas fontes que responderam.",
+   "Água: 1 outorga(s) intersectante(s) localizada(s) nas fontes consultadas.",
+   "Irrigação: 0 pivô(s) central(is) intersectante(s) na base disponível."
+  ],
+  "why_it_matters": [
+   "O histórico PRODES ajuda a reconstruir quando houve desmatamento mapeado. Ocorrência cartográfica não equivale automaticamente a infração; data, autorização e enquadramento ambiental continuam necessários.",
+   "Para crédito rural, o MCR exige atenção especial à supressão de vegetação nativa posterior a 31/07/2019. Por isso o Raio-X mostra esse recorte separado do histórico antigo, em vez de misturar tudo em um único número."
+  ],
+  "attention": [
+   "PRODES: 4 ocorrência(s) históricas, totalizando 14.496704 ha de interseção única; isso não equivale automaticamente a infração.",
+   "Matrícula, titularidade registral e SNCI ainda não foram consultados neste ciclo.",
+   "Outorgas: 1 ponto(s) de direito de uso de recursos hídricos estadual/federal intersectam o imóvel.",
+   "Matrícula e cadeia dominial continuam sendo uma etapa separada: CAR e SIGEF não comprovam quem é o proprietário registral atual.",
+   "Há 1 ocorrência(s) PRODES no recorte pós-31/07/2019. A análise de crédito deve conferir documentação ambiental e a regra vigente; o Raio-X não transforma isso em impedimento automático.",
+   "Algumas bases não entregaram resposta completa nesta emissão: SNCI, Registro de imóveis, Esri World Imagery — referência visual de alta resolução, SICAR - composição ambiental interna, IDE-Sisema / Uso e Cobertura, Base dos Dados / SICAR — composição e consistência geométrica do CAR. Isso é ponto cego, não resultado negativo."
+  ],
+  "next_steps": [
+   "Obter matrícula atualizada e verificar titularidade, ônus e cadeia dominial.",
+   "Completar a consulta SNCI/INCRA quando o conector público/autenticado estiver disponível.",
+   "Conferir cada ocorrência PRODES pós-31/07/2019 por data, autorização e documento ambiental aplicável à operação de crédito.",
+   "Conferir processo, portaria, vigência, finalidade, autoridade emissora e condições das outorgas que intersectam o imóvel.",
+   "Completar safras monitoradas e armazéns CONAB na região."
+  ],
+  "good_points": [
+   "CAR localizado com geometria real.",
+   "Nenhum embargo ambiental intersectante foi localizado nas fontes de fiscalização que responderam.",
+   "Nenhum processo ANM intersectante foi localizado na consulta atual.",
+   "A situação hídrica foi efetivamente consultada, em vez de inferida por ausência de informação."
+  ],
+  "things_that_may_cost_money": [
+   "Detecção PRODES pós-31/07/2019 pode exigir documentação adicional na análise de crédito rural e deve ser verificada antes de fechar a operação."
+  ],
+  "credit_screening": {
+   "mcr_check_required": true,
+   "fiscal_modules": 0.3699,
+   "reading": "Há detecção PRODES posterior a 31/07/2019. Para crédito rural, a ocorrência deve ser conferida conforme o MCR vigente e a documentação ambiental aplicável; isso não equivale automaticamente a impedimento definitivo.",
+   "regulatory_basis": "MCR 2-9: verificação de supressão de vegetação nativa após 31/07/2019."
+  },
+  "tone_rule": "Linguagem simples, clara e envolvente; nenhuma simplificação pode transformar incerteza em certeza."
+ },
+ "street_level_access": {
+  "ok": false,
+  "source": "KartaView",
+  "detail": "no_public_street_imagery_near_property",
+  "google_maps_streetview_url": "https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=-18.891297495445187,-44.18197766518717",
+  "note": "Nenhuma imagem aberta KartaView foi localizada no entorno consultado. O link abre tentativa de Street View do Google ao vivo."
+ },
+ "rules": {
+  "credit_prodes_cmn_v51": {
+   "estado": "encontrado",
+   "valor": {
+    "marco": "2019-07-31",
+    "faixa_modulos": "ate_4",
+    "modulos_fiscais": 0.3699,
+    "tipo_car": "IRU",
+    "inicio_exigencia": "2028-01-03",
+    "item": "MCR 2-9, item 17, alínea c",
+    "efeito": "condicao_com_documento",
+    "documentos": "MCR 2-9, item 18",
+    "ha_registro_depois_do_marco": true,
+    "registros_depois_do_marco": [
+     "2ce0e5b9-c371-4e92-bf1b-97a25ad72602"
+    ],
+    "lista_mma_consultada": false
+   },
+   "unidade": "data",
+   "fonte": {
+    "id": "bcb_res_cmn_5303",
+    "nome_publico": "Resolução CMN nº 5.303/2026 (MCR 2-9)",
+    "licenca": null,
+    "citacao": "Resolução CMN nº 5.303, de 12/05/2026 (DOU de 14/05/2026), Manual de Crédito Rural, seção 2-9, itens 17, 17-A e 18; texto lido na API do Banco Central."
+   },
+   "data_base": "2026-05-12",
+   "consultado_em": null,
+   "limites": [
+    "a lista do Ministério do Meio Ambiente não foi consultada"
+   ],
+   "motivo": null,
+   "texto_base": "Para crédito rural, o banco vai ter de conferir, numa lista do Ministério do Meio Ambiente feita com o PRODES, se houve retirada de vegetação nativa depois de 31/07/2019. Para imóvel de até 4 módulos fiscais, como este, a conferência começa em 3 de janeiro de 2028 (Resolução CMN 5.303/2026)."
+  }
+ },
+ "book_v10": {
+  "schema": 2,
+  "geometry": {
+   "crs": "EPSG:31983",
+   "car_m": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       586452.54,
+       7911044.44
+      ],
+      [
+       586340.0,
+       7911184.49
+      ],
+      [
+       586398.14,
+       7911279.85
+      ],
+      [
+       586361.26,
+       7911257.56
+      ],
+      [
+       586302.48,
+       7911244.37
+      ],
+      [
+       586274.86,
+       7911234.77
+      ],
+      [
+       586205.35,
+       7911197.82
+      ],
+      [
+       586130.25,
+       7911139.76
+      ],
+      [
+       586103.72,
+       7911123.31
+      ],
+      [
+       586033.64,
+       7911095.02
+      ],
+      [
+       585926.38,
+       7911042.89
+      ],
+      [
+       585916.12,
+       7911033.66
+      ],
+      [
+       585899.71,
+       7911022.65
+      ],
+      [
+       585881.55,
+       7911018.43
+      ],
+      [
+       585891.53,
+       7910972.59
+      ],
+      [
+       585905.27,
+       7910937.36
+      ],
+      [
+       586008.78,
+       7910730.4
+      ],
+      [
+       586064.57,
+       7910758.65
+      ],
+      [
+       586110.54,
+       7910764.9
+      ],
+      [
+       586127.44,
+       7910788.78
+      ],
+      [
+       586132.19,
+       7910815.59
+      ],
+      [
+       586339.92,
+       7910967.29
+      ],
+      [
+       586452.54,
+       7911044.44
+      ]
+     ]
+    ]
+   },
+   "bbox_m": [
+    585881.55,
+    7910730.4,
+    586452.54,
+    7911279.85
+   ],
+   "centroid_lonlat": [
+    -44.181978,
+    -18.891297
+   ],
+   "short_side_m": 332.8,
+   "area_ha": 14.804099,
+   "uf": "MG"
+  },
+  "base_image": {
+   "ok": true,
+   "kind": "sentinel2",
+   "enquadramento": "vizinhanca",
+   "path": "imagens/curvelo/book_base.jpg",
+   "path_muted": "imagens/curvelo/book_base_muted.jpg",
+   "crs": "EPSG:31983",
+   "bounds_m": [
+    584894.85,
+    7910001.03,
+    587414.85,
+    7912001.03
+   ],
+   "box_side_m": 2000,
+   "px": [
+    1008,
+    800
+   ],
+   "date": "2026-08-28",
+   "resolution_m": 10,
+   "cloud_pct": 0.000727,
+   "scene_id": "S2B_23KNV_20260828_0_L2A",
+   "attribution": "Contém dados modificados do Copernicus Sentinel-2 (2026)"
+  },
+  "sentinel_image": {
+   "ok": true,
+   "enquadramento": "medio",
+   "path": "imagens/curvelo/book_s2.jpg",
+   "crs": "EPSG:31983",
+   "bounds_m": [
+    585654.85,
+    7910501.03,
+    586654.85,
+    7911501.03
+   ],
+   "box_side_m": 1000,
+   "px": [
+    800,
+    800
+   ],
+   "date": "2026-08-28",
+   "cloud_pct": 0.000727
+  },
+  "ndvi_image": {
+   "ok": true,
+   "enquadramento": "medio",
+   "path": "imagens/curvelo/book_ndvi.jpg",
+   "crs": "EPSG:31983",
+   "bounds_m": [
+    585654.85,
+    7910501.03,
+    586654.85,
+    7911501.03
+   ],
+   "px": [
+    800,
+    800
+   ],
+   "date": "2026-08-28",
+   "escala_ndvi": [
+    -0.15,
+    0.8
+   ]
+  },
+  "prodes_figuras": {
+   "2ce0e5b9-c371-4e92-bf1b-97a25ad72602": {
+    "inside_geom_m": {
+     "type": "MultiPolygon",
+     "coordinates": [
+      [
+       [
+        [
+         586183.41,
+         7910852.99
+        ],
+        [
+         586183.47,
+         7910867.83
+        ],
+        [
+         586203.6,
+         7910867.74
+        ],
+        [
+         586183.41,
+         7910852.99
+        ]
+       ]
+      ],
+      [
+       [
+        [
+         586225.68,
+         7910883.87
+        ],
+        [
+         586225.71,
+         7910889.77
+        ],
+        [
+         586233.71,
+         7910889.73
+        ],
+        [
+         586225.68,
+         7910883.87
+        ]
+       ]
+      ],
+      [
+       [
+        [
+         586246.82,
+         7910899.3
+        ],
+        [
+         586246.87,
+         7910911.8
+        ],
+        [
+         586263.83,
+         7910911.72
+        ],
+        [
+         586246.82,
+         7910899.3
+        ]
+       ]
+      ]
+     ]
+    },
+    "feature_geom_m": {
+     "type": "Polygon",
+     "coordinates": [
+      [
+       [
+        586246.21,
+        7910767.95
+       ],
+       [
+        586172.79,
+        7910834.68
+       ],
+       [
+        586183.37,
+        7910845.7
+       ],
+       [
+        586183.47,
+        7910867.83
+       ],
+       [
+        586225.6,
+        7910867.64
+       ],
+       [
+        586225.71,
+        7910889.77
+       ],
+       [
+        586246.77,
+        7910889.67
+       ],
+       [
+        586246.87,
+        7910911.8
+       ],
+       [
+        586320.6,
+        7910911.46
+       ],
+       [
+        586320.04,
+        7910789.74
+       ],
+       [
+        586341.1,
+        7910789.64
+       ],
+       [
+        586246.21,
+        7910767.95
+       ]
+      ]
+     ]
+    }
+   },
+   "e52d88eb-216e-4123-9a89-347d40148810": {
+    "inside_geom_m": {
+     "type": "Polygon",
+     "coordinates": [
+      [
+       [
+        586205.35,
+        7911197.82
+       ],
+       [
+        586235.35,
+        7911214.54
+       ],
+       [
+        586274.86,
+        7911234.77
+       ],
+       [
+        586302.48,
+        7911244.37
+       ],
+       [
+        586339.03,
+        7911253.08
+       ],
+       [
+        586206.02,
+        7911188.64
+       ],
+       [
+        586195.49,
+        7911188.69
+       ],
+       [
+        586184.91,
+        7911177.67
+       ],
+       [
+        586177.93,
+        7911177.7
+       ],
+       [
+        586205.35,
+        7911197.82
+       ]
+      ]
+     ]
+    },
+    "feature_geom_m": {
+     "type": "Polygon",
+     "coordinates": [
+      [
+       [
+        586303.74,
+        7911818.93
+       ],
+       [
+        586271.88,
+        7911763.75
+       ],
+       [
+        586282.26,
+        7911730.51
+       ],
+       [
+        586365.91,
+        7911597.33
+       ],
+       [
+        586365.45,
+        7911497.74
+       ],
+       [
+        586301.95,
+        7911431.64
+       ],
+       [
+        586396.9,
+        7911464.4
+       ],
+       [
+        586417.96,
+        7911464.3
+       ],
+       [
+        586449.41,
+        7911430.96
+       ],
+       [
+        586448.79,
+        7911298.17
+       ],
+       [
+        586364.53,
+        7911298.56
+       ],
+       [
+        586364.37,
+        7911265.36
+       ],
+       [
+        586206.02,
+        7911188.64
+       ],
+       [
+        586195.49,
+        7911188.69
+       ],
+       [
+        586184.91,
+        7911177.67
+       ],
+       [
+        586174.37,
+        7911177.72
+       ],
+       [
+        586048.39,
+        7911266.83
+       ],
+       [
+        586017.1,
+        7911333.36
+       ],
+       [
+        585922.3,
+        7911333.8
+       ],
+       [
+        585922.15,
+        7911300.6
+       ],
+       [
+        585890.55,
+        7911300.75
+       ],
+       [
+        585890.7,
+        7911333.95
+       ],
+       [
+        585859.11,
+        7911334.09
+       ],
+       [
+        585859.87,
+        7911500.08
+       ],
+       [
+        586049.46,
+        7911499.2
+       ],
+       [
+        586080.91,
+        7911465.86
+       ],
+       [
+        586144.11,
+        7911465.57
+       ],
+       [
+        586144.87,
+        7911631.55
+       ],
+       [
+        586113.43,
+        7911664.89
+       ],
+       [
+        585987.03,
+        7911665.48
+       ],
+       [
+        585987.29,
+        7911720.8
+       ],
+       [
+        585997.82,
+        7911720.76
+       ],
+       [
+        585998.48,
+        7911864.61
+       ],
+       [
+        586030.08,
+        7911864.46
+       ],
+       [
+        586029.67,
+        7911775.94
+       ],
+       [
+        586082.34,
+        7911775.69
+       ],
+       [
+        586082.49,
+        7911808.89
+       ],
+       [
+        586114.09,
+        7911808.74
+       ],
+       [
+        586114.5,
+        7911897.27
+       ],
+       [
+        586051.3,
+        7911897.56
+       ],
+       [
+        586051.45,
+        7911930.76
+       ],
+       [
+        586083.05,
+        7911930.61
+       ],
+       [
+        586083.31,
+        7911985.94
+       ],
+       [
+        586020.11,
+        7911986.23
+       ],
+       [
+        586027.24,
+        7912001.03
+       ],
+       [
+        586196.79,
+        7912001.03
+       ],
+       [
+        586241.31,
+        7911985.21
+       ],
+       [
+        586303.74,
+        7911818.93
+       ]
+      ]
+     ]
+    }
+   },
+   "059292e7-4741-4361-91fc-064a30e51651": {
+    "inside_geom_m": {
+     "type": "Polygon",
+     "coordinates": [
+      [
+       [
+        586361.26,
+        7911257.56
+       ],
+       [
+        586398.14,
+        7911279.85
+       ],
+       [
+        586340.0,
+        7911184.49
+       ],
+       [
+        586452.54,
+        7911044.44
+       ],
+       [
+        586339.92,
+        7910967.29
+       ],
+       [
+        586263.83,
+        7910911.72
+       ],
+       [
+        586246.87,
+        7910911.8
+       ],
+       [
+        586246.82,
+        7910899.3
+       ],
+       [
+        586233.71,
+        7910889.73
+       ],
+       [
+        586225.71,
+        7910889.77
+       ],
+       [
+        586225.68,
+        7910883.87
+       ],
+       [
+        586203.6,
+        7910867.74
+       ],
+       [
+        586183.47,
+        7910867.83
+       ],
+       [
+        586183.41,
+        7910852.99
+       ],
+       [
+        586132.19,
+        7910815.59
+       ],
+       [
+        586127.44,
+        7910788.78
+       ],
+       [
+        586110.54,
+        7910764.9
+       ],
+       [
+        586064.57,
+        7910758.65
+       ],
+       [
+        586008.78,
+        7910730.4
+       ],
+       [
+        585905.27,
+        7910937.36
+       ],
+       [
+        585893.02,
+        7910968.77
+       ],
+       [
+        585899.55,
+        7910968.74
+       ],
+       [
+        585899.76,
+        7911013.0
+       ],
+       [
+        585920.82,
+        7911012.9
+       ],
+       [
+        585920.94,
+        7911037.99
+       ],
+       [
+        585926.38,
+        7911042.89
+       ],
+       [
+        585949.59,
+        7911055.24
+       ],
+       [
+        585994.85,
+        7911076.48
+       ],
+       [
+        585994.81,
+        7911067.89
+       ],
+       [
+        586058.0,
+        7911067.6
+       ],
+       [
+        586058.11,
+        7911089.73
+       ],
+       [
+        586089.7,
+        7911089.58
+       ],
+       [
+        586089.81,
+        7911111.71
+       ],
+       [
+        586110.87,
+        7911111.62
+       ],
+       [
+        586110.95,
+        7911127.78
+       ],
+       [
+        586120.49,
+        7911133.7
+       ],
+       [
+        586132.04,
+        7911133.65
+       ],
+       [
+        586132.07,
+        7911141.22
+       ],
+       [
+        586163.84,
+        7911166.7
+       ],
+       [
+        586184.86,
+        7911166.6
+       ],
+       [
+        586184.91,
+        7911177.67
+       ],
+       [
+        586195.49,
+        7911188.69
+       ],
+       [
+        586206.02,
+        7911188.64
+       ],
+       [
+        586339.03,
+        7911253.08
+       ],
+       [
+        586361.26,
+        7911257.56
+       ]
+      ]
+     ]
+    },
+    "feature_geom_m": {
+     "type": "Polygon",
+     "coordinates": [
+      [
+       [
+        586324.14,
+        7911674.98
+       ],
+       [
+        586366.27,
+        7911674.79
+       ],
+       [
+        586366.17,
+        7911652.66
+       ],
+       [
+        586387.23,
+        7911652.56
+       ],
+       [
+        586387.03,
+        7911608.3
+       ],
+       [
+        586418.63,
+        7911608.15
+       ],
+       [
+        586418.47,
+        7911574.96
+       ],
+       [
+        586460.4,
+        7911530.5
+       ],
+       [
+        586460.14,
+        7911475.17
+       ],
+       [
+        586481.21,
+        7911475.07
+       ],
+       [
+        586491.28,
+        7911375.43
+       ],
+       [
+        586521.8,
+        7911142.91
+       ],
+       [
+        586531.87,
+        7911043.27
+       ],
+       [
+        586531.72,
+        7911010.07
+       ],
+       [
+        586646.24,
+        7910721.83
+       ],
+       [
+        586667.05,
+        7910666.41
+       ],
+       [
+        586666.38,
+        7910522.55
+       ],
+       [
+        586550.52,
+        7910523.09
+       ],
+       [
+        586550.73,
+        7910567.35
+       ],
+       [
+        586529.66,
+        7910567.45
+       ],
+       [
+        586529.82,
+        7910600.65
+       ],
+       [
+        586508.75,
+        7910600.75
+       ],
+       [
+        586508.85,
+        7910622.88
+       ],
+       [
+        586477.26,
+        7910623.02
+       ],
+       [
+        586477.36,
+        7910645.16
+       ],
+       [
+        586456.4,
+        7910667.38
+       ],
+       [
+        586456.5,
+        7910689.52
+       ],
+       [
+        586435.59,
+        7910722.81
+       ],
+       [
+        586435.69,
+        7910744.94
+       ],
+       [
+        586414.63,
+        7910745.04
+       ],
+       [
+        586414.73,
+        7910767.17
+       ],
+       [
+        586362.07,
+        7910767.41
+       ],
+       [
+        586341.1,
+        7910789.64
+       ],
+       [
+        586320.04,
+        7910789.74
+       ],
+       [
+        586320.6,
+        7910911.46
+       ],
+       [
+        586246.87,
+        7910911.8
+       ],
+       [
+        586246.77,
+        7910889.67
+       ],
+       [
+        586225.71,
+        7910889.77
+       ],
+       [
+        586225.6,
+        7910867.64
+       ],
+       [
+        586183.47,
+        7910867.83
+       ],
+       [
+        586183.37,
+        7910845.7
+       ],
+       [
+        586119.82,
+        7910768.54
+       ],
+       [
+        586088.02,
+        7910724.42
+       ],
+       [
+        586087.86,
+        7910691.22
+       ],
+       [
+        586035.2,
+        7910691.47
+       ],
+       [
+        586035.1,
+        7910669.33
+       ],
+       [
+        586014.03,
+        7910669.43
+       ],
+       [
+        585992.92,
+        7910658.46
+       ],
+       [
+        585993.28,
+        7910735.92
+       ],
+       [
+        585951.15,
+        7910736.12
+       ],
+       [
+        585951.25,
+        7910758.25
+       ],
+       [
+        585856.45,
+        7910758.68
+       ],
+       [
+        585814.07,
+        7910703.55
+       ],
+       [
+        585793.0,
+        7910703.65
+       ],
+       [
+        585792.9,
+        7910681.52
+       ],
+       [
+        585708.49,
+        7910648.71
+       ],
+       [
+        585667.17,
+        7910825.95
+       ],
+       [
+        585667.28,
+        7910848.08
+       ],
+       [
+        585688.44,
+        7910870.12
+       ],
+       [
+        585709.51,
+        7910870.02
+       ],
+       [
+        585730.68,
+        7910892.05
+       ],
+       [
+        585783.34,
+        7910891.81
+       ],
+       [
+        585783.44,
+        7910913.94
+       ],
+       [
+        585825.57,
+        7910913.75
+       ],
+       [
+        585825.72,
+        7910946.94
+       ],
+       [
+        585846.79,
+        7910946.85
+       ],
+       [
+        585878.49,
+        7910968.83
+       ],
+       [
+        585899.55,
+        7910968.74
+       ],
+       [
+        585899.76,
+        7911013.0
+       ],
+       [
+        585920.82,
+        7911012.9
+       ],
+       [
+        585921.18,
+        7911090.36
+       ],
+       [
+        585900.22,
+        7911112.59
+       ],
+       [
+        585900.32,
+        7911134.72
+       ],
+       [
+        585879.25,
+        7911134.82
+       ],
+       [
+        585847.81,
+        7911168.16
+       ],
+       [
+        585784.61,
+        7911168.45
+       ],
+       [
+        585784.71,
+        7911190.58
+       ],
+       [
+        585732.05,
+        7911190.82
+       ],
+       [
+        585732.15,
+        7911212.95
+       ],
+       [
+        585711.09,
+        7911213.05
+       ],
+       [
+        585711.54,
+        7911312.64
+       ],
+       [
+        585764.21,
+        7911312.4
+       ],
+       [
+        585764.31,
+        7911334.53
+       ],
+       [
+        585827.51,
+        7911334.24
+       ],
+       [
+        585827.61,
+        7911356.37
+       ],
+       [
+        585848.67,
+        7911356.27
+       ],
+       [
+        585859.26,
+        7911367.29
+       ],
+       [
+        585859.11,
+        7911334.09
+       ],
+       [
+        585890.7,
+        7911333.95
+       ],
+       [
+        585890.55,
+        7911300.75
+       ],
+       [
+        585922.15,
+        7911300.6
+       ],
+       [
+        585922.3,
+        7911333.8
+       ],
+       [
+        585943.37,
+        7911333.7
+       ],
+       [
+        585942.7,
+        7911189.85
+       ],
+       [
+        585974.3,
+        7911189.71
+       ],
+       [
+        585973.95,
+        7911112.25
+       ],
+       [
+        585995.01,
+        7911112.15
+       ],
+       [
+        585994.81,
+        7911067.89
+       ],
+       [
+        586058.0,
+        7911067.6
+       ],
+       [
+        586058.11,
+        7911089.73
+       ],
+       [
+        586089.7,
+        7911089.58
+       ],
+       [
+        586089.81,
+        7911111.71
+       ],
+       [
+        586110.87,
+        7911111.62
+       ],
+       [
+        586110.97,
+        7911133.75
+       ],
+       [
+        586132.04,
+        7911133.65
+       ],
+       [
+        586132.19,
+        7911166.85
+       ],
+       [
+        586184.86,
+        7911166.6
+       ],
+       [
+        586184.91,
+        7911177.67
+       ],
+       [
+        586195.49,
+        7911188.69
+       ],
+       [
+        586206.02,
+        7911188.64
+       ],
+       [
+        586364.37,
+        7911265.36
+       ],
+       [
+        586364.53,
+        7911298.56
+       ],
+       [
+        586448.79,
+        7911298.17
+       ],
+       [
+        586449.41,
+        7911430.96
+       ],
+       [
+        586417.96,
+        7911464.3
+       ],
+       [
+        586396.9,
+        7911464.4
+       ],
+       [
+        586301.95,
+        7911431.64
+       ],
+       [
+        586365.45,
+        7911497.74
+       ],
+       [
+        586365.91,
+        7911597.33
+       ],
+       [
+        586282.26,
+        7911730.51
+       ],
+       [
+        586324.4,
+        7911730.31
+       ],
+       [
+        586324.14,
+        7911674.98
+       ]
+      ]
+     ]
+    }
+   },
+   "07f98d63-b0ce-4f58-b00f-9390b38e5209": {
+    "inside_geom_m": {
+     "type": "Polygon",
+     "coordinates": [
+      [
+       [
+        585891.53,
+        7910972.59
+       ],
+       [
+        585883.14,
+        7911011.14
+       ],
+       [
+        585899.76,
+        7911013.0
+       ],
+       [
+        585899.55,
+        7910968.74
+       ],
+       [
+        585893.02,
+        7910968.77
+       ],
+       [
+        585891.53,
+        7910972.59
+       ]
+      ]
+     ]
+    },
+    "feature_geom_m": {
+     "type": "Polygon",
+     "coordinates": [
+      [
+       [
+        585667.28,
+        7910848.08
+       ],
+       [
+        585593.65,
+        7910870.55
+       ],
+       [
+        585646.87,
+        7910992.03
+       ],
+       [
+        585710.07,
+        7910991.74
+       ],
+       [
+        585899.76,
+        7911013.0
+       ],
+       [
+        585899.55,
+        7910968.74
+       ],
+       [
+        585878.49,
+        7910968.83
+       ],
+       [
+        585846.79,
+        7910946.85
+       ],
+       [
+        585825.72,
+        7910946.94
+       ],
+       [
+        585825.57,
+        7910913.75
+       ],
+       [
+        585783.44,
+        7910913.94
+       ],
+       [
+        585783.34,
+        7910891.81
+       ],
+       [
+        585730.68,
+        7910892.05
+       ],
+       [
+        585709.51,
+        7910870.02
+       ],
+       [
+        585688.44,
+        7910870.12
+       ],
+       [
+        585667.28,
+        7910848.08
+       ]
+      ]
+     ]
+    }
+   }
+  },
+  "achados_figuras": {},
+  "fiscal_module_ha": {
+   "value": 40.0,
+   "origin": "conta_car"
+  },
+  "erros": []
+ }
+}

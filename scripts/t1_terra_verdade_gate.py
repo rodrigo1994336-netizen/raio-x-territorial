@@ -5,6 +5,13 @@ a cadeia efetiva do relatório (a mesma lista de módulos que o ``sitecustomize`
 por ela e, além do caminho feliz, os caminhos de falha e de fronteira que a revisão de 15/09/2026 achou
 passando sem ninguém ver.
 
+**A regra ``relatorio_real`` mede o desenho ANTIGO do PDF de propósito** (``RX_RELATORIO_LIVRO=off``,
+fixado abaixo): ela cita as frases do gerador V10 ("Tipo de solo no mapa oficial", "31 mm (estimativa
+regional NASA POWER"), que são o jeito daquele motor de dizer o que a camada T1 apurou. O que este
+portão protege é a camada T1, e ela não mudou. As mesmas decisões no desenho novo são conferidas pelo
+portão do livro (``scripts/livro_v10_gate.py``, regra 9) — sem aquela regra lá, trocar o formato
+apagaria esta proteção em silêncio.
+
 Regras
   relevo_em_porcentagem          classes de relevo da Embrapa em % com os limites certos (0–3–8–20–45–75);
                                  25° a 45° é uso restrito (art. 11) e acima de 45° é APP (art. 4º, V), em
@@ -42,6 +49,11 @@ cópia mutada antes da original, e tem de reprovar pela regra dela.
   PYTHONPATH=. python scripts/t1_terra_verdade_gate.py
 """
 from __future__ import annotations
+
+import os as _os
+
+# fixado antes de qualquer import do runtime: o sitecustomize lê esta variável ao carregar o livro
+_os.environ["RX_RELATORIO_LIVRO"] = "off"
 
 import ast
 import asyncio
