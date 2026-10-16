@@ -50,12 +50,14 @@ Medido na mesma máquina, com o mesmo payload, mediana de três desenhos:
 
 | imóvel | desenho antigo | desenho livro | diferença | PDF antigo | PDF livro |
 |---|---|---|---|---|---|
-| Curvelo (MG), 14,8 ha | 0,68 s | 1,27 s | **+0,59 s** | 681 KB | 1,3 MB |
-| Altamira (PA), 432 ha | 0,89 s | 1,77 s | **+0,88 s** | 115 KB | 872 KB |
+| Curvelo (MG), 14,8 ha | 1,08 s | 1,41 s | **+0,32 s** | 681 KB | 1,3 MB |
+| Altamira (PA), 432 ha | 1,18 s | 1,52 s | **+0,33 s** | 115 KB | 872 KB |
 
 A foto de satélite custa cerca de 3 s à parte, mas é buscada **em paralelo** com as consultas, desde
 o começo da emissão: quando o livro vai desenhar, ela já está pronta (medido: 4 ms). Se não estiver,
 o livro espera no máximo um prazo curto e, sem ela, desenha a planta do imóvel.
+
+O livro custa 363 ms no arranque do serviço (registro das fontes e import do motor), uma vez só.
 
 O PDF fica maior porque passa a ter fotos. Em emissão com imagem indisponível ele volta ao tamanho
 de antes.
